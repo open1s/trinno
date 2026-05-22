@@ -341,6 +341,10 @@ async function sendAttachmentToChat(ctx: AttachmentContext): Promise<void> {
       }
     },
     (doneData) => {
+      if (doneData?.rateLimited) {
+        handleRateLimited(doneData.retryAfter, doneData.error);
+        return;
+      }
       if (chatView) {
         chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         let inputTokens = doneData?.inputTokens ?? 0;
@@ -383,6 +387,7 @@ async function sendAttachmentToChat(ctx: AttachmentContext): Promise<void> {
         chatView.webview.postMessage({ type: 'tool-approval-needed', id, toolName, args } as ExtToWebViewMessage);
       }
     },
+    undefined,  // onRateLimited — handled via doneData.rateLimited above
     systemSummary || undefined,
     currentSession?.id,
     currentSession?.brainOsSession,
@@ -685,6 +690,8 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
     vscode.commands.executeCommand('workbench.action.openSettings', 'chat.');
   } else if (msg.type === 'tool-approval') {
     sendToolApproval(msg.id, msg.approved);
+  } else if (msg.type === 'rate-limited-retry') {
+    handleRateLimitedRetry();
   }
 }
 
@@ -811,12 +818,67 @@ function createAssistantMessageForText(text: string): ChatMessage {
   };
 }
 
+let rateLimitTimer: ReturnType<typeof setInterval> | null = null;
+let rateLimitRetryCallback: (() => void) | null = null;
+
+function handleRateLimited(retryAfter: number, _error: string): void {
+  if (!chatView || !currentStreamingId) return;
+
+  const messageId = currentStreamingId;
+  const seconds = Math.max(1, Math.round(retryAfter));
+
+  chatView.webview.postMessage({
+    type: 'rate-limited',
+    messageId,
+    retryAfter: seconds,
+  } as any);
+
+  if (rateLimitTimer) clearInterval(rateLimitTimer);
+
+  let remaining = seconds;
+  rateLimitTimer = setInterval(() => {
+    remaining--;
+    if (chatView) {
+      chatView.webview.postMessage({
+        type: 'rate-limited-tick',
+        messageId,
+        remaining,
+      } as any);
+    }
+    if (remaining <= 0) {
+      if (rateLimitTimer) clearInterval(rateLimitTimer);
+      rateLimitTimer = null;
+    }
+  }, 1000);
+
+  rateLimitRetryCallback = () => {
+    if (rateLimitTimer) clearInterval(rateLimitTimer);
+    rateLimitTimer = null;
+    rateLimitRetryCallback = null;
+    if (chatView && currentSession && isGenerating) {
+      finalizeCurrentMessage();
+      handleUserMessage(lastUserMessageText || '');
+    }
+  };
+}
+
+let lastUserMessageText: string = '';
+
+function handleRateLimitedRetry(): void {
+  if (rateLimitRetryCallback) {
+    rateLimitRetryCallback();
+    rateLimitRetryCallback = null;
+  }
+}
+
 async function handleUserMessage(text: string): Promise<void> {
   console.log('[trinno-chat] handleUserMessage:', text.slice(0, 50));
   if (!chatView || !currentSession) {
     return;
   }
   if (!text.trim()) return;
+
+  lastUserMessageText = text;
 
   const sessionMatch = text.match(/^\/session\s*(.*)$/i);
   if (sessionMatch) {
@@ -888,7 +950,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         }
       }
       },
-      async (doneData) => {
+async (doneData) => {
         if (chatView) {
           chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         }
@@ -1042,6 +1104,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         chatView.webview.postMessage({ type: 'tool-approval-needed', id, toolName, args } as ExtToWebViewMessage);
       }
     },
+    undefined,
     systemSummary || undefined,
     currentSession?.id,
     currentSession?.brainOsSession,

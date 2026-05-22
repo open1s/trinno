@@ -43,6 +43,8 @@ export type ExtToWebViewMessage =
   | { type: 'session-updated'; sessionId: string; sessionTitle: string; sessions: SessionInfo[]; isCompacted: boolean }
   | { type: 'session-list-updated'; sessions: SessionInfo[] }
   | { type: 'session-title-updated'; sessionId: string; title: string }
+  | { type: 'rate-limited'; messageId: string; retryAfter: number }
+  | { type: 'rate-limited-tick'; messageId: string; remaining: number }
   | { type: 'insert-to-input'; attachment: { filePath: string; lineRange: string | null; language: string; content: string } }
   | { type: 'agents-loaded'; agents: { name: string; description: string }[] }
   | { type: 'models-loaded'; models: { name: string; description?: string }[] }
@@ -66,6 +68,7 @@ export type WebViewToExtMessage =
   | { type: 'switchSession'; sessionId: string }
   | { type: 'deleteSession'; sessionId: string }
   | { type: 'renameSession'; sessionId: string; title: string }
+  | { type: 'rate-limited-retry'; messageId: string }
   | { type: 'sendSelection' }
   | { type: 'sendFile' }
   | { type: 'chooseFile' }

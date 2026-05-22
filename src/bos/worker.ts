@@ -307,7 +307,12 @@ Type /help to see all commands.`;
             resolve();
             break;
           case 'Error':
-            emit('error', { error: token.error });
+            if (isRateLimited(token.error)) {
+              const retryAfter = parseRetryAfter(token.error);
+              emit('rate-limited', { retryAfter, error: token.error });
+            } else {
+              emit('error', { error: token.error });
+            }
             started.stop().catch(() => {});
             resolve();
             break;
@@ -315,11 +320,30 @@ Type /help to see all commands.`;
       });
     });
   } catch (err) {
-    emit('error', { error: err instanceof Error ? err.message : String(err) });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (isRateLimited(errMsg)) {
+      const retryAfter = parseRetryAfter(errMsg);
+      emit('rate-limited', { retryAfter, error: errMsg });
+    } else {
+      emit('error', { error: errMsg });
+    }
   } finally {
     currentAgent = null;
     currentSessionIdForCancel = null;
   }
+}
+
+function isRateLimited(errorMsg: string): boolean {
+  return /429|rate.?limit|too many requests/i.test(errorMsg);
+}
+
+function parseRetryAfter(errorMsg: string): number {
+  const match = errorMsg.match(/retry.?after\s+(\d+)\s*s/i) || errorMsg.match(/try again in (\d+)\s*s/i) || errorMsg.match(/in (\d+)\s*seconds/i);
+  if (match && match[1]) {
+    const seconds = parseInt(match[1], 10);
+    if (seconds > 0 && seconds <= 300) return seconds;
+  }
+  return 15;
 }
 
 function handleCancel(): void {
@@ -632,7 +656,12 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             resolve();
             break;
           case 'Error':
-            localEmit('error', { error: token.error });
+            if (isRateLimited(token.error)) {
+              const retryAfter = parseRetryAfter(token.error);
+              localEmit('rate-limited', { retryAfter, error: token.error });
+            } else {
+              localEmit('error', { error: token.error });
+            }
             started.stop().catch(() => {});
             resolve();
             break;
@@ -640,7 +669,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       });
     });
   } catch (err) {
-    localEmit('error', { error: err instanceof Error ? err.message : String(err) });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (isRateLimited(errMsg)) {
+      const retryAfter = parseRetryAfter(errMsg);
+      localEmit('rate-limited', { retryAfter, error: errMsg });
+    } else {
+      localEmit('error', { error: errMsg });
+    }
   } finally {
     currentAgent = null;
     currentSessionIdForCancel = null;

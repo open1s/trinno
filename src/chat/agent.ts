@@ -13,6 +13,7 @@ type TokenCallback = (msg: ExtToWebViewMessage) => void;
 type DoneCallback = (data?: any) => void;
 type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>) => void;
 type McpStatusCallback = (servers: { name: string; type: string; connected: boolean }[]) => void;
+type RateLimitedCallback = (retryAfter: number, error: string) => void;
 
 let workerProcess: ReturnType<typeof import('child_process').spawn> | null = null;
 let workerReady = false;
@@ -93,6 +94,7 @@ export async function sendMessage(
   onDone: DoneCallback,
   onError: (err: string) => void,
   onApproval?: ApprovalCallback,
+  onRateLimited?: RateLimitedCallback,
   systemSummary?: string,
   sessionId?: string,
   brainOsSession?: string,
@@ -158,6 +160,12 @@ export async function sendMessage(
           case 'error':
             cleanup();
             onError(msg.error);
+            break;
+          case 'rate-limited':
+            cleanup();
+            if (currentCallbacks?.done) {
+              currentCallbacks.done({ rateLimited: true, retryAfter: msg.retryAfter, error: msg.error });
+            }
             break;
           case 'insert-cell':
             insertCellAt(msg.content, msg.cellType, msg.position ?? 'cursor').then(result => {

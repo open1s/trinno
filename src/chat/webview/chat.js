@@ -1101,6 +1101,14 @@
       case 'tool-approval-needed':
         showToolApproval(msg.id, msg.toolName, msg.args);
         break;
+
+      case 'rate-limited':
+        showRateLimited(msg.messageId, msg.retryAfter);
+        break;
+
+      case 'rate-limited-tick':
+        updateRateLimitedTick(msg.messageId, msg.remaining);
+        break;
     }
   }
 
@@ -1402,7 +1410,7 @@
     renderToolBadges();
   };
 
-  window.__denyTool = function(id) {
+window.__denyTool = function(id) {
     vscode.postMessage({ type: 'tool-approval', id, approved: false });
     const el = document.getElementById(`approval-${id}`);
     if (el) el.remove();
@@ -1412,8 +1420,47 @@
       tool.status = 'error';
       tool.result = 'Denied by user';
     }
-    renderToolBadges();
-  };
+    updateToolSection();
+  }
+
+  function showRateLimited(messageId, retryAfter) {
+    const msgEl = document.getElementById(messageId);
+    if (!msgEl) return;
+
+    const contentEl = msgEl.querySelector('.message-content');
+    if (!contentEl) return;
+
+    contentEl.innerHTML = '';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rate-limited-box';
+    wrapper.id = `rate-limited-${messageId}`;
+    wrapper.innerHTML = `
+      <div class="rate-limited-icon">⏳</div>
+      <div class="rate-limited-text">
+        <div class="rate-limited-title">Rate Limited (429)</div>
+        <div class="rate-limited-countdown">Retrying in <span id="rate-countdown-${messageId}">${retryAfter}</span>s…</div>
+      </div>
+      <button class="rate-limited-retry-btn" onclick="vscode.postMessage({ type: 'rate-limited-retry', messageId: '${messageId}' })">Retry Now</button>
+    `;
+    contentEl.appendChild(wrapper);
+    scrollToBottom();
+  }
+
+  function updateRateLimitedTick(messageId, remaining) {
+    const countdownEl = document.getElementById(`rate-countdown-${messageId}`);
+    if (!countdownEl) return;
+
+    if (remaining <= 0) {
+      countdownEl.textContent = '0';
+      const box = document.getElementById(`rate-limited-${messageId}`);
+      if (box) {
+        const btn = box.querySelector('.rate-limited-retry-btn');
+        if (btn) btn.textContent = 'Retry';
+      }
+    } else {
+      countdownEl.textContent = remaining;
+    }
+  }
 
   function ensureReasoningSection() {
     if (!messageState.reasoningVisible) {
