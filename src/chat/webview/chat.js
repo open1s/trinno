@@ -50,6 +50,8 @@
   let agents = [{ name: 'Research Assistant', description: 'TRIZ research expert' }];
   let models = [];
   let mcpServers = [];
+  let mcpDropdownVisible = false;
+  let mcpDropdownEl = null;
   let selectedAgent = 'Research Assistant';
   let selectedModel = 'Auto';
   let tokenUsage = { input: 0, output: 0, total: 0 };
@@ -108,18 +110,61 @@
   function updateMcpStatus() {
     if (!statusMcpEl) return;
     if (mcpServers.length === 0) {
-      statusMcpEl.textContent = '';
+      statusMcpEl.innerHTML = '';
+      if (mcpDropdownEl) mcpDropdownEl.classList.remove('visible');
       return;
     }
-    const connected = mcpServers.filter(s => s.connected).map(s => s.name);
-    if (connected.length === 0) {
-      statusMcpEl.textContent = '';
-    } else {
-      statusMcpEl.textContent = `MCP: ${connected.join(', ')}`;
+    const connected = mcpServers.filter(s => s.connected);
+    const label = connected.length > 0
+      ? `&#9654; MCP (${connected.length})`
+      : `&#9654; MCP (0)`;
+    statusMcpEl.innerHTML = `<span class="mcp-label">${label}</span>`;
+
+    statusMcpEl.onclick = (e) => {
+      e.stopPropagation();
+      mcpDropdownVisible = !mcpDropdownVisible;
+      if (mcpDropdownVisible) {
+        renderMcpDropdown();
+        mcpDropdownEl.classList.add('visible');
+      } else {
+        mcpDropdownEl.classList.remove('visible');
+      }
+    };
+
+    if (mcpDropdownVisible) {
+      renderMcpDropdown();
     }
   }
 
+  function renderMcpDropdown() {
+    if (!mcpDropdownEl) return;
+    if (mcpServers.length === 0) {
+      mcpDropdownEl.innerHTML = `
+        <div class="mcp-dropdown-header">MCP Servers</div>
+        <div class="mcp-dropdown-empty">No MCP servers configured</div>`;
+      return;
+    }
+    const items = mcpServers.map(s => `
+      <div class="mcp-dropdown-item">
+        <span class="mcp-dropdown-item-dot ${s.connected ? 'connected' : 'disconnected'}"></span>
+        <span class="mcp-dropdown-item-name">${s.name}</span>
+        <span style="opacity:0.6;font-size:11px">${s.connected ? 'connected' : 'disconnected'}</span>
+      </div>`).join('');
+    mcpDropdownEl.innerHTML = `
+      <div class="mcp-dropdown-header">MCP Servers</div>
+      <div class="mcp-dropdown-list">${items}</div>`;
+  }
+
+  function hideMcpDropdown() {
+    mcpDropdownVisible = false;
+    if (mcpDropdownEl) mcpDropdownEl.classList.remove('visible');
+  }
+
   function init() {
+    mcpDropdownEl = document.createElement('div');
+    mcpDropdownEl.className = 'mcp-dropdown';
+    document.body.appendChild(mcpDropdownEl);
+
     sendBtn.addEventListener('click', sendMessage);
     inputEl.addEventListener('keydown', handleInputKeydown);
     inputEl.addEventListener('input', handleInput);
@@ -143,6 +188,7 @@
         if (attachMenuVisible) hideAttachMenu();
         if (agentMenuVisible) hideAgentMenu();
         if (modelMenuVisible) hideModelMenu();
+        hideMcpDropdown();
       }
     });
 
@@ -161,6 +207,9 @@
       }
       if (modelMenuVisible && !e.target.closest('#model-menu') && !e.target.closest('#btn-model')) {
         hideModelMenu();
+      }
+      if (mcpDropdownVisible && !e.target.closest('.mcp-dropdown') && !e.target.closest('#status-mcp')) {
+        hideMcpDropdown();
       }
     });
 
@@ -341,6 +390,7 @@
     } else {
       hideAttachMenu();
       hideModelMenu();
+      hideMcpDropdown();
       agentMenuVisible = true;
       renderAgentMenu();
       agentMenu.style.display = 'block';
@@ -358,6 +408,7 @@
     } else {
       hideAttachMenu();
       hideAgentMenu();
+      hideMcpDropdown();
       modelMenuVisible = true;
       renderModelMenu();
       modelMenu.style.display = 'block';
@@ -1407,13 +1458,13 @@
     for (const tool of messageState.tools) {
       if (tool.status === 'running') {
         tool.status = 'done';
-        tool.result = 'Completed';
+        tool.result = `${tool.name}: Completed`;
       }
     }
     for (const tool of messageState.toolLog) {
       if (tool.status === 'running') {
         tool.status = 'done';
-        tool.result = 'Completed';
+        tool.result = `${tool.name}: Completed`;
       }
     }
     renderToolBadges();

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getChatConfig } from './settings';
-import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, disposeAgent, getWelcomeContext, sendToolApproval } from './agent';
+import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, disposeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, CompactMessage, requestMcpStatus } from './agent';
 import { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, createUserMessage, createAssistantMessage, SessionInfo } from './messages';
 import { extractNotebookContext, insertCellAt, extractEditorSelection, extractNotebookCellSelection, extractWholeFile, extractWholeNotebook, formatAttachmentForPrompt, AttachmentContext } from './context';
 import {
@@ -273,12 +273,19 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (pendingMcpStatus) {
       chatView.webview.postMessage({ type: 'mcp-status', servers: pendingMcpStatus } as any);
+    } else {
+      requestMcpStatus();
     }
 
     if (currentSession.messages.length > 0) {
       for (const msg of currentSession.messages) {
         chatView.webview.postMessage({ type: 'history-message', message: msg } as any);
       }
+    } else if (currentSession.isCompacted && currentSession.compactedSummary) {
+      const summaryMsg = createAssistantMessage();
+      summaryMsg.content = `## Session Compaction Summary\n\n${currentSession.compactedSummary}`;
+      summaryMsg.status = 'complete';
+      chatView.webview.postMessage({ type: 'history-message', message: summaryMsg } as any);
     }
   }
 }
@@ -826,39 +833,110 @@ async function handleUserMessage(text: string): Promise<void> {
 
   if (text.trim().toLowerCase() === '/compact') {
     chatView.webview.postMessage({ type: 'user-message', message: createUserMessage(text.trim()) } as any);
+
     const beforeCount = currentSession.messages.length;
-    const result = compactMessages(currentSession.messages, DEFAULT_COMPACTION_CONFIG);
-    if (result.wasCompacted) {
-      currentSession.messages = result.messages;
-      if (result.summary) {
-        currentSession.compactedSummary = currentSession.compactedSummary
-          ? `${currentSession.compactedSummary}\n\n[Earlier conversation continued...]\n\n${result.summary}`
-          : result.summary;
-      }
-      currentSession.isCompacted = true;
-      updateSessionTimestamp(currentSession);
-      await saveSession(currentSession);
-      chatView.webview.postMessage({ type: 'clearHistory' } as any);
-      for (const msg of currentSession.messages) {
-        chatView.webview.postMessage({ type: 'history-message', message: msg } as any);
-      }
-      chatView.webview.postMessage({
-        type: 'session-updated',
-        sessionId: currentSession.id,
-        sessionTitle: currentSession.title,
-        sessions: sessionStore?.sessions ?? [],
-        isCompacted: currentSession.isCompacted,
-      } as any);
+    if (beforeCount < 6) {
       chatView.webview.postMessage({
         type: 'user-message',
-        message: createAssistantMessageForText(`Session compacted: ${beforeCount} → ${currentSession.messages.length} messages. Summarized ${beforeCount - currentSession.messages.length} older messages.`),
+        message: createAssistantMessageForText(`Session has only ${beforeCount} messages. Compaction works best with 6+ messages.`),
       } as any);
-    } else {
-      chatView.webview.postMessage({
-        type: 'user-message',
-        message: createAssistantMessageForText(`Session has ${beforeCount} messages. Compaction triggers at ${DEFAULT_COMPACTION_CONFIG.maxMessages} messages.`),
-      } as any);
+      return;
     }
+
+    const userMsg = createUserMessage(text);
+    currentSession.messages.push(userMsg);
+
+    const assistantMsg = createAssistantMessage();
+    currentStreamingId = assistantMsg.id;
+    currentStreamingMsg = assistantMsg;
+    isGenerating = true;
+
+    chatView.webview.postMessage({ type: 'streaming-start', messageId: assistantMsg.id } as any);
+    currentSession.messages.push(assistantMsg);
+
+    const messagesForLLM = currentSession.messages.map(m => {
+      const msg: CompactMessage = {
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      };
+      if (m.reasoning) {
+        msg.reasoning = m.reasoning;
+      }
+      return msg;
+    });
+
+    await sendCompactRequest(
+      messagesForLLM,
+      currentSession.compactedSummary || undefined,
+      (tokenMsg) => {
+        if (chatView) {
+          chatView.webview.postMessage(tokenMsg);
+        }
+if (currentStreamingMsg && tokenMsg.type === 'token') {
+        if (tokenMsg.tokenType === 'ReasoningContent') {
+          currentStreamingMsg.reasoning += tokenMsg.text;
+        } else if (tokenMsg.tokenType === 'Text') {
+          currentStreamingMsg.content += tokenMsg.text;
+        } else if (tokenMsg.tokenType === 'ToolCall') {
+          (currentStreamingMsg.toolCalls as any[]).push({ name: tokenMsg.text, status: 'running', result: '' });
+        } else if (tokenMsg.tokenType === 'ToolResult') {
+          const lastTool = [...(currentStreamingMsg.toolCalls as any[])].reverse().find(t => t.status === 'running');
+          if (lastTool) {
+            lastTool.result = tokenMsg.text ? `${lastTool.name}: ${tokenMsg.text}` : `${lastTool.name}: Completed`;
+            lastTool.status = 'done';
+          }
+        }
+      }
+      },
+      async (doneData) => {
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
+        }
+
+        if (!currentSession) return;
+
+        if (currentStreamingMsg) {
+          const llmSummary = currentStreamingMsg.content.trim();
+          finalizeCurrentMessage();
+
+          currentSession.messages = [];
+          currentSession.compactedSummary = llmSummary;
+          currentSession.isCompacted = true;
+          updateSessionTimestamp(currentSession);
+          await saveSession(currentSession);
+
+          if (chatView) {
+            chatView.webview.postMessage({ type: 'clearHistory' } as any);
+            const summaryMsg = createAssistantMessage();
+            summaryMsg.content = `## Session Compacted\n\n**${beforeCount}** messages summarized:\n\n${llmSummary}`;
+            summaryMsg.status = 'complete';
+            chatView.webview.postMessage({ type: 'history-message', message: summaryMsg } as any);
+            chatView.webview.postMessage({
+              type: 'session-updated',
+              sessionId: currentSession.id,
+              sessionTitle: currentSession.title,
+              sessions: sessionStore?.sessions ?? [],
+              isCompacted: currentSession.isCompacted,
+            } as any);
+          }
+        }
+      },
+      (err) => {
+        if (currentStreamingMsg) {
+          currentStreamingMsg.status = 'error';
+          currentStreamingMsg.error = err;
+        }
+        finalizeCurrentMessage();
+        if (chatView) {
+          chatView.webview.postMessage({
+            type: 'error',
+            messageId: currentStreamingId ?? '',
+            error: err,
+          } as ExtToWebViewMessage);
+        }
+      },
+      selectedModelConfig || globalModelConfig,
+    );
     return;
   }
 
@@ -1065,7 +1143,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
     <div class="status-bar">
       <span id="status-session" class="status-item"></span>
       <span id="status-messages" class="status-item"></span>
-      <span id="status-mcp" class="status-item"></span>
+      <div id="status-mcp" class="status-item mcp-status-wrapper"></div>
     </div>
   </div>
   <script src="${scriptUri}"></script>

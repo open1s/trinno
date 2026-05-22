@@ -236,3 +236,90 @@ export function disposeAgent(): void {
   insertStack.length = 0;
   currentCallbacks = null;
 }
+
+export interface CompactMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  reasoning?: string;
+}
+
+export async function sendCompactRequest(
+  messages: CompactMessage[],
+  systemSummary: string | undefined,
+  onToken: TokenCallback,
+  onDone: DoneCallback,
+  onError: (err: string) => void,
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
+): Promise<void> {
+  console.log('[trinno-chat] sendCompactRequest called, message count:', messages.length);
+  currentCallbacks = { token: onToken, done: onDone, approval: undefined };
+
+  await ensureWorker();
+  console.log('[trinno-chat] worker ready for compact:', workerReady);
+
+  if (!workerProcess || !workerReady) {
+    console.log('[trinno-chat] worker not available for compact');
+    onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    onDone();
+    return;
+  }
+
+  const config = getChatConfig();
+  const apiKey = await getApiKey();
+
+  const effectiveModel = modelConfig?.model || config.model.name;
+  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
+  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+
+  const payload = {
+    type: 'compact',
+    messages,
+    systemSummary: systemSummary || undefined,
+    persona: {
+      name: config.persona.name,
+      prompt: config.persona.prompt,
+    },
+    apiKey: effectiveApiKey || undefined,
+    model: effectiveModel,
+    baseUrl: effectiveBaseUrl,
+  };
+
+  const handleData = (chunk: Buffer) => {
+    const lines = chunk.toString().split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const msg = JSON.parse(line);
+        switch (msg.type) {
+          case 'token':
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+            break;
+          case 'done':
+            cleanup();
+            onDone(msg);
+            break;
+          case 'error':
+            cleanup();
+            onError(msg.error);
+            break;
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+
+  const cleanup = () => {
+    if (workerProcess?.stdout) {
+      workerProcess.stdout.removeListener('data', handleData);
+    }
+    currentCallbacks = null;
+  };
+
+  workerProcess.stdout?.on('data', handleData);
+  workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+}
+
+export async function requestMcpStatus(): Promise<void> {
+  await ensureWorker();
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'mcp-status-request' }) + '\n');
+  }
+}

@@ -331,6 +331,20 @@ function handleCancel(): void {
   }
 }
 
+function emitMcpStatus(): void {
+  try {
+    const loader = new jsbos.ConfigLoader();
+    loader.discover();
+    const configJson = loader.loadSync();
+    const config = JSON.parse(configJson);
+    const servers = (config?.mcp?.servers || []).map((s: any) => ({ name: s.name, type: s.type, connected: true }));
+    emit('mcp-status', { servers });
+  } catch (e) {
+    console.error('[bos-worker] Failed to emit MCP status:', e);
+    emit('mcp-status', { servers: [] });
+  }
+}
+
 function handleHelp(): void {
   const commands = slashRegistry.list();
   let text = '## Available Slash Commands\n\n';
@@ -339,6 +353,105 @@ function handleHelp(): void {
   }
   emit('token', { tokenType: 'Text', text });
   emit('done', {});
+}
+
+interface CompactMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  reasoning?: string;
+}
+
+async function handleCompact(
+  messages: CompactMessage[],
+  systemSummary: string | undefined,
+  persona: { name: string; prompt: string } | undefined,
+  apiKey: string | undefined,
+  model?: string,
+  baseUrl?: string
+): Promise<void> {
+  console.error('[bos-worker] handleCompact START, message count:', messages.length);
+
+  if (!deps) {
+    const brainOptions: any = { workspaceRoot: process.cwd() };
+    if (apiKey) brainOptions.apiKey = apiKey;
+    deps = await composeRoot(brainOptions);
+    await initApprovalBus(deps.brain);
+  }
+
+  const conversationText = messages.map(m => {
+    const reasoning = m.reasoning ? `\n[Reasoning: ${m.reasoning.slice(0, 200)}]` : '';
+    return `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}${reasoning}`;
+  }).join('\n\n');
+
+  const summaryPrompt = `You are given a structured conversation transcript that may include:
+- User messages
+- Assistant responses
+- Tool calls (functions, APIs, etc.)
+- Tool call results (outputs, errors, data)
+
+Your task is to produce a structure, concise, high-signal summary that enables someone to quickly understand and continue the interaction.
+
+Focus on:
+- User intent and key inputs
+- Important assistant actions (especially tool usage)
+- Tool calls and their results (what was called, why, and what happened)
+- Key outcomes, decisions, or findings
+- Important context, constraints, or assumptions
+- Errors, failures, or retries (if any)
+- Remaining open questions or next steps
+
+Requirements:
+- Write 3–5 sentences total
+- Be specific and avoid generic phrasing
+- Preserve technical meaning and causal relationships
+- Compress aggressively: remove repetition, keep only what matters
+- If tool usage is irrelevant, omit it
+
+Conversation:
+${conversationText}
+`;
+
+  const basePrompt = persona?.prompt || `You are a helpful research assistant.`;
+  let systemPrompt = systemSummary
+    ? `${basePrompt}\n\n## Prior Conversation Summary\n\n${systemSummary}`
+    : basePrompt;
+
+  let agent = deps.brain.agent('trinno-compact')
+    .with_systemPrompt(systemPrompt)
+    .with_temperature(0.3);
+
+  if (model) agent = agent.with_model(model);
+  if (baseUrl) agent = agent.with_baseUrl(baseUrl);
+
+  const started = await agent.start();
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      started.stream(summaryPrompt, (token: any) => {
+        switch (token.type) {
+          case 'ReasoningContent':
+            emit('token', { tokenType: 'ReasoningContent', text: token.text });
+            break;
+          case 'Text':
+            emit('token', { tokenType: 'Text', text: token.text });
+            break;
+          case 'Done':
+            emit('done', { compacted: true });
+            resolve();
+            break;
+          case 'Error':
+            emit('error', { error: token.error });
+            started.stop().catch(() => {});
+            resolve();
+            break;
+        }
+      });
+    });
+  } catch (err) {
+    emit('error', { error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    started.stop().catch(() => {});
+  }
 }
 
 process.stdin.on('data', async (chunk: Buffer) => {
@@ -390,6 +503,12 @@ process.stdin.on('data', async (chunk: Buffer) => {
           break;
         case 'tool-approval':
           await sendApprovalResponse(msg.id, msg.approved);
+          break;
+        case 'compact':
+          await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl);
+          break;
+        case 'mcp-status-request':
+          emitMcpStatus();
           break;
       }
     } catch (err) {
