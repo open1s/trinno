@@ -1489,11 +1489,11 @@ window.__denyTool = function(id) {
       if (code.includes('#') || code.includes('=') || code.includes('let ') || code.includes('import')) {
         const btn = document.createElement('button');
         btn.className = 'insert-btn';
-        btn.textContent = 'Insert as Typst cell';
+        btn.textContent = 'Insert as cell';
         btn.onclick = () => {
           vscode.postMessage({
             type: 'insertCell',
-            cellType: 'typst',
+            cellType: 'markdown',
             content: code,
           });
         };

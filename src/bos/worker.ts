@@ -281,10 +281,15 @@ Type /help to see all commands.`;
             emit('token', { tokenType: 'Text', text: token.text });
             break;
           case 'ToolCall':
-            emit('token', { tokenType: 'ToolCall', text: token.name });
+            localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id });
             break;
           case 'ToolResult':
-            emit('token', { tokenType: 'ToolResult', text: token.result || token.text || '' });
+            localEmit('token', { 
+              tokenType: 'ToolResult', 
+              text: token.result || token.text || '', 
+              toolId: token.id,
+              status: 'completed' 
+            });
             break;
           case 'Done': {
             let exportedSession: string | undefined;
@@ -633,10 +638,15 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             localEmit('token', { tokenType: 'Text', text: token.text });
             break;
           case 'ToolCall':
-            localEmit('token', { tokenType: 'ToolCall', text: token.name });
+            localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id });
             break;
           case 'ToolResult':
-            localEmit('token', { tokenType: 'ToolResult', text: token.result || token.text || '' });
+            localEmit('token', { 
+              tokenType: 'ToolResult', 
+              text: token.result || token.text || '', 
+              toolId: token.id,
+              status: 'completed' 
+            });
             break;
           case 'Done': {
             let exportedSession2: string | undefined;

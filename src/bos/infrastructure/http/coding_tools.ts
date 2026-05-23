@@ -2,6 +2,7 @@ import { defineTool, ok, err } from '@open1s/ezbos';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import * as readline from 'readline';
 
 const DANGEROUS_PATTERNS = [
   /^rm\s+-rf\s+\/$/,
@@ -26,12 +27,12 @@ function isDangerousCommand(cmd: string): boolean {
 export function createCodingTools(workspaceRoot: string) {
   const readFile = defineTool(
     'read_file',
-    'Read contents of a file with line numbers. Use this to examine code, configs, or any text file.',
+    'Read partial or full contents of a file with line numbers. Defaults to reading up to 1000 lines.',
   )
     .required('filePath', 'string', 'Path to the file (relative to workspace root)')
     .param('startLine', 'number', 'Starting line number (1-indexed, default: 1)')
-    .param('endLine', 'number', 'Ending line number (default: read all)')
-    .handle((args) => {
+    .param('endLine', 'number', 'Ending line number (default: startLine + 999)')
+    .handle(async (args) => {
       try {
         const filePath = path.resolve(workspaceRoot, args.filePath);
         if (!isWorkspacePath(args.filePath, workspaceRoot)) {
@@ -40,17 +41,36 @@ export function createCodingTools(workspaceRoot: string) {
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);
         }
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const lines = content.split('\n');
-        const start = (args.startLine || 1) - 1;
-        const end = args.endLine ? Math.min(args.endLine, lines.length) : lines.length;
-        const sliced = lines.slice(start, end);
-        const numbered = sliced.map((line, i) => `${start + i + 1}: ${line}`).join('\n');
+        
+        const startLine = args.startLine || 1;
+        const endLine = args.endLine || (startLine + 999);
+        
+        if (startLine < 1) return err('startLine must be >= 1');
+        if (endLine < startLine) return err('endLine must be >= startLine');
+
+        const rl = readline.createInterface({
+          input: fs.createReadStream(filePath),
+          crlfDelay: Infinity
+        });
+
+        const lines: string[] = [];
+        let currentLine = 0;
+
+        for await (const line of rl) {
+          currentLine++;
+          if (currentLine >= startLine && currentLine <= endLine) {
+            lines.push(`${currentLine}: ${line}`);
+          }
+          if (currentLine >= endLine) {
+            rl.close();
+            break;
+          }
+        }
+
         return ok({
           filePath: args.filePath,
-          totalLines: lines.length,
-          content: numbered,
-          linesShown: `${start + 1}-${end}`,
+          content: lines.join('\n'),
+          linesShown: `${startLine}-${Math.min(currentLine, endLine)}`,
         });
       } catch (e: any) {
         return err(e.message);
@@ -82,12 +102,14 @@ export function createCodingTools(workspaceRoot: string) {
 
   const editFile = defineTool(
     'edit_file',
-    'Apply a search-and-replace edit to a file. Use exact text from the file for oldString.',
+    'Apply an edit to a file. Supports exact search-and-replace (using oldString) or line-range replacement (using startLine and endLine).',
   )
     .required('filePath', 'string', 'Path to the file (relative to workspace root)')
-    .required('oldString', 'string', 'Exact text to find and replace (must match exactly)')
     .required('newString', 'string', 'Text to replace with')
-    .param('replaceAll', 'boolean', 'Replace all occurrences (default: false)')
+    .param('oldString', 'string', 'Exact text to find and replace (if not using line numbers)')
+    .param('startLine', 'number', 'Starting line number for line-based replace (1-indexed)')
+    .param('endLine', 'number', 'Ending line number for line-based replace (1-indexed, inclusive)')
+    .param('replaceAll', 'boolean', 'Replace all occurrences of oldString (default: false)')
     .handle((args) => {
       try {
         const filePath = path.resolve(workspaceRoot, args.filePath);
@@ -98,14 +120,30 @@ export function createCodingTools(workspaceRoot: string) {
           return err(`File not found: ${args.filePath}`);
         }
         const content = fs.readFileSync(filePath, 'utf-8');
-        if (!content.includes(args.oldString)) {
-          return err('oldString not found in file. Check exact whitespace and content.');
+        
+        if (args.startLine !== undefined && args.endLine !== undefined) {
+          const lines = content.split('\n');
+          const start = args.startLine - 1;
+          const end = args.endLine;
+          if (start < 0 || end > lines.length || start > end) {
+            return err(`Invalid line range: ${args.startLine}-${args.endLine} (file has ${lines.length} lines)`);
+          }
+          const newLines = args.newString === '' ? [] : args.newString.split('\n');
+          lines.splice(start, end - start, ...newLines);
+          fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+          return ok({ filePath: args.filePath, action: 'replaced_lines', lines: `${args.startLine}-${args.endLine}` });
+        } else if (args.oldString !== undefined) {
+          if (!content.includes(args.oldString)) {
+            return err('oldString not found in file. Check exact whitespace and content.');
+          }
+          const newContent = args.replaceAll
+            ? content.split(args.oldString).join(args.newString)
+            : content.replace(args.oldString, args.newString);
+          fs.writeFileSync(filePath, newContent, 'utf-8');
+          return ok({ filePath: args.filePath, replaced: args.replaceAll ? 'all' : 'first' });
+        } else {
+          return err('Must provide either oldString or both startLine and endLine.');
         }
-        const newContent = args.replaceAll
-          ? content.split(args.oldString).join(args.newString)
-          : content.replace(args.oldString, args.newString);
-        fs.writeFileSync(filePath, newContent, 'utf-8');
-        return ok({ filePath: args.filePath, replaced: args.replaceAll ? 'all' : 'first' });
       } catch (e: any) {
         return err(e.message);
       }
@@ -250,6 +288,43 @@ export function createCodingTools(workspaceRoot: string) {
       }
     });
 
+  const applyPatch = defineTool(
+    'apply_patch',
+    'Apply a unified diff patch to a file. Useful for applying complex multi-line changes with context.',
+  )
+    .required('filePath', 'string', 'Path to the file to patch (relative to workspace root)')
+    .required('patch', 'string', 'The unified diff patch content')
+    .handle((args) => {
+      try {
+        const filePath = path.resolve(workspaceRoot, args.filePath);
+        if (!isWorkspacePath(args.filePath, workspaceRoot)) {
+          return err('Access denied: file is outside workspace');
+        }
+        if (!fs.existsSync(filePath)) {
+          return err(`File not found: ${args.filePath}`);
+        }
+        
+        // Ensure patch has newlines at the end
+        const patchContent = args.patch.endsWith('\n') ? args.patch : args.patch + '\n';
+        
+        const cmd = `patch -t "${filePath}"`;
+        const result = execSync(cmd, {
+          cwd: workspaceRoot,
+          input: patchContent,
+          encoding: 'utf-8',
+          timeout: 10000,
+        });
+        
+        return ok({ filePath: args.filePath, result: result.trim(), action: 'patched' });
+      } catch (e: any) {
+        let errorMessage = e.message;
+        if (e.stdout || e.stderr) {
+          errorMessage = `${e.stdout || ''}\n${e.stderr || ''}`.trim();
+        }
+        return err(`Patch failed (exit code ${e.status}):\n${errorMessage}`);
+      }
+    });
+
   const execTool = defineTool(
     'exec_tool',
     'Execute a command with provided arguments. Useful for running binaries or scripts with structured arguments.',
@@ -288,6 +363,7 @@ export function createCodingTools(workspaceRoot: string) {
     grepSearch,
     globFiles,
     astGrep,
+    applyPatch,
     execTool,
   ];
 }

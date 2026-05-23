@@ -1,3 +1,6 @@
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 import { Agent, BrainOS } from '@open1s/ezbos';
 import { SearchResult } from '../../domain/solution/search_port.js';
 import { CachedSearchService } from '../../infrastructure/search/cached_search.js';
@@ -18,6 +21,7 @@ export interface AIResearchConfig {
   onProgress?: (step: string, message: string) => void;
   onThinking?: (text: string) => void;
   showThinking?: boolean;
+  skillContent?: string;
 }
 
 interface ExtractedParameters {
@@ -67,7 +71,7 @@ export class AIResearchOrchestrator {
     const langPrefix = this.locale.language === 'zh'
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。包括内部推理过程、分析、总结都用中文。\n\n'
       : '';
-    const builder = this.brain.agent('triz-research-orchestrator')
+    let builder = this.brain.agent('triz-research-orchestrator')
       .with_systemPrompt(`${langPrefix}You are a TRIZ research expert. You analyze problems, search for prior art, summarize findings, and generate comprehensive research reports.
 
 Your workflow:
@@ -81,8 +85,16 @@ Your workflow:
    - Technology maturity assessment (TRL + S-curve)
    - Actionable recommendations
 
+You have access to specialized SKILLs through the skill tool. Call a relevant skill to enhance your analysis if it matches the problem domain.
+
 Return ONLY a JSON object with the report structure. No markdown, no explanation.`)
       .with_temperature(0.3);
+
+    // Support calling relevant SKILLs for enhancement
+    const agentsDir = path.join(os.homedir(), '.agents', 'skills');
+    const bosDir = path.join(os.homedir(), '.bos', 'skills');
+    if (fs.existsSync(agentsDir)) builder = builder.with_skills_dir(agentsDir);
+    if (fs.existsSync(bosDir)) builder = builder.with_skills_dir(bosDir);
 
     this.agent = await builder.start();
   }
@@ -119,7 +131,7 @@ Return ONLY a JSON object with the report structure. No markdown, no explanation
     let searchKeywords: ExtractedSearchKeywords | null = null;
     if (this.agent) {
       try {
-        const keywordPrompt = this.buildKeywordPrompt(problemDescription);
+        const keywordPrompt = this.buildKeywordPrompt(problemDescription, config.skillContent);
         const keywordResponse = await streamAgent(this.agent, keywordPrompt, {
           onThinking: (text) => {
             if (showThinking) {
@@ -204,6 +216,7 @@ Return ONLY a JSON object with the report structure. No markdown, no explanation
     const analysisPrompt = this.buildAnalysisPrompt(
       problemDescription,
       summarizedResults,
+      config.skillContent,
     );
 
     // Step 4: Get AI analysis and report (streaming with thinking)
@@ -440,6 +453,7 @@ Return ONLY a JSON object with the report structure. No markdown, no explanation
   private buildAnalysisPrompt(
     problemDescription: string,
     results: { patents: PriorArtItem[]; papers: PriorArtItem[]; techSolutions: PriorArtItem[] },
+    skillContent?: string,
   ): string {
     const formatResult = (r: PriorArtItem) => {
       const summaryText = r.summary
@@ -452,11 +466,13 @@ Return ONLY a JSON object with the report structure. No markdown, no explanation
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。包括内部推理过程、分析、总结都用中文。\n\n'
       : '';
 
-    return `${langPrefix}Analyze this problem and prior art:
+    let prompt = `${langPrefix}Analyze this problem and prior art:\n\nPROBLEM: ${problemDescription}\n\n`;
+    
+    if (skillContent) {
+      prompt += `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n(Apply the instructions from the skill block above to guide your analysis if relevant.)\n\n`;
+    }
 
-PROBLEM: ${problemDescription}
-
-PRIOR ART:
+    prompt += `PRIOR ART:
 
 PATENTS:
 ${results.patents.map((p, i) => `${i + 1}. ${formatResult(p)}`).join('\n\n')}
@@ -479,6 +495,8 @@ Return ONLY valid JSON matching this schema:
   "keyInsights": ["string", "string", "string"],
   "recommendedApproach": "string"
 }`;
+
+    return prompt;
   }
 
   private parseAIAnalysisWithSchema(response: string): ExtractedParameters {
@@ -534,12 +552,14 @@ Return ONLY valid JSON matching this schema:
     return result;
   }
 
-  private buildKeywordPrompt(problemDescription: string): string {
-    return `Extract optimized search keywords for prior art research based on this problem:
+  private buildKeywordPrompt(problemDescription: string, skillContent?: string): string {
+    let prompt = `Extract optimized search keywords for prior art research based on this problem:\n\nProblem: "${problemDescription}"\n\n`;
+    
+    if (skillContent) {
+      prompt += `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n(Use the domain knowledge from the skill block above to guide your keyword selection if relevant.)\n\n`;
+    }
 
-Problem: "${problemDescription}"
-
-Generate SIX sets of search keywords — THREE in English and THREE in Chinese — optimized for different databases.
+    prompt += `Generate SIX sets of search keywords — THREE in English and THREE in Chinese — optimized for different databases.
 
 Target databases:
 1. English patentQuery: For patent databases (Google Patents, USPTO, EPO, etc.) - English technical terms
@@ -568,6 +588,7 @@ Return ONLY valid JSON:
   "techQueryZh": "中文关键词用于技术方案搜索",
   "reasoning": "brief explanation of keyword choices"
 }`;
+    return prompt;
   }
 
   private parseSearchKeywords(response: string): ExtractedSearchKeywords | null {

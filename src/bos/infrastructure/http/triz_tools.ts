@@ -139,14 +139,15 @@ export function createTrizTools(
     .param('benefits', 'array', 'List of benefits')
     .param('costs', 'array', 'List of costs')
     .param('harms', 'array', 'List of harmful effects')
-    .handle((args) => {
+    .handle(async (args) => {
       try {
-        return idealityHandler.execute({
+        const result = await idealityHandler.execute({
           problemId: args.problemId,
           benefits: args.benefits || [],
           costs: args.costs || [],
           harms: args.harms || [],
-        }).then(result => ok(result));
+        });
+        return ok(result);
       } catch (e: any) {
         return err(e.message);
       }
@@ -159,13 +160,18 @@ export function createTrizTools(
     .required('improvingParam', 'string', 'Description of improving parameter')
     .required('worseningParam', 'string', 'Description of worsening parameter')
     .required('description', 'string', 'Problem description')
-    .handle((args) => {
+    .handle(async (args) => {
       if (!aiAgent) return err('AI agent not configured');
-      return aiAgent.analyzeContradiction(
-        args.improvingParam,
-        args.worseningParam,
-        args.description,
-      ).then(result => ok({ analysis: result }));
+      try {
+        const result = await aiAgent.analyzeContradiction(
+          args.improvingParam,
+          args.worseningParam,
+          args.description,
+        );
+        return ok({ analysis: result });
+      } catch (e: any) {
+        return err(e.message);
+      }
     });
 
   const aiGenerateInsight = defineTool(
@@ -175,15 +181,20 @@ export function createTrizTools(
     .required('problemDescription', 'string', 'Description of the problem')
     .required('principleIndex', 'number', 'TRIZ principle index (1-40)')
     .param('context', 'string', 'Additional context')
-    .handle((args) => {
+    .handle(async (args) => {
       if (!aiAgent) return err('AI agent not configured');
       const principle = principleEngine.getPrinciple(args.principleIndex);
       if (!principle) return err(`Principle ${args.principleIndex} not found`);
-      return aiAgent.generateInsight(
-        args.problemDescription,
-        principle,
-        args.context,
-      ).then(result => ok({ insight: result }));
+      try {
+        const result = await aiAgent.generateInsight(
+          args.problemDescription,
+          principle,
+          args.context,
+        );
+        return ok({ insight: result });
+      } catch (e: any) {
+        return err(e.message);
+      }
     });
 
   const triggerSearchPatents = defineTool(
