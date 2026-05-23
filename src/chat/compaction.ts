@@ -1,4 +1,4 @@
-import { ChatMessage } from './messages';
+import type { ChatMessage } from './messages';
 
 export interface CompactionConfig {
   maxMessages: number;

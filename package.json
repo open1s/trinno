@@ -248,12 +248,12 @@
     "compile": "tsc -p ./ && rm -rf dist/chat/webview && cp -r src/chat/webview dist/chat/webview",
     "watch": "tsc -watch -p ./",
     "test": "node ./dist/test/runTest.js",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src/chat/*.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^18.19.130",
+    "@types/node": "^25.9.1",
     "@types/vscode": "^1.120.0",
     "@vscode/test-electron": "^2.5.2",
     "eslint": "^10.4.0",

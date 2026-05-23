@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS, McpServerConfig } from '../bos/infrastructure/config/toolPermissions';
+import type { ToolPermissionConfig, McpServerConfig } from '../bos/infrastructure/config/toolPermissions';
+import { DEFAULT_TOOL_PERMISSIONS } from '../bos/infrastructure/config/toolPermissions';
 
 export interface ChatConfig {
   model: {

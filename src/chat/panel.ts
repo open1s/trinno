@@ -3,12 +3,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getChatConfig } from './settings';
-import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, disposeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, CompactMessage, requestMcpStatus } from './agent';
-import { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, createUserMessage, createAssistantMessage, SessionInfo } from './messages';
-import { extractNotebookContext, insertCellAt, extractEditorSelection, extractNotebookCellSelection, extractWholeFile, extractWholeNotebook, formatAttachmentForPrompt, AttachmentContext } from './context';
-import {
+import type { CompactMessage} from './agent';
+import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, requestMcpStatus } from './agent';
+import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage} from './messages';
+import { createUserMessage, createAssistantMessage } from './messages';
+import { extractNotebookContext, insertCellAt, extractEditorSelection, extractNotebookCellSelection, extractWholeFile, extractWholeNotebook } from './context';
+import type {
   Session,
-  SessionStore,
+  SessionStore} from './sessions';
+import {
   createSession,
   generateSessionTitle,
   updateSessionTimestamp,
@@ -20,7 +23,7 @@ import {
   migrateOldHistory,
   sessionToMetadata,
 } from './sessions';
-import { buildContextWithSummary, DEFAULT_COMPACTION_CONFIG, shouldCompact, compactMessages } from './compaction';
+import { buildContextWithSummary } from './compaction';
 
 let chatView: vscode.WebviewView | null = null;
 let sessionStore: SessionStore | null = null;
@@ -203,6 +206,8 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ): void {
+    void _context;
+    void _token;
     console.log('[trinno-chat] resolveWebviewView called');
     chatView = webviewView;
 
@@ -288,112 +293,6 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       chatView.webview.postMessage({ type: 'history-message', message: summaryMsg } as any);
     }
   }
-}
-
-async function sendAttachmentToChat(ctx: AttachmentContext): Promise<void> {
-  if (!chatView || !currentSession) {
-    vscode.window.showInformationMessage('Open Trinno Chat first.');
-    return;
-  }
-
-  const formatted = formatAttachmentForPrompt(ctx);
-  const userMsg = createUserMessage(formatted);
-  currentSession.messages.push(userMsg);
-  updateSessionTimestamp(currentSession);
-
-  if (currentSession.title === 'New Chat') {
-    currentSession.title = generateSessionTitle(currentSession.messages);
-  }
-
-  chatView.webview.postMessage({ type: 'user-message', message: userMsg } as any);
-
-  const assistantMsg = createAssistantMessage();
-  currentStreamingId = assistantMsg.id;
-  currentStreamingMsg = assistantMsg;
-  isGenerating = true;
-
-  chatView.webview.postMessage({ type: 'streaming-start', messageId: assistantMsg.id } as any);
-  currentSession.messages.push(assistantMsg);
-
-  const { messagesForAI, systemSummary } = buildContextWithSummary(
-    currentSession.messages,
-    currentSession.compactedSummary,
-  );
-
-  if (systemSummary && systemSummary !== currentSession.compactedSummary) {
-    currentSession.compactedSummary = systemSummary;
-    currentSession.isCompacted = true;
-  }
-
-  await sendMessage(
-    assistantMsg.id,
-    formatted,
-    (tokenMsg) => {
-      if (chatView) {
-        chatView.webview.postMessage(tokenMsg);
-      }
-      if (currentStreamingMsg && tokenMsg.type === 'token') {
-        if (tokenMsg.tokenType === 'ReasoningContent') {
-          currentStreamingMsg.reasoning += tokenMsg.text;
-        } else if (tokenMsg.tokenType === 'Text') {
-          currentStreamingMsg.content += tokenMsg.text;
-        }
-      }
-    },
-    (doneData) => {
-      if (doneData?.rateLimited) {
-        handleRateLimited(doneData.retryAfter, doneData.error);
-        return;
-      }
-      if (chatView) {
-        chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
-        let inputTokens = doneData?.inputTokens ?? 0;
-        let outputTokens = doneData?.outputTokens ?? 0;
-        if (inputTokens === 0 && outputTokens === 0 && currentStreamingMsg && currentSession) {
-          outputTokens = Math.ceil((currentStreamingMsg.content.length + currentStreamingMsg.reasoning.length) / 4);
-          const contextText = currentSession.messages.slice(0, -1).map(m => m.content + (m.reasoning || '')).join(' ');
-          inputTokens = Math.ceil(contextText.length / 4);
-        }
-        chatView.webview.postMessage({
-          type: 'token-usage',
-          usage: {
-            input: inputTokens,
-            output: outputTokens,
-            total: inputTokens + outputTokens,
-          },
-        } as any);
-      }
-      if (currentSession && doneData?.brainOsSession) {
-        currentSession.brainOsSession = doneData.brainOsSession;
-      }
-      finalizeCurrentMessage();
-    },
-    (err) => {
-      if (currentStreamingMsg) {
-        currentStreamingMsg.status = 'error';
-        currentStreamingMsg.error = err;
-      }
-      finalizeCurrentMessage();
-      if (chatView) {
-        chatView.webview.postMessage({
-          type: 'error',
-          messageId: currentStreamingId ?? '',
-          error: err,
-        } as ExtToWebViewMessage);
-      }
-    },
-    (id, toolName, args) => {
-      if (chatView) {
-        chatView.webview.postMessage({ type: 'tool-approval-needed', id, toolName, args } as ExtToWebViewMessage);
-      }
-    },
-    undefined,  // onRateLimited — handled via doneData.rateLimited above
-    systemSummary || undefined,
-    currentSession?.id,
-    currentSession?.brainOsSession,
-    selectedAgentContent,
-    selectedModelConfig || globalModelConfig,
-  );
 }
 
 export function registerChatPanel(context: vscode.ExtensionContext): void {
@@ -821,7 +720,9 @@ function createAssistantMessageForText(text: string): ChatMessage {
 let rateLimitTimer: ReturnType<typeof setInterval> | null = null;
 let rateLimitRetryCallback: (() => void) | null = null;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function handleRateLimited(retryAfter: number, _error: string): void {
+  void _error;
   if (!chatView || !currentStreamingId) return;
 
   const messageId = currentStreamingId;
@@ -950,7 +851,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         }
       }
       },
-async (doneData) => {
+      async (_) => {
         if (chatView) {
           chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         }
@@ -1036,7 +937,7 @@ async (doneData) => {
   chatView.webview.postMessage({ type: 'streaming-start', messageId: assistantMsg.id } as any);
   currentSession.messages.push(assistantMsg);
 
-  const { messagesForAI, systemSummary } = buildContextWithSummary(
+  const { systemSummary } = buildContextWithSummary(
     currentSession.messages,
     currentSession.compactedSummary,
   );

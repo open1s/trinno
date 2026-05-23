@@ -286,7 +286,7 @@ Type /help to see all commands.`;
           case 'ToolResult':
             emit('token', { tokenType: 'ToolResult', text: token.result || token.text || '' });
             break;
-          case 'Done':
+          case 'Done': {
             let exportedSession: string | undefined;
             if (sessionId) {
               try {
@@ -306,6 +306,7 @@ Type /help to see all commands.`;
             });
             resolve();
             break;
+          }
           case 'Error':
             if (isRateLimited(token.error)) {
               const retryAfter = parseRetryAfter(token.error);
@@ -425,11 +426,11 @@ Focus on:
 - Remaining open questions or next steps
 
 Requirements:
-- Write 3–5 sentences total
-- Be specific and avoid generic phrasing
+- Be specific and avoid generic phrasing, compactioin ratio > 60%
 - Preserve technical meaning and causal relationships
 - Compress aggressively: remove repetition, keep only what matters
 - If tool usage is irrelevant, omit it
+- Output in structured markdown format
 
 Conversation:
 ${conversationText}
@@ -637,7 +638,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
           case 'ToolResult':
             localEmit('token', { tokenType: 'ToolResult', text: token.result || token.text || '' });
             break;
-          case 'Done':
+          case 'Done': {
             let exportedSession2: string | undefined;
             if (sessionId) {
               try {
@@ -655,6 +656,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             });
             resolve();
             break;
+          }
           case 'Error':
             if (isRateLimited(token.error)) {
               const retryAfter = parseRetryAfter(token.error);

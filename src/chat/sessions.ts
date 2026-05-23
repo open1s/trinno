@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
-import { ChatMessage } from './messages';
+import type { ChatMessage } from './messages';
 
 export interface Session {
   id: string;

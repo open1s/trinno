@@ -1,5 +1,6 @@
-import * as vscode from 'vscode';
-import { ExtToWebViewMessage } from './messages';
+import * as childProcess from 'child_process';
+import * as nodePath from 'path';
+import type { ExtToWebViewMessage } from './messages';
 import { getChatConfig, getApiKey } from './settings';
 import { extractNotebookContext, insertCellAt, undoLastInsert, formatContextForPrompt } from './context';
 
@@ -10,23 +11,22 @@ interface InsertedCell {
 }
 
 type TokenCallback = (msg: ExtToWebViewMessage) => void;
+ 
 type DoneCallback = (data?: any) => void;
 type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>) => void;
 type McpStatusCallback = (servers: { name: string; type: string; connected: boolean }[]) => void;
 type RateLimitedCallback = (retryAfter: number, error: string) => void;
 
-let workerProcess: ReturnType<typeof import('child_process').spawn> | null = null;
+let workerProcess: childProcess.ChildProcess | null = null;
 let workerReady = false;
 let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined } | null = null;
 let mcpStatusCallback: McpStatusCallback | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 const insertStack: InsertedCell[] = [];
 
-function spawnWorker(): ReturnType<typeof import('child_process').spawn> {
-  const { spawn } = require('child_process');
-  const path = require('path');
-  const projectRoot = path.resolve(__dirname, '..', '..');
-  return spawn('npx', ['tsx', 'src/bos/worker.ts'], {
+function spawnWorker(): childProcess.ChildProcess {
+  const projectRoot = nodePath.resolve(__dirname, '..', '..');
+  return childProcess.spawn('npx', ['tsx', 'src/bos/worker.ts'], {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: projectRoot,
     env: { ...process.env, NODE_NO_WARNINGS: '1' },

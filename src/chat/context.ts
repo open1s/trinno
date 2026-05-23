@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { NotebookContext, CellInfo } from './messages';
+import type { NotebookContext, CellInfo } from './messages';
 import { getChatConfig } from './settings';
 
 export function extractNotebookContext(): NotebookContext {
