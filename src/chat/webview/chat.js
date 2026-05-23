@@ -475,9 +475,12 @@
       chip.className = 'attachment-chip';
       const shortPath = att.filePath.split('/').pop() || att.filePath;
       const label = att.lineRange ? `${shortPath}:${att.lineRange}` : shortPath;
+      
+      const modeIcon = att.mode === 'reference' ? '📎 ' : '';
+      
       chip.innerHTML = `
         <span class="chip-icon">${att.language.slice(0, 2).toUpperCase()}</span>
-        <span class="chip-label" title="${escapeHtml(att.filePath)}">${escapeHtml(label)}</span>
+        <span class="chip-label" title="${escapeHtml(att.filePath)}">${modeIcon}${escapeHtml(label)}</span>
         <button class="chip-remove" data-index="${i}">&times;</button>
       `;
       attachmentsContainer.appendChild(chip);
@@ -488,7 +491,12 @@
     if (attachments.length === 0) return '';
     return attachments.map(att => {
       const header = `📎 ${att.filePath}${att.lineRange ? `:${att.lineRange}` : ''} (${att.language})`;
-      return `${header}\n\`\`\`${att.language}\n${att.content}\n\`\`\``;
+      if (att.mode === 'reference') {
+        const hint = `Use \`read_file("${att.filePath}"${att.startLine ? `, startLine=${att.startLine}` : ''}${att.endLine ? `, endLine=${att.endLine}` : ''})\` for full content.`;
+        return `${header}\n\`\`\`${att.language}\n${att.content}\n\`\`\`\n${hint}`;
+      } else {
+        return `${header}\n\`\`\`${att.language}\n${att.content}\n\`\`\``;
+      }
     }).join('\n\n');
   }
 
@@ -1205,7 +1213,7 @@
     clearWelcome();
     isGenerating = true;
     sendBtn.disabled = true;
-    sendBtn.textContent = 'Stop';
+    sendBtn.textContent = '■';
     sendBtn.classList.add('stop-btn');
     sendBtn.onclick = cancelGeneration;
 
@@ -1498,7 +1506,7 @@ window.__denyTool = function(id) {
   function finalizeMessage() {
     isGenerating = false;
     sendBtn.disabled = false;
-    sendBtn.textContent = 'Send';
+    sendBtn.textContent = '➤';
     sendBtn.classList.remove('stop-btn');
     sendBtn.onclick = sendMessage;
 

@@ -1094,7 +1094,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
             <button id="btn-settings" class="toolbar-btn" title="Settings">⚙</button>
           </div>
         </div>
-        <button id="btn-send" class="send-btn">↑</button>
+        <button id="btn-send" class="send-btn">➤</button>
       </div>
       <div id="attach-menu" class="attach-menu" style="display:none">
         <div class="attach-menu-item" data-action="selection">📝 Send Selection</div>

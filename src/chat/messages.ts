@@ -45,7 +45,7 @@ export type ExtToWebViewMessage =
   | { type: 'session-title-updated'; sessionId: string; title: string }
   | { type: 'rate-limited'; messageId: string; retryAfter: number }
   | { type: 'rate-limited-tick'; messageId: string; remaining: number }
-  | { type: 'insert-to-input'; attachment: { filePath: string; lineRange: string | null; language: string; content: string } }
+  | { type: 'insert-to-input'; attachment: { mode: 'inline' | 'reference'; filePath: string; lineRange: string | null; startLine?: number; endLine?: number; language: string; content: string } }
   | { type: 'agents-loaded'; agents: { name: string; description: string }[] }
   | { type: 'models-loaded'; models: { name: string; description?: string }[] }
   | { type: 'tool-approval-needed'; id: string; toolName: string; args: Record<string, unknown> };

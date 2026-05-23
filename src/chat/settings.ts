@@ -54,7 +54,7 @@ export const DEFAULT_CONFIG: ChatConfig = {
     autoInject: true,
     maxCharsPerCell: 500,
     maxTotalTokens: 4000,
-    maxCharsPerAttachment: 5000,
+    maxCharsPerAttachment: 2000,
   },
   history: {
     enabled: true,
@@ -187,7 +187,7 @@ export function getConfigSchema(): Record<string, unknown> {
     [`${CONFIG_NS}.context.maxCharsPerAttachment`]: {
       type: 'number',
       default: DEFAULT_CONFIG.context.maxCharsPerAttachment,
-      description: 'Max characters per file/selection attachment sent to chat',
+      description: 'Max characters to inline before switching to file reference mode',
     },
     [`${CONFIG_NS}.history.enabled`]: {
       type: 'boolean',

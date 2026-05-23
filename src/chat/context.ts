@@ -127,11 +127,22 @@ export async function undoLastInsert(
 }
 
 export interface AttachmentContext {
+  mode: 'inline' | 'reference';
   content: string;
   filePath: string;
   lineRange: string | null;
+  startLine?: number;
+  endLine?: number;
   language: string;
   truncated: boolean;
+}
+
+function getWorkspaceRelativePath(uri: vscode.Uri): string {
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+  if (workspaceFolder) {
+    return vscode.workspace.asRelativePath(uri, false);
+  }
+  return uri.fsPath;
 }
 
 export function extractNotebookCellSelection(maxChars: number): AttachmentContext | null {
@@ -157,7 +168,7 @@ export function extractNotebookCellSelection(maxChars: number): AttachmentContex
   const filePath = `${notebookName}[cell ${cellIdx + 1}, lines ${startLine}-${endLine}]`;
   const language = textEditor.document.languageId;
 
-  return { content: finalContent, filePath, lineRange: `${startLine}-${endLine}`, language, truncated };
+  return { mode: 'inline', content: finalContent, filePath, lineRange: `${startLine}-${endLine}`, language, truncated };
 }
 
 export function extractEditorSelection(maxChars: number): AttachmentContext | null {
@@ -173,19 +184,48 @@ export function extractEditorSelection(maxChars: number): AttachmentContext | nu
 
   if (!content.trim()) return null;
 
-  const truncated = content.length > maxChars;
-  const finalContent = truncated ? content.slice(0, maxChars) + '\n\n... (truncated)' : content;
+  const isOversized = content.length > maxChars;
+  
+  let finalContent: string;
+  let mode: 'inline' | 'reference' = 'inline';
+  let startLine: number | undefined;
+  let endLine: number | undefined;
+  let filePath = document.uri.fsPath;
 
-  const filePath = document.uri.fsPath;
+  if (isOversized) {
+    mode = 'reference';
+    filePath = getWorkspaceRelativePath(document.uri);
+    startLine = range.start.line + 1;
+    endLine = range.end.line + 1;
+    
+    // Preview: first 5 lines or 200 chars
+    const previewLines = content.split('\n').slice(0, 5).join('\n');
+    finalContent = previewLines.length > 200 ? previewLines.slice(0, 200) + '...' : previewLines;
+  } else {
+    finalContent = content;
+  }
+
   const lineRange = isSelection
     ? `${selection.start.line + 1}-${selection.end.line + 1}`
     : null;
   const language = document.languageId;
 
-  return { content: finalContent, filePath, lineRange, language, truncated };
+  const result: AttachmentContext = { 
+    mode,
+    content: finalContent, 
+    filePath, 
+    lineRange, 
+    language, 
+    truncated: isOversized 
+  };
+  
+  if (startLine !== undefined) result.startLine = startLine;
+  if (endLine !== undefined) result.endLine = endLine;
+  
+  return result;
 }
 
-export async function extractWholeNotebook(uri: vscode.Uri, maxChars: number): Promise<AttachmentContext | null> {
+export async function extractWholeNotebook(uri: vscode.Uri, _maxChars: number): Promise<AttachmentContext | null> {
   const notebook = vscode.workspace.notebookDocuments.find(n => n.uri.toString() === uri.toString());
   if (!notebook) return null;
 
@@ -193,20 +233,16 @@ export async function extractWholeNotebook(uri: vscode.Uri, maxChars: number): P
   for (let i = 0; i < notebook.cellCount; i++) {
     const cell = notebook.cellAt(i);
     const lang = cell.document.languageId;
-    const content = cell.document.getText();
-    cells.push(`## Cell ${i + 1} (${lang})\n\`\`\`${lang}\n${content}\n\`\`\``);
+    cells.push(`- Cell ${i + 1} (${lang})`);
   }
 
-  const fullContent = cells.join('\n\n');
+  const fullContent = cells.join('\n');
   if (!fullContent.trim()) return null;
 
-  const truncated = fullContent.length > maxChars;
-  const finalContent = truncated ? fullContent.slice(0, maxChars) + '\n\n... (truncated)' : fullContent;
-
-  const filePath = uri.fsPath;
+  const filePath = getWorkspaceRelativePath(uri);
   const language = 'notebook';
 
-  return { content: finalContent, filePath, lineRange: null, language, truncated };
+  return { mode: 'reference', content: fullContent, filePath, lineRange: null, language, truncated: true };
 }
 
 export async function extractWholeFile(uri: vscode.Uri, maxChars: number): Promise<AttachmentContext | null> {
@@ -216,10 +252,26 @@ export async function extractWholeFile(uri: vscode.Uri, maxChars: number): Promi
 
     if (!content.trim()) return null;
 
-    const truncated = content.length > maxChars;
-    const finalContent = truncated ? content.slice(0, maxChars) + '\n\n... (truncated)' : content;
+    const isOversized = content.length > maxChars;
+    let finalContent: string;
+    let mode: 'inline' | 'reference' = 'inline';
+    let filePath = uri.fsPath;
+    let endLine: number | undefined;
 
-    const filePath = uri.fsPath;
+    if (isOversized) {
+      mode = 'reference';
+      filePath = getWorkspaceRelativePath(uri);
+      
+      const lines = content.split('\n');
+      endLine = lines.length;
+      
+      // Preview: first 5 lines or 200 chars
+      const previewLines = lines.slice(0, 5).join('\n');
+      finalContent = previewLines.length > 200 ? previewLines.slice(0, 200) + '...' : previewLines;
+    } else {
+      finalContent = content;
+    }
+
     const ext = filePath.split('.').pop() ?? '';
     const languageMap: Record<string, string> = {
       ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
@@ -233,13 +285,23 @@ export async function extractWholeFile(uri: vscode.Uri, maxChars: number): Promi
     };
     const language = languageMap[ext] || ext || 'text';
 
-    return { content: finalContent, filePath, lineRange: null, language, truncated };
+    const result: AttachmentContext = { 
+      mode,
+      content: finalContent, 
+      filePath, 
+      lineRange: null, 
+      language, 
+      truncated: isOversized 
+    };
+    
+    if (endLine !== undefined) {
+      result.startLine = 1;
+      result.endLine = endLine;
+    }
+    
+    return result;
   } catch {
     return null;
   }
 }
 
-export function formatAttachmentForPrompt(ctx: AttachmentContext): string {
-  const header = `📎 ${ctx.filePath}${ctx.lineRange ? `:${ctx.lineRange}` : ''} (${ctx.language})`;
-  return `${header}\n\`\`\`${ctx.language}\n${ctx.content}\n\`\`\``;
-}
