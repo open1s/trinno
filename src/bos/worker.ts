@@ -227,7 +227,7 @@ Type /help to see all commands.`;
   let agent = deps.brain.agent('trinno-chat')
     .with_systemPrompt(systemPrompt)
     .with_tools(...deps.tools)
-    .with_hooks(deps.toolPermissionHook)
+    .with_hooks(deps.toolPermissionHook, deps.afterToolHook)
     .with_temperature(0.7);
 
   if (model) agent = agent.with_model(model);
@@ -281,10 +281,10 @@ Type /help to see all commands.`;
             emit('token', { tokenType: 'Text', text: token.text });
             break;
           case 'ToolCall':
-            localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id });
+            emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id });
             break;
           case 'ToolResult':
-            localEmit('token', { 
+            emit('token', { 
               tokenType: 'ToolResult', 
               text: token.result || token.text || '', 
               toolId: token.id,
@@ -584,7 +584,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   let agent = deps.brain.agent('trinno-chat')
     .with_systemPrompt(systemPrompt)
     .with_tools(...deps.tools)
-    .with_hooks(deps.toolPermissionHook)
+    .with_hooks(deps.toolPermissionHook, deps.afterToolHook)
     .with_temperature(0.7);
 
   if (model) agent = agent.with_model(model);

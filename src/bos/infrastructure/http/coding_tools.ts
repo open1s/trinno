@@ -288,6 +288,28 @@ export function createCodingTools(workspaceRoot: string) {
       }
     });
 
+  const astEdit = defineTool(
+    'ast_edit',
+    'Rewrite code using AST patterns. Permanently modifies files in the workspace. Use for structural refactoring.',
+  )
+    .required('pattern', 'string', 'AST pattern to match')
+    .required('rewrite', 'string', 'Rewrite template')
+    .required('lang', 'string', 'Programming language')
+    .param('path', 'string', 'File or directory to edit (default: workspace root)')
+    .handle((args) => {
+      try {
+        const editPath = args.path ? path.resolve(workspaceRoot, args.path) : workspaceRoot;
+        if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
+          return err('Access denied: path is outside workspace');
+        }
+        const cmd = `sg rw --pattern "${args.pattern.replace(/"/g, '\\"')}" --rewrite "${args.rewrite.replace(/"/g, '\\"')}" --lang ${args.lang} "${editPath}"`;
+        const output = execSync(cmd, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        return ok({ result: output.trim() || 'Successfully applied rewrites' });
+      } catch (e: any) {
+        return err(e.message || 'ast-grep rewrite failed');
+      }
+    });
+
   const applyPatch = defineTool(
     'apply_patch',
     'Apply a unified diff patch to a file. Useful for applying complex multi-line changes with context.',
@@ -363,6 +385,7 @@ export function createCodingTools(workspaceRoot: string) {
     grepSearch,
     globFiles,
     astGrep,
+    astEdit,
     applyPatch,
     execTool,
   ];

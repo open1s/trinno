@@ -860,13 +860,25 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
 
         if (currentStreamingMsg) {
           const llmSummary = currentStreamingMsg.content.trim();
-          finalizeCurrentMessage();
+          currentStreamingMsg.status = 'complete';
+          currentStreamingMsg = null;
 
           currentSession.messages = [];
           currentSession.compactedSummary = llmSummary;
           currentSession.isCompacted = true;
           updateSessionTimestamp(currentSession);
           await saveSession(currentSession);
+
+          isGenerating = false;
+          currentStreamingId = null;
+
+          if (sessionStore) {
+            const metaIndex = sessionStore.sessions.findIndex(s => s.id === currentSession!.id);
+            if (metaIndex >= 0) {
+              sessionStore.sessions[metaIndex] = sessionToMetadata(currentSession);
+            }
+            saveSessionStore(sessionStore).catch(() => {});
+          }
 
           if (chatView) {
             chatView.webview.postMessage({ type: 'clearHistory' } as any);

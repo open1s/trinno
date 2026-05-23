@@ -38,7 +38,7 @@ export async function initApprovalBus(brain: any): Promise<void> {
 }
 
 export function createToolPermissionHook(permissions: ToolPermissionConfig) {
-  return defineHook(HookEvent.BeforeToolCall, async (ctx: any) => {
+  const beforeHook = defineHook(HookEvent.BeforeToolCall, async (ctx: any) => {
     const data = ctx.data || {};
     const toolName = data.tool_name || data.toolName || '';
     let perm = permissions[toolName];
@@ -50,6 +50,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       const rejectMsg = `Tool "${toolName}" is blocked by permission policy`;
       if (onEmit) {
         onEmit('error', { error: rejectMsg });
+        onEmit('token', { tokenType: 'ToolResult', text: rejectMsg, toolId: 'denied', status: 'error' });
       } else {
         process.stderr.write(`[tool-permission] ${rejectMsg}\n`);
       }
@@ -70,6 +71,10 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       const id = `approval_${++approvalCounter}`;
       const args = data.args || {};
 
+      if (onEmit) {
+        onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id });
+      }
+
       await approvalPublisher.json({ id, toolName, args, type: 'request' });
 
       const emit = onEmit || ((type: string, data: any) => {
@@ -89,8 +94,52 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       return approved ? HookDecision.Continue : HookDecision.Abort;
     }
 
+    const id = `auto_${++approvalCounter}`;
+    ctx.data.toolId = id;
+    if (onEmit) {
+      onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id });
+    }
+
     return HookDecision.Continue;
   });
+
+  const afterHook = defineHook(HookEvent.AfterToolCall, async (ctx: any) => {
+    const data = ctx.data || {};
+    const toolName = data.tool_name || data.toolName || '';
+    const toolId = data.tool_id || data.toolId || '';
+    const result = data.result;
+    const error = data.error;
+
+    let resultText = '';
+    let isError = false;
+
+    if (error) {
+      resultText = typeof error === 'string' ? error : JSON.stringify(error);
+      isError = true;
+    } else if (result !== undefined && result !== null) {
+      if (typeof result === 'object' && 'ok' in result) {
+        resultText = typeof result.ok === 'string' ? result.ok : JSON.stringify(result.ok);
+      } else if (typeof result === 'object' && 'err' in result) {
+        resultText = typeof result.err === 'string' ? result.err : JSON.stringify(result.err);
+        isError = true;
+      } else {
+        resultText = typeof result === 'string' ? result : JSON.stringify(result);
+      }
+    }
+
+    if (onEmit) {
+      onEmit('token', {
+        tokenType: 'ToolResult',
+        text: resultText,
+        toolId,
+        status: isError ? 'error' : 'completed',
+      });
+    }
+
+    return '';
+  });
+
+  return { beforeHook, afterHook };
 }
 
 export function wrapAllTools(tools: any[], _permissions: ToolPermissionConfig): any[] {

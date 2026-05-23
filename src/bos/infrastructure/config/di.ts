@@ -49,6 +49,7 @@ export interface TrizDeps {
   aiResearchOrchestrator: AIResearchOrchestrator;
   tools: any[];
   toolPermissionHook: any;
+  afterToolHook: any;
 }
 
 export async function composeRoot(options: {
@@ -124,14 +125,6 @@ export async function composeRoot(options: {
     locale,
   });
 
-  const aiResearchOrchestrator = new AIResearchOrchestrator(
-    brain,
-    searchService,
-    summarizer,
-    unifiedResearch,
-    locale,
-  );
-
   const trizTools = createTrizTools(
     analysisService,
     principleEngine,
@@ -147,9 +140,20 @@ export async function composeRoot(options: {
 
   const codingTools = createCodingTools(workspaceRoot);
 
+  const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
+
   const allTools = [...trizTools, ...codingTools];
   const tools = wrapAllTools(allTools, toolPermissions);
-  const toolPermissionHook = createToolPermissionHook(toolPermissions);
+
+  const aiResearchOrchestrator = new AIResearchOrchestrator(
+    brain,
+    searchService,
+    summarizer,
+    unifiedResearch,
+    tools,
+    [beforeHook, afterHook],
+    locale,
+  );
 
   return {
     brain,
@@ -173,6 +177,7 @@ export async function composeRoot(options: {
     unifiedResearch,
     aiResearchOrchestrator,
     tools,
-    toolPermissionHook,
+    toolPermissionHook: beforeHook,
+    afterToolHook: afterHook,
   };
 }
