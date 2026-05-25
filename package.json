@@ -266,7 +266,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "dependencies": {
-    "@open1s/ezbos": "^1.1.1",
+    "@open1s/ezbos": "^1.1.2",
     "@vscode/jupyter-extension": "^1.1.1",
     "i18next": "^26.2.0",
     "toml": "^4.1.1"

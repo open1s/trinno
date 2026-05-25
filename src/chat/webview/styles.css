@@ -541,7 +541,8 @@ body {
 
 .tool-approval-content {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
 }
 
@@ -560,9 +561,28 @@ body {
   margin-top: 4px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   font-size: 11px;
   opacity: 0.8;
+}
+
+.tool-approval-arg {
+  margin-top: 1px;
+}
+
+.tool-approval-code {
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border: 1px solid var(--vscode-widget-border, #454545);
+  border-radius: 3px;
+  padding: 6px 8px;
+  margin-top: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .tool-approval-buttons {
@@ -593,6 +613,98 @@ body {
 .tool-approval-btn.deny {
   background: var(--vscode-button-secondaryBackground, #5f6a79);
   color: var(--vscode-button-secondaryForeground, #fff);
+}
+
+.tool-approval-prompt.dangerous {
+  background: var(--vscode-inputValidation-errorBackground, #f8d7da);
+  border-left: 3px solid var(--vscode-errorForeground, #dc3545);
+}
+
+.tool-approval-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.tool-approval-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.tool-approval-category {
+  font-size: 10px;
+  padding: 1px 6px;
+  background: var(--vscode-badge-background, #007acc);
+  color: var(--vscode-badge-foreground, #fff);
+  border-radius: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.tool-approval-description {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #717171);
+  margin-bottom: 4px;
+}
+
+.tool-approval-call {
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border: 1px solid var(--vscode-widget-border, #454545);
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-x: auto;
+}
+
+.tool-approval-call code {
+  color: var(--vscode-errorForeground, #f85149);
+  background: none;
+  padding: 0;
+  border: none;
+}
+
+.tool-approval-intent {
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.tool-approval-intent.risk-high {
+  background: #f8d7da;
+  border: 1px solid #dc3545;
+  border-left: 4px solid #dc3545;
+}
+
+.tool-approval-intent.risk-medium {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-left: 4px solid #ffc107;
+}
+
+.tool-approval-intent.risk-low {
+  background: #d1e7dd;
+  border: 1px solid #198754;
+  border-left: 4px solid #198754;
+}
+
+.tool-approval-intent-action {
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+
+.tool-approval-intent-target {
+  font-size: 12px;
+  opacity: 0.8;
+  font-family: var(--vscode-editor-font-family, monospace);
+  word-break: break-all;
 }
 
 @keyframes spin {

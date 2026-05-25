@@ -393,13 +393,9 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
   );
 
   initializeAgent((servers) => {
-    console.log('[trinno-chat] MCP status callback:', JSON.stringify(servers));
     pendingMcpStatus = servers;
     if (chatView) {
-      console.log('[trinno-chat] Posting mcp-status to webview immediately');
       chatView.webview.postMessage({ type: 'mcp-status', servers } as any);
-    } else {
-      console.log('[trinno-chat] chatView not ready yet, pendingMcpStatus set');
     }
   }).catch(() => {});
 }
@@ -773,7 +769,6 @@ function handleRateLimitedRetry(): void {
 }
 
 async function handleUserMessage(text: string): Promise<void> {
-  console.log('[trinno-chat] handleUserMessage:', text.slice(0, 50));
   if (!chatView || !currentSession) {
     return;
   }
@@ -1012,9 +1007,9 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         } as ExtToWebViewMessage);
       }
     },
-    (id, toolName, args) => {
+    (id, toolName, args, metadata, bashIntent) => {
       if (chatView) {
-        chatView.webview.postMessage({ type: 'tool-approval-needed', id, toolName, args } as ExtToWebViewMessage);
+        chatView.webview.postMessage({ type: 'tool-approval-needed', id, toolName, args, metadata, bashIntent } as ExtToWebViewMessage);
       }
     },
     undefined,

@@ -1107,7 +1107,7 @@
         break;
 
       case 'tool-approval-needed':
-        showToolApproval(msg.id, msg.toolName, msg.args);
+        showToolApproval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
         break;
 
       case 'rate-limited':
@@ -1355,7 +1355,49 @@
     toolsSection.innerHTML = html;
   }
 
-  function showToolApproval(id, toolName, args) {
+  function truncate10(s) {
+    return s.length > 10 ? s.substring(0, 10) + '…' : s;
+  }
+
+  function formatToolCall(toolName, args) {
+    if (args === null || args === undefined) {
+      return `${toolName}()`;
+    }
+
+    if (typeof args === 'string') {
+      try {
+        const parsed = JSON.parse(args);
+        const firstVal = Object.values(parsed)[0];
+        const display = typeof firstVal === 'string' ? truncate10(firstVal) : JSON.stringify(parsed);
+        return `${toolName}(${display})`;
+      } catch {
+        return `${toolName}(${truncate10(args)})`;
+      }
+    }
+
+    if (typeof args !== 'object') {
+      return `${toolName}(${truncate10(String(args))})`;
+    }
+
+    const entries = Object.entries(args);
+    if (entries.length === 0) {
+      return `${toolName}()`;
+    }
+
+    const params = entries.map(([k, v]) => {
+      const strVal = typeof v === 'string' ? v : JSON.stringify(v);
+      if (k.startsWith('_') || k === 'toolName' || k === 'id' || k === 'name') return null;
+      return `${k}=${truncate10(strVal)}`;
+    }).filter(Boolean);
+
+    if (params.length === 0) {
+      return `${toolName}(${JSON.stringify(args)})`;
+    }
+
+    return `${toolName}(${params.join(', ')})`;
+  }
+
+  function showToolApproval(id, toolName, args, metadata, bashIntent) {
     pendingApproval = { id, toolName, args };
 
     if (!currentMessageEl) return;
@@ -1375,28 +1417,57 @@
     }
     renderToolBadges();
 
+    const isDangerous = metadata?.dangerous || bashIntent?.risk === 'high';
     const approvalEl = document.createElement('div');
-    approvalEl.className = 'tool-approval-prompt';
+    approvalEl.className = 'tool-approval-prompt' + (isDangerous ? ' dangerous' : '');
     approvalEl.id = `approval-${id}`;
 
+    const parsedArgs = typeof args === 'string' ? tryParseArgs(args) : args;
     let argsHtml = '';
-    if (args && typeof args === 'object') {
-      const entries = Object.entries(args).slice(0, 3);
+    if (parsedArgs && typeof parsedArgs === 'object') {
+      const entries = Object.entries(parsedArgs);
       if (entries.length > 0) {
-        argsHtml = `<div class="tool-approval-args">${entries.map(([k, v]) => {
-          const val = typeof v === 'string' ? v : JSON.stringify(v);
-          return `<span><strong>${escapeHtml(k)}:</strong> ${escapeHtml(val.length > 80 ? val.slice(0, 80) + '...' : val)}</span>`;
-        }).join('')}</div>`;
+        const parts = [];
+        for (const [k, v] of entries) {
+          const val = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+          const truncated = val.length > 10 ? val.substring(0, 10) + '…' : val;
+          parts.push(`<div class="tool-approval-arg"><strong>${escapeHtml(k)}:</strong> <span>${escapeHtml(truncated)}</span></div>`);
+        }
+        argsHtml = `<div class="tool-approval-args">${parts.join('')}</div>`;
       }
     }
 
+    const icon = isDangerous ? '⚠️' : '⚠';
+    const categoryLabel = metadata?.category ? `<span class="tool-approval-category">${escapeHtml(metadata.category)}</span>` : '';
+    const description = metadata?.description ? `<div class="tool-approval-description">${escapeHtml(metadata.description)}</div>` : '';
+
+    let intentHtml = '';
+    if (bashIntent) {
+      const riskClass = bashIntent.risk === 'high' ? 'risk-high' : bashIntent.risk === 'medium' ? 'risk-medium' : 'risk-low';
+      intentHtml = `
+        <div class="tool-approval-intent ${riskClass}">
+          <div class="tool-approval-intent-action">Will <strong>${escapeHtml(bashIntent.action)}</strong></div>
+          <div class="tool-approval-intent-target">${escapeHtml(bashIntent.target)}</div>
+        </div>
+      `;
+    }
+
+    const toolCallFormatted = formatToolCall(toolName, parsedArgs);
+
     approvalEl.innerHTML = `
       <div class="tool-approval-content">
-        <span class="tool-approval-icon">⚠</span>
-        <div class="tool-approval-text">
-          <strong>${escapeHtml(toolName)}</strong> wants to execute
-          ${argsHtml}
+        <div class="tool-approval-header">
+          <span class="tool-approval-icon">${icon}</span>
+          <div class="tool-approval-title">
+            <strong>${escapeHtml(toolName)}</strong> ${categoryLabel}
+          </div>
         </div>
+        <div class="tool-approval-call">
+          <code>${escapeHtml(toolCallFormatted)}</code>
+        </div>
+        ${description}
+        ${intentHtml}
+        ${argsHtml}
         <div class="tool-approval-buttons">
           <button class="tool-approval-btn allow" onclick="window.__approveTool('${id}')">Allow</button>
           <button class="tool-approval-btn deny" onclick="window.__denyTool('${id}')">Deny</button>
@@ -1428,7 +1499,7 @@ window.__denyTool = function(id) {
       tool.status = 'error';
       tool.result = 'Denied by user';
     }
-    updateToolSection();
+    renderToolBadges();
   }
 
   function showRateLimited(messageId, retryAfter) {
@@ -1628,6 +1699,10 @@ window.__denyTool = function(id) {
 
   function scrollToBottom() {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  function tryParseArgs(s) {
+    try { return JSON.parse(s); } catch { return {}; }
   }
 
   function escapeHtml(str) {

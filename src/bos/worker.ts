@@ -180,7 +180,6 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 }
 
 async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[]): Promise<void> {
-  console.error('[bos-worker] handleChat START');
   abortController = new AbortController();
   const signal = abortController.signal;
 
@@ -223,7 +222,7 @@ Type /help to see all commands.`;
     servers: (effectiveMcp || []).map((s: any) => ({ name: s.name, type: s.type, connected: true })),
   });
 
-  console.error('[bos-worker] Creating fresh agent (sessionId:', sessionId, ')');
+  console.info('[bos-worker] Creating fresh agent (sessionId:', sessionId, ')');
   let agent = deps.brain.agent('trinno-chat')
     .with_systemPrompt(systemPrompt)
     .with_tools(...deps.tools)
@@ -370,7 +369,6 @@ function emitMcpStatus(): void {
     const servers = (config?.mcp?.servers || []).map((s: any) => ({ name: s.name, type: s.type, connected: true }));
     emit('mcp-status', { servers });
   } catch (e) {
-    console.error('[bos-worker] Failed to emit MCP status:', e);
     emit('mcp-status', { servers: [] });
   }
 }
@@ -484,9 +482,13 @@ ${conversationText}
   }
 }
 
+let stdinBuffer = '';
 process.stdin.on('data', async (chunk: Buffer) => {
-  const lines = chunk.toString().split('\n').filter(line => line.trim());
+  stdinBuffer += chunk.toString();
+  const lines = stdinBuffer.split('\n');
+  stdinBuffer = lines.pop() || '';
   for (const line of lines) {
+    if (!line.trim()) continue;
     try {
       const msg = JSON.parse(line);
       switch (msg.type) {

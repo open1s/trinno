@@ -13,7 +13,7 @@ interface InsertedCell {
 type TokenCallback = (msg: ExtToWebViewMessage) => void;
  
 type DoneCallback = (data?: any) => void;
-type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>) => void;
+type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
 type McpStatusCallback = (servers: { name: string; type: string; connected: boolean }[]) => void;
 type RateLimitedCallback = (retryAfter: number, error: string) => void;
 
@@ -67,13 +67,16 @@ async function ensureWorker(): Promise<void> {
   });
 
   if (workerProcess && !workerMessageHandler) {
+    let messageBuffer = '';
     workerMessageHandler = (chunk: Buffer) => {
-      const lines = chunk.toString().split('\n').filter(Boolean);
+      messageBuffer += chunk.toString();
+      const lines = messageBuffer.split('\n');
+      messageBuffer = lines.pop() || '';
       for (const line of lines) {
+        if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line);
           if (msg.type === 'mcp-status' && mcpStatusCallback) {
-            console.log('[trinno-chat] Received mcp-status from worker:', JSON.stringify(msg.servers));
             mcpStatusCallback(msg.servers || []);
           }
         } catch { /* ignore non-JSON */ }
@@ -101,11 +104,9 @@ export async function sendMessage(
   skillContent?: string,
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
 ): Promise<void> {
-  console.log('[trinno-chat] sendMessage called:', text.slice(0, 50));
   currentCallbacks = { token: onToken, done: onDone, approval: onApproval };
 
   await ensureWorker();
-  console.log('[trinno-chat] worker ready:', workerReady);
 
   if (!workerProcess || !workerReady) {
     console.log('[trinno-chat] worker not available');
@@ -142,11 +143,13 @@ export async function sendMessage(
     mcp: config.mcp,
   };
 
-  console.log('[trinno-chat] payload toolPermissions:', JSON.stringify(payload.toolPermissions).slice(0, 200));
-
+  let dataBuffer = '';
   const handleData = (chunk: Buffer) => {
-    const lines = chunk.toString().split('\n').filter(Boolean);
+    dataBuffer += chunk.toString();
+    const lines = dataBuffer.split('\n');
+    dataBuffer = lines.pop() || '';
     for (const line of lines) {
+      if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
         switch (msg.type) {
@@ -176,7 +179,7 @@ export async function sendMessage(
             break;
           case 'tool-approval-needed':
             if (currentCallbacks?.approval) {
-              currentCallbacks.approval(msg.id, msg.toolName, msg.args);
+              currentCallbacks.approval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
             }
             break;
         }
@@ -263,7 +266,6 @@ export async function sendCompactRequest(
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
 
   await ensureWorker();
-  console.log('[trinno-chat] worker ready for compact:', workerReady);
 
   if (!workerProcess || !workerReady) {
     console.log('[trinno-chat] worker not available for compact');
@@ -292,9 +294,13 @@ export async function sendCompactRequest(
     baseUrl: effectiveBaseUrl,
   };
 
+  let compactBuffer = '';
   const handleData = (chunk: Buffer) => {
-    const lines = chunk.toString().split('\n').filter(Boolean);
+    compactBuffer += chunk.toString();
+    const lines = compactBuffer.split('\n');
+    compactBuffer = lines.pop() || '';
     for (const line of lines) {
+      if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
         switch (msg.type) {

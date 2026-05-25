@@ -1,5 +1,5 @@
 import { defineHook, HookEvent, HookDecision } from '@open1s/ezbos';
-import { ToolPermissionConfig } from './toolPermissions.js';
+import { ToolPermissionConfig, getToolMetadata, getBashIntent } from './toolPermissions.js';
 
 let approvalCounter = 0;
 let approvalPublisher: any = null;
@@ -37,6 +37,10 @@ export async function initApprovalBus(brain: any): Promise<void> {
   busInitialized = true;
 }
 
+function tryParseJson(s: string): Record<string, unknown> {
+  try { return JSON.parse(s); } catch { return {}; }
+}
+
 export function createToolPermissionHook(permissions: ToolPermissionConfig) {
   const beforeHook = defineHook(HookEvent.BeforeToolCall, async (ctx: any) => {
     const data = ctx.data || {};
@@ -69,18 +73,22 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       }
 
       const id = `approval_${++approvalCounter}`;
-      const args = data.args || {};
+      
+      const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
+      const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;
+      const metadata = getToolMetadata(toolName);
+      const bashIntent = toolName === 'bash' ? getBashIntent(args) : null;
 
       if (onEmit) {
         onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id });
       }
 
-      await approvalPublisher.json({ id, toolName, args, type: 'request' });
+      await approvalPublisher.json({ id, toolName, args, metadata, bashIntent, type: 'request' });
 
       const emit = onEmit || ((type: string, data: any) => {
         process.stdout.write(JSON.stringify({ type, ...data }) + '\n');
       });
-      emit('tool-approval-needed', { id, toolName, args });
+      emit('tool-approval-needed', { id, toolName, args, metadata, bashIntent });
 
       const approved = await new Promise<boolean>((resolve) => {
         const timeout = setTimeout(() => {

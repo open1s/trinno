@@ -48,7 +48,7 @@ export type ExtToWebViewMessage =
   | { type: 'insert-to-input'; attachment: { mode: 'inline' | 'reference'; filePath: string; lineRange: string | null; startLine?: number; endLine?: number; language: string; content: string } }
   | { type: 'agents-loaded'; agents: { name: string; description: string }[] }
   | { type: 'models-loaded'; models: { name: string; description?: string }[] }
-  | { type: 'tool-approval-needed'; id: string; toolName: string; args: Record<string, unknown> };
+  | { type: 'tool-approval-needed'; id: string; toolName: string; args: Record<string, unknown>; metadata?: { description: string; dangerous: boolean; category: string }; bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' } };
 
 export interface SessionInfo {
   id: string;
