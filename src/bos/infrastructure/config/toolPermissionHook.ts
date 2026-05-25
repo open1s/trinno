@@ -51,7 +51,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
     }
 
     if (perm === 'deny') {
-      const rejectMsg = `Tool "${toolName}" is blocked by permission policy`;
+      const rejectMsg = `PERMISSION_DENIED: Tool "${toolName}" is blocked by permission policy`;
       if (onEmit) {
         onEmit('error', { error: rejectMsg });
         onEmit('token', { tokenType: 'ToolResult', text: rejectMsg, toolId: 'denied', status: 'error' });

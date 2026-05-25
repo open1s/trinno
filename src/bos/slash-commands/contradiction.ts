@@ -1,5 +1,6 @@
 import { SlashCommand } from './registry.js';
 import { TrizDeps } from '../infrastructure/config/di.js';
+import { initAgentFactory, getAgentFactory } from '../infrastructure/agent-factory.js';
 
 function resolveParameter(deps: TrizDeps, input: string): number | null {
   const num = parseInt(input, 10);
@@ -115,9 +116,12 @@ export const contradictionCommand: SlashCommand = {
 
     emit('token', { tokenType: 'Text', text: `## Contradiction Analysis: ${topic}\n\n_Analyzing key technical contradictions..._\n\n---\n\n` });
 
-    try {
-      const agent = deps.brain.agent('triz-contradiction')
-        .with_systemPrompt(`You are a TRIZ expert. Identify 2-3 key technical contradictions for the given topic. For each, state the improving parameter vs worsening parameter, then look up the TRIZ contradiction matrix and list recommended inventive principles.
+try {
+        initAgentFactory(deps.brain, { defaultTools: deps.tools });
+        const factory = getAgentFactory();
+        const agent = factory.create({
+          name: 'triz-contradiction',
+          systemPrompt: `You are a TRIZ expert. Identify 2-3 key technical contradictions for the given topic. For each, state the improving parameter vs worsening parameter, then look up the TRIZ contradiction matrix and list recommended inventive principles.
 
 Format:
 ### Contradiction: [improving] vs [worsening]
@@ -125,11 +129,11 @@ Format:
 - **Worsening:** [parameter name]
 - **Principles:** #N [name], #N [name]...
 
-Be concise.`)
-        .with_tools(...deps.tools)
-        .with_temperature(0.3);
+Be concise.`,
+          temperature: 0.3,
+        });
 
-      const started = await agent.start();
+        const started = await agent.start();
       await new Promise<void>((resolve) => {
         started.stream(`Identify key technical contradictions for: ${topic}`, (token: any) => {
           if (signal.aborted) {

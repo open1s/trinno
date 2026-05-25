@@ -1,4 +1,5 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
+import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { streamAgent } from '../ai/streaming.js';
 import { CurvePoint, CurveParameters } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
@@ -30,8 +31,12 @@ export class AiSCurveEstimator {
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
 
-    const builder = this.brain.agent('triz-scurve-estimator')
-      .with_systemPrompt(`${langPrefix}You are a TRIZ S-Curve analysis expert. You estimate S-curve parameters for technologies based on domain knowledge.
+    initAgentFactory(this.brain);
+
+    const factory = getAgentFactory();
+    const builder = factory.create({
+      name: 'triz-scurve-estimator',
+      systemPrompt: `${langPrefix}You are a TRIZ S-Curve analysis expert. You estimate S-curve parameters for technologies based on domain knowledge.
 
 Given a technology name and optional performance metric, estimate:
 1. L (carrying capacity / max performance)
@@ -40,8 +45,9 @@ Given a technology name and optional performance metric, estimate:
 4. Current S-curve stage (infancy, growth, maturity, decline)
 5. S2 offset (years until next-gen technology inflection)
 
-Return ONLY a JSON object with these fields. No explanation.`)
-      .with_temperature(0.3);
+Return ONLY a JSON object with these fields. No explanation.`,
+      temperature: 0.3,
+    });
 
     this.agent = await builder.start();
   }

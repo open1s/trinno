@@ -1638,10 +1638,6 @@ window.__denyTool = function(id) {
     }
     renderToolBadges();
 
-    sendBtn.disabled = true;
-    sendBtn.textContent = `Retrying (${autoRetryCountdown}s)`;
-    sendBtn.classList.add('stop-btn');
-
     const doRetry = () => {
       if (autoRetryTimer) {
         clearInterval(autoRetryTimer);
@@ -1657,10 +1653,7 @@ window.__denyTool = function(id) {
       }
     };
 
-    const createRetryBtn = (btn) => {
-      btn.className = 'retry-btn';
-      btn.textContent = `Retry (${autoRetryCountdown}s)`;
-      btn.onclick = doRetry;
+    const startCountdown = () => {
       autoRetryTimer = setInterval(() => {
         autoRetryCountdown--;
         if (autoRetryCountdown <= 0) {
@@ -1668,14 +1661,17 @@ window.__denyTool = function(id) {
           autoRetryTimer = null;
           doRetry();
         } else {
-          btn.textContent = `Retry (${autoRetryCountdown}s)`;
-          sendBtn.textContent = `Retrying (${autoRetryCountdown}s)`;
+          const retryBtn = document.getElementById(`retry-btn-${messageId}`);
+          if (retryBtn) retryBtn.textContent = `Retry(${autoRetryCountdown}s)`;
         }
       }, 1000);
     };
 
     if (errorText && (errorText.includes('Hook abort') || errorText.includes('PERMISSION_DENIED') || errorText.includes('blocked by permission policy'))) {
       // Do not show retry button for denied tool calls
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('stop-btn');
       if (currentContentEl) {
         const errorEl = document.createElement('div');
         errorEl.className = 'error-inline';
@@ -1689,7 +1685,41 @@ window.__denyTool = function(id) {
       }
       return;
     }
-    // Don't call finalizeMessage() - keep UI in retry state
+
+    // Show retry button in message content area
+    const retryContainer = document.createElement('div');
+    retryContainer.className = 'retry-container';
+    retryContainer.innerHTML = `<button id="retry-btn-${messageId}" class="retry-btn-inline">Retry(${autoRetryCountdown}s)</button>`;
+    
+    if (currentContentEl) {
+      currentContentEl.appendChild(retryContainer);
+    } else {
+      const msgEl = document.getElementById(messageId);
+      if (msgEl) {
+        const contentDiv = msgEl.querySelector('.message-content');
+        if (contentDiv) contentDiv.appendChild(retryContainer);
+      }
+    }
+
+    // Add click handler to stop retry
+    setTimeout(() => {
+      const retryBtn = document.getElementById(`retry-btn-${messageId}`);
+      if (retryBtn) {
+        retryBtn.onclick = () => {
+          if (autoRetryTimer) {
+            clearInterval(autoRetryTimer);
+            autoRetryTimer = null;
+          }
+          isRetrying = false;
+          retryBtn.textContent = 'Retry';
+          retryBtn.onclick = doRetry;
+        };
+      }
+    }, 0);
+
+    sendBtn.disabled = true;
+    sendBtn.classList.add('stop-btn');
+    startCountdown();
   }
 
   function clearWelcome() {

@@ -20,6 +20,7 @@
 
 import { composeRoot } from './infrastructure/config/di.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
+import { getAgentFactory, initAgentFactory } from './infrastructure/agent-factory.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
 import {
   researchCommand,
@@ -189,6 +190,10 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
+    initAgentFactory(deps.brain, {
+      defaultTools: deps.tools,
+      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
+    });
   }
 
   const basePrompt = persona?.prompt || `You are a TRIZ research expert integrated into a Jupyter notebook environment. You help researchers analyze technical problems using TRIZ methodology, search for prior art (patents, papers, technical solutions), and generate academic writing. You have access to the notebook context and can insert new cells autonomously. Be concise, evidence-based, and focus on actionable insights.
@@ -201,9 +206,6 @@ Type /help to see all commands.`;
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
-
-  const agentsDir = path.join(os.homedir(), '.agents', 'skills');
-  const bosDir = path.join(os.homedir(), '.bos', 'skills');
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
@@ -223,31 +225,29 @@ Type /help to see all commands.`;
   });
 
   console.info('[bos-worker] Creating fresh agent (sessionId:', sessionId, ')');
-  let agent = deps.brain.agent('trinno-chat')
-    .with_systemPrompt(systemPrompt)
-    .with_tools(...deps.tools)
-    .with_hooks(deps.toolPermissionHook, deps.afterToolHook)
-    .with_temperature(0.7);
-
-  if (model) agent = agent.with_model(model);
-  if (baseUrl) agent = agent.with_baseUrl(baseUrl);
-
-  if (fs.existsSync(agentsDir)) agent = agent.with_skills_dir(agentsDir);
-  if (fs.existsSync(bosDir)) agent = agent.with_skills_dir(bosDir);
-
-  if (effectiveMcp) {
-    for (const server of effectiveMcp) {
-      if (server.type === 'stdio' && server.command) {
-        agent = agent.with_mcp_process(server.name, server.command, server.args || []);
-      } else if (server.type === 'http' && server.url) {
-        agent = agent.with_mcp_http(server.name, server.url);
-      }
-    }
-  }
+  const f = getAgentFactory();
+  const agent = f.create({
+    name: 'trinno-chat',
+    systemPrompt,
+    model,
+    baseUrl,
+    mcpServers: effectiveMcp,
+  });
 
   const started = await agent.start();
 
-  if (sessionId && brainOsSession) {
+  if (sessionId) {
+    // Check if the factory has a more recent session for this sessionId
+    const factorySession = getAgentFactory().getSessionContext(sessionId);
+    const sessionToImport = factorySession?.brainOsSession || brainOsSession;
+    if (sessionToImport) {
+      try {
+        started.importSession(sessionToImport);
+      } catch {
+        // ignore import errors, start fresh
+      }
+    }
+  } else if (brainOsSession) {
     try {
       started.importSession(brainOsSession);
     } catch {
@@ -295,6 +295,13 @@ Type /help to see all commands.`;
             if (sessionId) {
               try {
                 exportedSession = started.exportSession();
+                if (exportedSession) {
+                  const prevCtx = getAgentFactory().getSessionContext(sessionId);
+                  getAgentFactory().setSessionContext(sessionId, {
+                    brainOsSession: exportedSession,
+                    lastUpdated: Date.now(),
+                  });
+                }
               } catch {
                 // ignore export errors
               }
@@ -404,6 +411,10 @@ async function handleCompact(
     if (apiKey) brainOptions.apiKey = apiKey;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
+    initAgentFactory(deps.brain, {
+      defaultTools: deps.tools,
+      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
+    });
   }
 
   const conversationText = messages.map(m => {
@@ -444,12 +455,14 @@ ${conversationText}
     ? `${basePrompt}\n\n## Prior Conversation Summary\n\n${systemSummary}`
     : basePrompt;
 
-  let agent = deps.brain.agent('trinno-compact')
-    .with_systemPrompt(systemPrompt)
-    .with_temperature(0.3);
-
-  if (model) agent = agent.with_model(model);
-  if (baseUrl) agent = agent.with_baseUrl(baseUrl);
+  const f = getAgentFactory();
+  const agent = f.create({
+    name: 'trinno-compact',
+    systemPrompt,
+    temperature: 0.3,
+    model,
+    baseUrl,
+  });
 
   const started = await agent.start();
 
@@ -556,15 +569,16 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
+    initAgentFactory(deps.brain, {
+      defaultTools: deps.tools,
+      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
+    });
   }
 
   const basePrompt = persona?.prompt || `You are a TRIZ research expert.`;
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
-
-  const agentsDir = path.join(os.homedir(), '.agents', 'skills');
-  const bosDir = path.join(os.homedir(), '.bos', 'skills');
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
@@ -583,31 +597,29 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     servers: (effectiveMcp || []).map((s: any) => ({ name: s.name, type: s.type, connected: true })),
   });
 
-  let agent = deps.brain.agent('trinno-chat')
-    .with_systemPrompt(systemPrompt)
-    .with_tools(...deps.tools)
-    .with_hooks(deps.toolPermissionHook, deps.afterToolHook)
-    .with_temperature(0.7);
-
-  if (model) agent = agent.with_model(model);
-  if (baseUrl) agent = agent.with_baseUrl(baseUrl);
-
-  if (fs.existsSync(agentsDir)) agent = agent.with_skills_dir(agentsDir);
-  if (fs.existsSync(bosDir)) agent = agent.with_skills_dir(bosDir);
-
-  if (effectiveMcp) {
-    for (const server of effectiveMcp) {
-      if (server.type === 'stdio' && server.command) {
-        agent = agent.with_mcp_process(server.name, server.command, server.args || []);
-      } else if (server.type === 'http' && server.url) {
-        agent = agent.with_mcp_http(server.name, server.url);
-      }
-    }
-  }
+  const f = getAgentFactory();
+  const agent = f.create({
+    name: 'trinno-chat',
+    systemPrompt,
+    model,
+    baseUrl,
+    mcpServers: effectiveMcp,
+  });
 
   const started = await agent.start();
 
-  if (sessionId && brainOsSession) {
+  if (sessionId) {
+    // Check if the factory has a more recent session for this sessionId
+    const factorySession = getAgentFactory().getSessionContext(sessionId);
+    const sessionToImport = factorySession?.brainOsSession || brainOsSession;
+    if (sessionToImport) {
+      try {
+        started.importSession(sessionToImport);
+      } catch {
+        // ignore import errors, start fresh
+      }
+    }
+  } else if (brainOsSession) {
     try {
       started.importSession(brainOsSession);
     } catch {
@@ -655,6 +667,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             if (sessionId) {
               try {
                 exportedSession2 = started.exportSession();
+                if (exportedSession2) {
+                  const prevCtx2 = getAgentFactory().getSessionContext(sessionId);
+                  getAgentFactory().setSessionContext(sessionId, {
+                    brainOsSession: exportedSession2,
+                    lastUpdated: Date.now(),
+                  });
+                }
               } catch {
                 // ignore export errors
               }

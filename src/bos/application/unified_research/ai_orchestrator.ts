@@ -2,6 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Agent, BrainOS } from '@open1s/ezbos';
+import { getAgentFactory, initAgentFactory } from '../../infrastructure/agent-factory.js';
 import { SearchResult } from '../../domain/solution/search_port.js';
 import { CachedSearchService } from '../../infrastructure/search/cached_search.js';
 import { AISummarizer, SummarizationResult } from '../../infrastructure/search/ai_summarizer.js';
@@ -73,12 +74,20 @@ export class AIResearchOrchestrator {
     this.locale = locale || DEFAULT_LOCALE;
   }
 
-  async initialize(): Promise<void> {
+async initialize(): Promise<void> {
     const langPrefix = this.locale.language === 'zh'
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。包括内部推理过程、分析、总结都用中文。\n\n'
       : '';
-    let builder = this.brain.agent('triz-research-orchestrator')
-      .with_systemPrompt(`${langPrefix}You are a TRIZ research expert. You analyze problems, search for prior art, summarize findings, and generate comprehensive research reports.
+
+    initAgentFactory(this.brain, {
+      defaultTools: this.tools,
+      defaultHooks: this.hooks,
+    });
+
+    const factory = getAgentFactory();
+    let builder = factory.create({
+      name: 'triz-research-orchestrator',
+      systemPrompt: `${langPrefix}You are a TRIZ research expert. You analyze problems, search for prior art, summarize findings, and generate comprehensive research reports.
 
 Your workflow:
 1. Analyze the problem description
@@ -94,80 +103,66 @@ Your workflow:
 You have access to specialized SKILLs through the skill tool. Call a relevant skill to enhance your analysis if it matches the problem domain.
 You also have access to coding and research tools — use them to search, read files, execute commands, and analyze code.
 
-Return ONLY a JSON object with the report structure. No markdown, no explanation.`)
-      .with_temperature(0.3);
-
-    if (this.tools && this.tools.length > 0) {
-      builder = builder.with_tools(...this.tools);
-    }
-    if (this.hooks && this.hooks.length > 0) {
-      builder = builder.with_hooks(...this.hooks);
-    }
-
-    // Support calling relevant SKILLs for enhancement
-    const agentsDir = path.join(os.homedir(), '.agents', 'skills');
-    const bosDir = path.join(os.homedir(), '.bos', 'skills');
-    if (fs.existsSync(agentsDir)) builder = builder.with_skills_dir(agentsDir);
-    if (fs.existsSync(bosDir)) builder = builder.with_skills_dir(bosDir);
-
-    // Register research-specific tools
-    builder = builder.with_tools(
-      {
-        name: 'search_prior_art',
-        description: 'Search for patents, papers, and technical solutions across English and Chinese databases.',
-        parameters: {
-          type: 'object',
-          properties: {
-            patentQueryEn: { type: 'string' },
-            patentQueryZh: { type: 'string' },
-            paperQueryEn: { type: 'string' },
-            paperQueryZh: { type: 'string' },
-            techQueryEn: { type: 'string' },
-            techQueryZh: { type: 'string' },
+Return ONLY a JSON object with the report structure. No markdown, no explanation.`,
+      temperature: 0.3,
+      extraTools: [
+        {
+          name: 'search_prior_art',
+          description: 'Search for patents, papers, and technical solutions across English and Chinese databases.',
+          parameters: {
+            type: 'object',
+            properties: {
+              patentQueryEn: { type: 'string' },
+              patentQueryZh: { type: 'string' },
+              paperQueryEn: { type: 'string' },
+              paperQueryZh: { type: 'string' },
+              techQueryEn: { type: 'string' },
+              techQueryZh: { type: 'string' },
+            },
+            required: ['patentQueryEn'],
           },
-          required: ['patentQueryEn'],
-        },
-        execute: async (args: any) => {
-          const { patentQueryEn, patentQueryZh, paperQueryEn, paperQueryZh, techQueryEn, techQueryZh } = args;
-          const halfResults = 5; // Default
-          const [pEn, paEn, tEn] = await this.searchWithTracking(
-            { patentQuery: patentQueryEn, paperQuery: paperQueryEn, techQuery: techQueryEn },
-            halfResults,
-          );
-          let pZh: SearchResult[] = [], paZh: SearchResult[] = [], tZh: SearchResult[] = [];
-          if (patentQueryZh || paperQueryZh || techQueryZh) {
-            const zh = await this.searchWithTracking(
-              { patentQuery: patentQueryZh, paperQuery: paperQueryZh, techQuery: techQueryZh },
+          execute: async (args: any) => {
+            const { patentQueryEn, patentQueryZh, paperQueryEn, paperQueryZh, techQueryEn, techQueryZh } = args;
+            const halfResults = 5;
+            const [pEn, paEn, tEn] = await this.searchWithTracking(
+              { patentQuery: patentQueryEn, paperQuery: paperQueryEn, techQuery: techQueryEn },
               halfResults,
             );
-            [pZh, paZh, tZh] = zh;
-          }
-          return JSON.stringify({
-            patents: this.mergeResults(pEn, pZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
-            papers: this.mergeResults(paEn, paZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
-            techSolutions: this.mergeResults(tEn, tZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
-          });
-        },
-      },
-      {
-        name: 'summarize_result',
-        description: 'Summarize a specific search result in context of the problem.',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            snippet: { type: 'string' },
-            problemDescription: { type: 'string' },
+            let pZh: SearchResult[] = [], paZh: SearchResult[] = [], tZh: SearchResult[] = [];
+            if (patentQueryZh || paperQueryZh || techQueryZh) {
+              const zh = await this.searchWithTracking(
+                { patentQuery: patentQueryZh, paperQuery: paperQueryZh, techQuery: techQueryZh },
+                halfResults,
+              );
+              [pZh, paZh, tZh] = zh;
+            }
+            return JSON.stringify({
+              patents: this.mergeResults(pEn, pZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
+              papers: this.mergeResults(paEn, paZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
+              techSolutions: this.mergeResults(tEn, tZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
+            });
           },
-          required: ['title', 'snippet', 'problemDescription'],
         },
-        execute: async (args: any) => {
-          const { title, snippet, problemDescription } = args;
-          const res = await this.summarizer.summarizeSnippet(title, snippet, problemDescription);
-          return JSON.stringify(res);
+        {
+          name: 'summarize_result',
+          description: 'Summarize a specific search result in context of the problem.',
+          parameters: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              snippet: { type: 'string' },
+              problemDescription: { type: 'string' },
+            },
+            required: ['title', 'snippet', 'problemDescription'],
+          },
+          execute: async (args: any) => {
+            const { title, snippet, problemDescription } = args;
+            const res = await this.summarizer.summarizeSnippet(title, snippet, problemDescription);
+            return JSON.stringify(res);
+          },
         },
-      },
-    );
+      ],
+    });
 
     this.agent = await builder.start();
   }

@@ -1,4 +1,5 @@
 import { Agent, AgentBuilder, BrainOS } from '@open1s/ezbos';
+import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { streamAgent } from './streaming.js';
 import { InventivePrinciple } from '../../domain/principle/entity.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
@@ -54,9 +55,14 @@ export class AiTrizAgent {
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
 
-    const builder = this.brain.agent(this.agentName)
-      .with_systemPrompt(`${langPrefix}${TRIZ_SYSTEM_PROMPT}`)
-      .with_temperature(0.7);
+    initAgentFactory(this.brain);
+
+    const factory = getAgentFactory();
+    const builder = factory.create({
+      name: this.agentName,
+      systemPrompt: `${langPrefix}${TRIZ_SYSTEM_PROMPT}`,
+      temperature: 0.7,
+    });
 
     this.agent = await builder.start();
   }

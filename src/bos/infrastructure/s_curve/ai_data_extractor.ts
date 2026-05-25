@@ -1,4 +1,5 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
+import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { streamAgent } from '../ai/streaming.js';
 import { CachedSearchService } from '../search/cached_search.js';
 import { SearchResult } from '../../domain/solution/search_port.js';
@@ -32,7 +33,7 @@ export class AiSCurveDataExtractor {
     this.locale = locale || DEFAULT_LOCALE;
   }
 
-  async initialize(): Promise<void> {
+async initialize(): Promise<void> {
     if (!this.brain) {
       this.brain = new BrainOS();
       await this.brain.start();
@@ -42,10 +43,14 @@ export class AiSCurveDataExtractor {
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
 
-    const builder = this.brain.agent('triz-scurve-data-extractor')
-      .with_systemPrompt(`${langPrefix}You are a TRIZ S-Curve data extraction expert. Your task is to provide historical performance data and KEY REAL-WORLD MILESTONES that cover the FULL technology lifecycle.
+    initAgentFactory(this.brain);
 
-Given a technology name and performance metric, provide realistic historical data points and MILESTONES that span from the technology's INCEPTION to the PRESENT DAY.
+    const factory = getAgentFactory();
+    const builder = factory.create({
+      name: 'triz-scurve-data-extractor',
+      systemPrompt: `${langPrefix}You are a TRIZ S-Curve data extraction expert. Your task is to provide historical performance data and KEY REAL-WORLD MILESTONES that cover the FULL technology lifecycle.
+
+Given a technology name and performance metric, provide realistic historical data points and MILESTONES that span from the technology's INVENTION to the PRESENT DAY.
 
 CRITICAL REQUIREMENTS FOR DATA POINTS:
 - 8-12 data points covering ALL S-curve stages: INFANCY → GROWTH → MATURITY → DECLINE
@@ -75,8 +80,9 @@ Return ONLY a JSON object with:
   }
 }
 
-Provide 8-12 data points and 4-8 key milestones spanning the FULL lifecycle from invention to present. Be realistic with numbers. The data should show a clear S-shaped curve pattern.`)
-      .with_temperature(0.1);
+Provide 8-12 data points and 4-8 key milestones spanning the FULL lifecycle from invention to present. Be realistic with numbers. The data should show a clear S-shaped curve pattern.`,
+      temperature: 0.1,
+    });
 
     this.agent = await builder.start();
   }

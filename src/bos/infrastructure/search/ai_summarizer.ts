@@ -1,4 +1,5 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
+import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { streamAgent } from '../ai/streaming.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
 
@@ -35,8 +36,12 @@ export class AISummarizer {
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
 
-    const builder = this.brain.agent('triz-summarizer')
-      .with_systemPrompt(`${langPrefix}You are a technical research summarizer specializing in TRIZ and engineering solutions.
+    initAgentFactory(this.brain);
+
+    const factory = getAgentFactory();
+    const builder = factory.create({
+      name: 'triz-summarizer',
+      systemPrompt: `${langPrefix}You are a technical research summarizer specializing in TRIZ and engineering solutions.
 
 For each document (patent, paper, or technical article), provide:
 1. A concise summary (2-3 sentences)
@@ -44,8 +49,9 @@ For each document (patent, paper, or technical article), provide:
 3. How it relates to the user's problem
 4. Which TRIZ inventive principles it demonstrates (if any)
 
-Be precise, technical, and actionable.`)
-      .with_temperature(0.3);
+Be precise, technical, and actionable.`,
+      temperature: 0.3,
+    });
 
     this.agent = await builder.start();
   }

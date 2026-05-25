@@ -1,4 +1,5 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
+import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { streamAgent } from '../ai/streaming.js';
 import {
   TRLAssessment,
@@ -57,8 +58,12 @@ export class TRLAssessor {
       .map((c: any) => `TRL ${c.level}: ${c.title} - Keywords: ${c.keywords.slice(0, 4).join(', ')}`)
       .join('\n');
 
-    const builder = this.brain.agent('triz-trl-assessor')
-      .with_systemPrompt(`${langPrefix}You are a Technology Readiness Level (TRL) assessment expert using the NASA/DoD 1-9 scale.
+    initAgentFactory(this.brain);
+
+    const factory = getAgentFactory();
+    const builder = factory.create({
+      name: 'triz-trl-assessor',
+      systemPrompt: `${langPrefix}You are a Technology Readiness Level (TRL) assessment expert using the NASA/DoD 1-9 scale.
 
 TRL Scale:
 ${criteriaSummary}
@@ -77,8 +82,9 @@ When user provides their own TRL assessment:
 - Adjust confidence based on user's domain knowledge
 - If user TRL differs from your assessment, note the discrepancy
 
-Return ONLY valid JSON. No markdown, no explanation outside JSON.`)
-      .with_temperature(0.2);
+Return ONLY valid JSON. No markdown, no explanation outside JSON.`,
+      temperature: 0.2,
+    });
 
     this.agent = await builder.start();
   }
