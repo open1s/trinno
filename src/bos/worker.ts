@@ -61,6 +61,7 @@ slashRegistry.register(compactCommand);
 let activeSkillContent: string | null = null;
 let activeSkillName: string | null = null;
 let pendingSkillArgs: string | null = null;
+let pendingSlashOutput: string | null = null;
 
 function loadSkillsFromDir(dirPath: string): void {
   try {
@@ -170,13 +171,27 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   }
 
   const { command, args } = match;
+
+  let capturedOutput = '';
+  const capturingEmit: typeof localEmit = (type, data) => {
+    if (type === 'token' && data.tokenType === 'Text') {
+      capturedOutput += data.text;
+    }
+    localEmit(type, data);
+  };
+
   try {
-    await command.execute(args, deps, localEmit, signal);
+    await command.execute(args, deps, capturingEmit, signal);
   } catch (err) {
     if (!signal.aborted) {
       localEmit('error', { error: err instanceof Error ? err.message : String(err) });
     }
   }
+
+  if (capturedOutput) {
+    pendingSlashOutput = capturedOutput;
+  }
+
   return true;
 }
 
@@ -523,8 +538,27 @@ process.stdin.on('data', async (chunk: Buffer) => {
                   activeSkillName = null;
                   await handleChatWithEmit(skillArgs, msg.context, msg.persona, msg.apiKey, msg.systemSummary, localEmit, signal, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
                 }
+                if (pendingSlashOutput && msg.sessionId && deps?.brain) {
+                  if (msg.brainOsSession) {
+                    const newSession = await syncSessionAfterCommand(
+                      deps.brain,
+                      msg.brainOsSession,
+                      msg.text,
+                      pendingSlashOutput,
+                    );
+                    if (newSession) {
+                      getAgentFactory().setSessionContext(msg.sessionId, {
+                        brainOsSession: newSession,
+                        lastUpdated: Date.now(),
+                      });
+                      pendingSlashOutput = null;
+                    }
+                  }
+                }
               } else {
-                await handleChatWithEmit(msg.text, msg.context, msg.persona, msg.apiKey, msg.systemSummary, localEmit, signal, msg.sessionId, msg.brainOsSession, skillContent, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
+                const sc = pendingSlashOutput && !skillContent ? pendingSlashOutput : skillContent;
+                pendingSlashOutput = null;
+                await handleChatWithEmit(msg.text, msg.context, msg.persona, msg.apiKey, msg.systemSummary, localEmit, signal, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
               }
             });
           } else {
@@ -538,8 +572,27 @@ process.stdin.on('data', async (chunk: Buffer) => {
                 activeSkillName = null;
                 await handleChat(skillArgs, msg.context, msg.persona, msg.apiKey, msg.systemSummary, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
               }
+              if (pendingSlashOutput && msg.sessionId && deps?.brain) {
+                if (msg.brainOsSession) {
+                  const newSession = await syncSessionAfterCommand(
+                    deps.brain,
+                    msg.brainOsSession,
+                    msg.text,
+                    pendingSlashOutput,
+                  );
+                  if (newSession) {
+                    getAgentFactory().setSessionContext(msg.sessionId, {
+                      brainOsSession: newSession,
+                      lastUpdated: Date.now(),
+                    });
+                    pendingSlashOutput = null;
+                  }
+                }
+              }
             } else {
-              await handleChat(msg.text, msg.context, msg.persona, msg.apiKey, msg.systemSummary, msg.sessionId, msg.brainOsSession, skillContent, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
+              const sc = pendingSlashOutput && !skillContent ? pendingSlashOutput : skillContent;
+              pendingSlashOutput = null;
+              await handleChat(msg.text, msg.context, msg.persona, msg.apiKey, msg.systemSummary, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
             }
           }
           break;
@@ -712,6 +765,45 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   } finally {
     currentAgent = null;
     currentSessionIdForCancel = null;
+  }
+}
+
+async function syncSessionAfterCommand(
+  brainInstance: any,
+  existingSession: string,
+  commandText: string,
+  capturedOutput: string,
+): Promise<string | undefined> {
+  try {
+    const syncAgent = brainInstance.agent('session-sync')
+      .with_systemPrompt('You are a context synchronization agent.');
+    const started = await syncAgent.start();
+    try {
+      started.importSession(existingSession);
+    } catch {
+      return undefined;
+    }
+    const syncMsg =
+      `<system_context>\n` +
+      `The following command was executed and its output was displayed to the user:\n\n` +
+      `<command>${commandText}</command>\n\n` +
+      `<output>\n${capturedOutput}\n</output>\n` +
+      `\nAcknowledge this silently.</system_context>`;
+    const result = await new Promise<string | undefined>((resolve) => {
+      started.stream(syncMsg, (token: any) => {
+        if (token.type === 'Done') {
+          let session: string | undefined;
+          try { session = started.exportSession(); } catch {}
+          resolve(session);
+        } else if (token.type === 'Error') {
+          resolve(undefined);
+        }
+      });
+    });
+    started.stop().catch(() => {});
+    return result;
+  } catch {
+    return undefined;
   }
 }
 

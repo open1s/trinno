@@ -773,7 +773,7 @@ Return ONLY valid JSON:
 
     // Technology Maturity
     if (trizResult?.technologyMaturity) {
-      const { trl, trlNext, sCurveStage, sCurveStageNext, crossoverYear, sCurveData, svgPath, unicodeChart, milestones } = trizResult.technologyMaturity;
+      const { trl, trlNext, sCurveStage, sCurveStageNext, crossoverYear, sCurveData, svgPath, milestones } = trizResult.technologyMaturity;
       lines.push(`## ${t('technologyMaturity', lang)}`);
       lines.push('');
 
@@ -791,15 +791,6 @@ Return ONLY valid JSON:
         lines.push(`- **${t('scurveChart', lang)}:** \`${svgPath}\``);
       }
       lines.push('');
-
-      if (unicodeChart) {
-        lines.push(`### ${t('scurvePreview', lang)}`);
-        lines.push('');
-        lines.push('```');
-        lines.push(unicodeChart);
-        lines.push('```');
-        lines.push('');
-      }
 
       if (milestones && milestones.length > 0) {
         lines.push(`### ${t('keyEventsMilestones', lang)}`);
