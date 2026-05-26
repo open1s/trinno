@@ -27,8 +27,8 @@ export function createReference(
     sourceType,
     snippet,
     relevanceScore,
-    publishedDate,
-    authors,
+    ...(publishedDate !== undefined ? { publishedDate } : {}),
+    ...(authors !== undefined ? { authors } : {}),
   };
 }
 

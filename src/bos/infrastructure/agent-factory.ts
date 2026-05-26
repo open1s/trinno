@@ -4,6 +4,19 @@ import * as fs from 'fs';
 import { BrainOS } from '@open1s/ezbos';
 import { McpServerConfig } from './config/toolPermissions.js';
 
+function loadMcpFromConfig(): McpServerConfig[] {
+  try {
+    const { ConfigLoader } = require('@open1s/jsbos');
+    const loader = new ConfigLoader();
+    loader.discover();
+    const configJson = loader.loadSync();
+    const config = JSON.parse(configJson);
+    return config?.mcp?.servers || [];
+  } catch {
+    return [];
+  }
+}
+
 export interface AgentConfig {
   name: string;
   systemPrompt: string;
@@ -52,7 +65,10 @@ export function initAgentFactory(
   },
 ): AgentFactory {
   if (!instance) {
-    instance = new AgentFactory(brain, options);
+    const mcpServers = options?.defaultMcpServers && options.defaultMcpServers.length > 0
+      ? options.defaultMcpServers
+      : loadMcpFromConfig();
+    instance = new AgentFactory(brain, { ...options, defaultMcpServers: mcpServers });
   }
   return instance;
 }
@@ -84,6 +100,10 @@ class AgentFactory {
 
   getSessionContext(sessionId: string): SessionConfig | undefined {
     return this.sessionContexts.get(sessionId);
+  }
+
+  getDefaultMcpServers(): McpServerConfig[] {
+    return this.defaultMcpServers;
   }
 
   setSessionContext(sessionId: string, context: SessionConfig): void {

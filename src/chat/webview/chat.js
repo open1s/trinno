@@ -58,10 +58,10 @@
   const vscode = acquireVsCodeApi();
 
   let slashCommands = [
+    { name: 'trp', description: 'TRIZ Research Project: init → survey → analyze → synthesize → deliver' },
     { name: 'session', description: 'Manage sessions: list, select, delete, rename' },
     { name: 'new', description: 'Create a new chat session' },
     { name: 'compact', description: 'Compact current session: summarize old messages, reduce context' },
-    { name: 'ai-research', description: 'AI-driven research: auto-extracts keywords, searches, summarizes, TRIZ report' },
     { name: 'research', description: 'Full TRIZ research: contradiction + prior art + S-curve + TRL' },
     { name: 'contradiction', description: 'Analyze technical contradictions using TRIZ matrix' },
     { name: 'search', description: 'Search patents, papers, and technical solutions' },

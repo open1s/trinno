@@ -19,8 +19,8 @@ export class CurveFittingService {
     }
 
     const sorted = [...dataPoints].sort((a, b) => a.x - b.x);
-    const minX = sorted[0].x;
-    const maxX = sorted[sorted.length - 1].x;
+    const minX = sorted[0]!.x;
+    const maxX = sorted[sorted.length - 1]!.x;
     const maxY = Math.max(...sorted.map(p => p.y));
     const minY = Math.min(...sorted.map(p => p.y));
 
@@ -28,7 +28,7 @@ export class CurveFittingService {
     // Use the last few data points to detect if we're approaching a ceiling
     const recentPoints = sorted.slice(-3);
     const recentGrowth = recentPoints.length >= 2
-      ? (recentPoints[recentPoints.length - 1].y - recentPoints[0].y) / recentPoints[0].y
+      ? (recentPoints[recentPoints.length - 1]!.y - recentPoints[0]!.y) / recentPoints[0]!.y
       : 1;
 
     // If recent growth is slowing (< 20%), we're near maturity - L is closer to maxY
@@ -42,13 +42,13 @@ export class CurveFittingService {
     let t0 = minX + (maxX - minX) * 0.5; // default to midpoint
 
     for (let i = 1; i < sorted.length; i++) {
-      const dx = sorted[i].x - sorted[i - 1].x;
-      const dy = sorted[i].y - sorted[i - 1].y;
+      const dx = sorted[i]!.x - sorted[i - 1]!.x;
+      const dy = sorted[i]!.y - sorted[i - 1]!.y;
       if (dx > 0) {
         const rate = dy / dx;
         if (rate > maxGrowthRate) {
           maxGrowthRate = rate;
-          t0 = sorted[i - 1].x + dx * 0.5;
+          t0 = sorted[i - 1]!.x + dx * 0.5;
         }
       }
     }
@@ -83,9 +83,9 @@ export class CurveFittingService {
     }
 
     const sorted = [...dataPoints].sort((a, b) => a.x - b.x);
-    const currentY = sorted[sorted.length - 1].y;
-    const currentX = sorted[sorted.length - 1].x;
-    const firstX = sorted[0].x;
+    const currentY = sorted[sorted.length - 1]!.y;
+    const currentX = sorted[sorted.length - 1]!.x;
+    const firstX = sorted[0]!!.x;
     const span = currentX - firstX;
 
     return {
@@ -115,8 +115,8 @@ export class StageDetectionService {
     }
 
     const sorted = [...dataPoints].sort((a, b) => a.x - b.x);
-    const currentY = sorted[sorted.length - 1].y;
-    const prevY = sorted.length > 1 ? sorted[sorted.length - 2].y : currentY;
+    const currentY = sorted[sorted.length - 1]!.y;
+    const prevY = sorted.length > 1 ? sorted[sorted.length - 2]!.y : currentY;
     const growthRate = prevY > 0 ? (currentY - prevY) / prevY : 0;
 
     const performanceRatio = currentY / params.L;

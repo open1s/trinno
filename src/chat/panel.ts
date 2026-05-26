@@ -180,10 +180,10 @@ function formatSkillMessage(skill: SkillInfo, args: string): string {
 }
 
 const staticSlashCommands = [
+  { name: 'trp', description: 'TRIZ Research Project: init → survey → analyze → synthesize → deliver' },
   { name: 'session', description: 'Manage sessions: list, select, delete, rename' },
   { name: 'new', description: 'Create a new chat session' },
   { name: 'compact', description: 'Compact current session: summarize old messages, reduce context' },
-  { name: 'ai-research', description: 'AI-driven research: auto-extracts keywords, searches, summarizes, TRIZ report' },
   { name: 'research', description: 'Full TRIZ research: contradiction + prior art + S-curve + TRL' },
   { name: 'contradiction', description: 'Analyze technical contradictions using TRIZ matrix' },
   { name: 'search', description: 'Search patents, papers, and technical solutions' },
@@ -1018,6 +1018,11 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
     currentSession?.brainOsSession,
     skillContentForLLM,
     selectedModelConfig || globalModelConfig,
+    (() => {
+      const ed = vscode.window.activeTextEditor;
+      if (ed) return vscode.workspace.getWorkspaceFolder(ed.document.uri)?.uri?.fsPath;
+      return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    })(),
   );
 }
 

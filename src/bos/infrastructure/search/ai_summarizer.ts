@@ -76,25 +76,30 @@ Title: ${title}
 Snippet: ${snippet}
 
 Provide:
-1. Summary (2-3 sentences)
-2. Key findings (bullet points)
-3. Relevance to the problem
-4. TRIZ principles demonstrated (if any)
+1. Summary (2-3 sentences, be specific and technical)
+2. Key findings (bullet points of concrete technical details)
+3. Relevance: How this specifically helps solve the problem
+4. TRIZ principles demonstrated (if the technology maps to any of the 40 inventive principles)
 
 ${getLanguagePrompt(this.locale.language)}`
-      : `This search result has no snippet content. Based ONLY on the title, provide a brief assessment.
+      : `WARNING: This search result has NO snippet content.
 
 Problem: ${problemDescription}
 
 Title: ${title}
 
-Provide:
-1. Summary: What this title suggests about the topic
-2. Key findings: Likely focus areas based on title alone
-3. Relevance: How this MIGHT relate to the problem (acknowledge uncertainty)
-4. TRIZ Principles: Possible principles if the title suggests a known approach
+CRITICAL INSTRUCTIONS:
+- You have NO snippet or abstract to work with.
+- DO NOT fabricate, speculate, or guess what the document contains.
+- Your response MUST be limited to a brief statement acknowledging the lack of data.
 
-Keep it brief. Acknowledge that no snippet content is available.
+Respond with EXACTLY:
+1. Summary: "No content available. A search result was found with the title above, but no abstract or full text is accessible for analysis."
+2. Key findings: "No key findings — insufficient data. The title suggests this may relate to the topic, but without content, no specific findings can be reported."
+3. Relevance: "Cannot assess relevance without document content. The title appears related to the problem domain, but concrete assessment requires abstract or full text."
+4. TRIZ principles: [none]
+
+If you see actual content in the snippet field, respond normally. Otherwise, follow the instructions above exactly.
 
 ${getLanguagePrompt(this.locale.language)}`;
 

@@ -24,7 +24,7 @@ import { getAgentFactory, initAgentFactory } from './infrastructure/agent-factor
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
 import {
   researchCommand,
-  aiResearchCommand,
+  trpCommand,
   contradictionCommand,
   searchCommand,
   sCurveCommand,
@@ -35,7 +35,6 @@ import {
 } from './slash-commands/index.js';
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
-import * as jsbos from '@open1s/jsbos';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -49,7 +48,7 @@ let currentSessionIdForCancel: string | null = null;
 const slashRegistry = createSlashCommandRegistry();
 
 slashRegistry.register(researchCommand);
-slashRegistry.register(aiResearchCommand);
+slashRegistry.register(trpCommand);
 slashRegistry.register(contradictionCommand);
 slashRegistry.register(searchCommand);
 slashRegistry.register(sCurveCommand);
@@ -167,7 +166,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   if (!match) return false;
 
   if (!deps) {
-    deps = await composeRoot({ workspaceRoot: process.cwd() });
+    deps = await composeRoot({ workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() });
   }
 
   const { command, args } = match;
@@ -200,7 +199,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   const signal = abortController.signal;
 
   if (!deps) {
-    const brainOptions: any = { workspaceRoot: process.cwd() };
+    const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
     deps = await composeRoot(brainOptions);
@@ -224,15 +223,7 @@ Type /help to see all commands.`;
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
-    try {
-      const loader = new jsbos.ConfigLoader();
-      loader.discover();
-      const configJson = loader.loadSync();
-      const config = JSON.parse(configJson);
-      effectiveMcp = config?.mcp?.servers || [];
-    } catch (e) {
-      console.error('[bos-worker] Failed to load MCP config:', e);
-    }
+    effectiveMcp = getAgentFactory().getDefaultMcpServers();
   }
 
   emit('mcp-status', {
@@ -384,11 +375,8 @@ function handleCancel(): void {
 
 function emitMcpStatus(): void {
   try {
-    const loader = new jsbos.ConfigLoader();
-    loader.discover();
-    const configJson = loader.loadSync();
-    const config = JSON.parse(configJson);
-    const servers = (config?.mcp?.servers || []).map((s: any) => ({ name: s.name, type: s.type, connected: true }));
+    const servers = getAgentFactory().getDefaultMcpServers()
+      .map((s: any) => ({ name: s.name, type: s.type, connected: true }));
     emit('mcp-status', { servers });
   } catch (e) {
     emit('mcp-status', { servers: [] });
@@ -422,7 +410,7 @@ async function handleCompact(
   console.error('[bos-worker] handleCompact START, message count:', messages.length);
 
   if (!deps) {
-    const brainOptions: any = { workspaceRoot: process.cwd() };
+    const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
@@ -521,6 +509,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
       const msg = JSON.parse(line);
       switch (msg.type) {
         case 'chat':
+          if (msg.workspaceRoot) (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
           currentJobId++;
           const jobId = String(currentJobId);
 
@@ -617,7 +606,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[]): Promise<void> {
   if (!deps) {
-    const brainOptions: any = { workspaceRoot: process.cwd() };
+    const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
     deps = await composeRoot(brainOptions);
@@ -635,15 +624,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
-    try {
-      const loader = new jsbos.ConfigLoader();
-      loader.discover();
-      const configJson = loader.loadSync();
-      const config = JSON.parse(configJson);
-      effectiveMcp = config?.mcp?.servers || [];
-    } catch (e) {
-      console.error('[bos-worker] Failed to load MCP config:', e);
-    }
+    effectiveMcp = getAgentFactory().getDefaultMcpServers();
   }
 
   localEmit('mcp-status', {
@@ -769,14 +750,17 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
 }
 
 async function syncSessionAfterCommand(
-  brainInstance: any,
+  _brain: any,
   existingSession: string,
   commandText: string,
   capturedOutput: string,
 ): Promise<string | undefined> {
   try {
-    const syncAgent = brainInstance.agent('session-sync')
-      .with_systemPrompt('You are a context synchronization agent.');
+    const f = getAgentFactory();
+    const syncAgent = f.create({
+      name: 'session-sync',
+      systemPrompt: 'You are a context synchronization agent.',
+    });
     const started = await syncAgent.start();
     try {
       started.importSession(existingSession);

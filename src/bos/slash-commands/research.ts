@@ -42,6 +42,14 @@ export const researchCommand: SlashCommand = {
     emit('token', { tokenType: 'Text', text: '\n---\n\n' });
 
     try {
+      const phaseIcons: Record<string, string> = {
+        search: '🔍',
+        contradiction: '⚖️',
+        s_curve: '📈',
+        analysis: '🧠',
+        report: '📄',
+      };
+
       const result = await deps.unifiedResearch.research({
         problemDescription: problemDesc,
         improvingParameter: improvingMatch ? improvingMatch[1].trim() : undefined,
@@ -51,6 +59,8 @@ export const researchCommand: SlashCommand = {
         maxSearchResults: 5,
         onProgress: (step, msg) => {
           if (signal.aborted) throw new Error('Cancelled');
+          const icon = phaseIcons[step] || '•';
+          emit('token', { tokenType: 'Text', text: `${icon} ${msg}\n` });
           emit('token', { tokenType: 'ReasoningContent', text: `[${step}] ${msg}\n` });
         },
       });

@@ -10,6 +10,7 @@ export interface UnifiedResearchRequest {
   searchQuery?: string;
   maxSearchResults?: number;
   onProgress?: (step: string, message: string) => void;
+  preferences?: string;
 }
 
 export interface ResearchError {

@@ -27,6 +27,13 @@ When analyzing a problem:
 4. Provide concrete, actionable solution ideas based on those principles
 5. Consider how multiple principles can be combined
 
+UNCERTAINTY CALIBRATION:
+- Clearly distinguish between established TRIZ theory (e.g., matrix mappings, standard solutions) and your own inferences
+- When suggesting a principle application, state your confidence level: "High confidence" (well-known application), "Medium confidence" (plausible but unverified), "Low confidence" (speculative)
+- If you lack specific domain knowledge to ground a suggestion, explicitly say so
+- Never present AI-generated examples as if they were real-world case studies — label them as "illustrative example" when hypothetical
+- When combining principles, note whether the combination is documented in TRIZ literature or is your own synthesis
+
 Always provide practical, specific examples. Ground your suggestions in the actual problem context.`;
 
 export class AiTrizAgent {

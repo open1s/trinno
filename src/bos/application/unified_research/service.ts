@@ -170,19 +170,29 @@ export class UnifiedResearchService {
     const toPriorArt = (items: SearchResult[], type: 'patent' | 'paper' | 'tech_solution'): PriorArtItem[] =>
       items.map(item => ({ ...item, sourceType: type }));
 
-    // Step 4: Generate recommendations
+    // Step 4: Generate recommendations (with citations to specific prior art)
     const recommendations = this.generateRecommendations({
       contradictionAnalysis,
-      priorArt: { patents, papers, techSolutions },
+      priorArt: {
+        patents: toPriorArt(patents, 'patent'),
+        papers: toPriorArt(papers, 'paper'),
+        techSolutions: toPriorArt(techSolutions, 'tech_solution'),
+      },
       technologyMaturity,
       problemDescription: request.problemDescription,
+      preferences: request.preferences,
     });
 
     // Step 5: Build comprehensive report
     const summary = this.buildReport(request, {
       contradictionAnalysis,
-      priorArt: { patents, papers, techSolutions },
+      priorArt: {
+        patents: toPriorArt(patents, 'patent'),
+        papers: toPriorArt(papers, 'paper'),
+        techSolutions: toPriorArt(techSolutions, 'tech_solution'),
+      },
       technologyMaturity,
+      preferences: request.preferences,
     });
 
     return {
@@ -292,27 +302,82 @@ export class UnifiedResearchService {
   }
 
   private generateRecommendations(result: {
-    contradictionAnalysis?: { principles: Array<{ index: number; name: string }> };
-    priorArt: { patents: SearchResult[]; papers: SearchResult[]; techSolutions: SearchResult[] };
+    contradictionAnalysis?: { principles: Array<{ index: number; name: string; description: string }> };
+    priorArt: { patents: PriorArtItem[]; papers: PriorArtItem[]; techSolutions: PriorArtItem[] };
     technologyMaturity?: { trl: { level: number }; sCurveStage: string };
     problemDescription: string;
+    preferences?: string;
   }): string[] {
     const lang = this.locale.language;
     const recs: string[] = [];
+    const prefs = (result.preferences || '').toLowerCase();
 
-    if (result.contradictionAnalysis) {
+    // Preference-based focus
+    const focusCost = prefs.includes('cost') || prefs.includes('成本');
+    const focusPerf = prefs.includes('performance') || prefs.includes('性能');
+    const focusQuality = prefs.includes('quality') || prefs.includes('质量');
+    const focusSpeed = prefs.includes('speed') || prefs.includes('速度');
+
+    // Collect all prior art with their relevance signals
+    const allPriorArt = [
+      ...result.priorArt.patents.map(p => ({ ...p, category: 'patent' as const })),
+      ...result.priorArt.papers.map(p => ({ ...p, category: 'paper' as const })),
+      ...result.priorArt.techSolutions.map(t => ({ ...t, category: 'tech_solution' as const })),
+    ];
+    const topCited = allPriorArt.slice(0, 4);
+
+    // 1. TRIZ principle recommendations with prior art citations
+    if (result.contradictionAnalysis && result.contradictionAnalysis.principles.length > 0) {
       const principles = result.contradictionAnalysis.principles.slice(0, 3);
-      recs.push(`${t('applyTrizPrinciples', lang)}: ${principles.map(p => `#${p.index} ${p.name}`).join(', ')}`);
+      for (let i = 0; i < principles.length; i++) {
+        const p = principles[i];
+        const citing = topCited.filter(item =>
+          (item.summary?.trizPrinciples || []).some(sp => sp.includes(String(p.index)) || sp.includes(p.name))
+        );
+        let rec = `${t('applyTrizPrinciples', lang)} **#${p.index} ${p.name}** — ${p.description.slice(0, 80)}`;
+        if (citing.length > 0) {
+          rec += `\n  - ${t('supportingPriorArt', lang)}: ${citing.map(c => `[${c.title.slice(0, 50)}](${c.url})`).join(', ')}`;
+        } else if (topCited.length > 0) {
+          const fallback = topCited[Math.min(i, topCited.length - 1)];
+          rec += `\n  - ${t('relatedWork', lang)}: [${fallback.title.slice(0, 50)}](${fallback.url})`;
+        }
+        recs.push(rec);
+      }
     }
 
-    if (result.priorArt.patents.length > 0) {
-      recs.push(`${t('reviewRelevantPatents', lang)} ${result.priorArt.patents.length} ${t('relevantPatents', lang)}`);
+    // 2. Prior-art-driven recommendations (cite most relevant items)
+    if (topCited.length > 0) {
+      const best = topCited[0];
+      recs.push(srv('recommendationDeepDive', lang, {
+        title: best.title.slice(0, 60),
+        url: best.url,
+        sourceType: t(`report.type${best.category === 'patent' ? 'Patent' : best.category === 'paper' ? 'Paper' : 'Tech'}`, lang),
+      }));
     }
 
-    if (result.priorArt.papers.length > 0) {
-      recs.push(`${t('studyRelevantPapers', lang)} ${result.priorArt.papers.length} ${t('relevantPapers', lang)}`);
+    // 3. Preference-aware recommendation
+    if (focusCost && result.contradictionAnalysis) {
+      const costPrincipls = result.contradictionAnalysis.principles.filter(p =>
+        p.name.toLowerCase().includes('composite') || p.name.toLowerCase().includes('cheap')
+      );
+      if (costPrincipls.length > 0) {
+        recs.push(srv('recommendationCostFocus', lang, {
+          principle: costPrincipls.map(p => `#${p.index} ${p.name}`).join(', '),
+        }));
+      }
+    }
+    if (focusPerf && result.contradictionAnalysis) {
+      const perfPrincipls = result.contradictionAnalysis.principles.filter(p =>
+        p.name.toLowerCase().includes('dynam') || p.name.toLowerCase().includes('segment')
+      );
+      if (perfPrincipls.length > 0) {
+        recs.push(srv('recommendationPerfFocus', lang, {
+          principle: perfPrincipls.map(p => `#${p.index} ${p.name}`).join(', '),
+        }));
+      }
     }
 
+    // 4. Technology maturity recommendation
     if (result.technologyMaturity) {
       const { trl, sCurveStage } = result.technologyMaturity;
       if (trl.level >= 7) {
@@ -324,7 +389,93 @@ export class UnifiedResearchService {
       }
     }
 
+    // 5. Citation list
+    if (topCited.length > 0) {
+      recs.push('');
+      recs.push(`**${t('references', lang)}**`);
+      for (let i = 0; i < topCited.length; i++) {
+        const item = topCited[i];
+        const authors = item.authors?.slice(0, 2).join(', ') || '';
+        recs.push(`${i + 1}. ${authors ? `${authors}, ` : ''}"${item.title}." ${item.publishedDate || ''}. [${item.url}](${item.url})`);
+      }
+    }
+
     return recs;
+  }
+
+  private detectDomain(problem: string, preferences?: string): string {
+    const text = `${problem} ${preferences || ''}`.toLowerCase();
+    if (/\b(ai|machine learning|neural|deep learning|nlp|computer vision|llm|transformer|reinforcement)\b/.test(text)) return 'ai';
+    if (/\b(material|alloy|polymer|ceramic|composite|nanomaterial|coating)\b/.test(text)) return 'materials';
+    if (/\b(mechanical|mechanism|gear|bearing|actuator|hydraulic|pneumatic|robotic)\b/.test(text)) return 'mechanical';
+    if (/\b(software|algorithm|protocol|interface|api|framework|microservice|database)\b/.test(text)) return 'software';
+    if (/\b(chemical|catalyst|reaction|synthesis|separation|distillation|electrochemical)\b/.test(text)) return 'chemical';
+    if (/\b(energy|battery|solar|fuel cell|photovoltaic|thermoelectric|power)\b/.test(text)) return 'energy';
+    if (/\b(bio|medical|pharma|drug|diagnostic|therapeutic|clinical|surgical)\b/.test(text)) return 'biomedical';
+    if (/\b(manufactur|production|assembly|fabrication|supply chain|logistic)\b/.test(text)) return 'manufacturing';
+    return 'general';
+  }
+
+  private determineSectionOrder(
+    priorArt: { patents: PriorArtItem[]; papers: PriorArtItem[]; techSolutions: PriorArtItem[] },
+    domain: string,
+  ): ('patents' | 'papers' | 'techSolutions')[] {
+    const counts: Record<string, number> = {
+      patents: priorArt.patents.length,
+      papers: priorArt.papers.length,
+      techSolutions: priorArt.techSolutions.length,
+    };
+
+    const domainPrefs: Record<string, ('patents' | 'papers' | 'techSolutions')[]> = {
+      ai: ['papers', 'patents', 'techSolutions'],
+      biomedical: ['papers', 'patents', 'techSolutions'],
+      materials: ['papers', 'patents', 'techSolutions'],
+      chemical: ['patents', 'papers', 'techSolutions'],
+      mechanical: ['patents', 'techSolutions', 'papers'],
+      manufacturing: ['patents', 'techSolutions', 'papers'],
+      energy: ['patents', 'papers', 'techSolutions'],
+      software: ['techSolutions', 'papers', 'patents'],
+    };
+
+    const order = domainPrefs[domain] || ['patents', 'papers', 'techSolutions'];
+
+    const populated = order.filter(s => counts[s] > 0);
+    return populated.length > 0
+      ? populated
+      : (['patents', 'papers', 'techSolutions'] as const).filter(s => counts[s] > 0);
+  }
+
+  private analyzeSolutionPath(
+    item: PriorArtItem,
+    improvingParam: string,
+    worseningParam: string,
+    lang: string,
+  ): string {
+    const snippet = `${item.title} ${item.snippet}`.toLowerCase();
+    const improves = improvingParam ? snippet.includes(improvingParam.toLowerCase().split(' ').slice(0, 2).join(' ')) : false;
+    const worsens = worseningParam ? snippet.includes(worseningParam.toLowerCase().split(' ').slice(0, 2).join(' ')) : false;
+
+    const improvingShort = improvingParam.replace(/ of (moving|stationary) (object|part)/i, '').trim();
+    const worseningShort = worseningParam.replace(/ of (moving|stationary) (object|part)/i, '').trim();
+
+    if (improves && worsens) {
+      return lang === 'zh'
+        ? `同时解决${improvingShort}和${worseningShort}的矛盾`
+        : `Addresses both ${improvingShort} and ${worseningShort} trade-off`;
+    }
+    if (improves) {
+      return lang === 'zh'
+        ? `侧重${improvingShort}的改进`
+        : `Focuses on improving ${improvingShort}`;
+    }
+    if (worsens) {
+      return lang === 'zh'
+        ? `涉及${worseningShort}的限制`
+        : `Constrained by ${worseningShort}`;
+    }
+    // Extract key technical approach from snippet
+    const words = item.snippet.split(/\s+/).filter(w => w.length > 5).slice(0, 5);
+    return words.length > 0 ? words.join(' ').slice(0, 40) : (lang === 'zh' ? '相关技术方案' : 'Related approach');
   }
 
   private buildReport(request: UnifiedResearchRequest, result: {
@@ -333,7 +484,7 @@ export class UnifiedResearchService {
       worseningParameter: unknown;
       principles: Array<{ index: number; name: string; description: string }>;
     };
-    priorArt: { patents: SearchResult[]; papers: SearchResult[]; techSolutions: SearchResult[] };
+    priorArt: { patents: PriorArtItem[]; papers: PriorArtItem[]; techSolutions: PriorArtItem[] };
     technologyMaturity?: {
       trl: { level: number; title: string; confidence: number; isEstimated?: boolean };
       trlNext: { min: number; max: number; mostLikely: number };
@@ -345,6 +496,7 @@ export class UnifiedResearchService {
       unicodeChart?: string;
       milestones?: Array<{ year: number; label: string; description: string; type: string }>;
     };
+    preferences?: string;
   }): string {
     const lang = this.locale.language;
     const lines: string[] = [];
@@ -353,6 +505,22 @@ export class UnifiedResearchService {
     lines.push('');
     lines.push(`**${t('problem', lang)}:** ${request.problemDescription}`);
     lines.push(`**${t('date', lang)}:** ${new Date().toISOString().split('T')[0]}`);
+    lines.push('');
+
+    // Methodology section
+    lines.push(`## ${t('methodologyTitle', lang)}`);
+    lines.push('');
+    const hasPriorArt = result.priorArt.patents.length > 0 || result.priorArt.papers.length > 0 || result.priorArt.techSolutions.length > 0;
+    const hasSynthesis = !!result.contradictionAnalysis || !!result.technologyMaturity;
+    lines.push(srv('methodologyText', lang, {
+      patentCount: result.priorArt.patents.length,
+      paperCount: result.priorArt.papers.length,
+      techCount: result.priorArt.techSolutions.length,
+      hasPriorArt: hasPriorArt ? '✓' : '✗',
+      hasSynthesis: hasSynthesis ? '✓' : '✗',
+      hasContradiction: result.contradictionAnalysis ? '✓' : '✗',
+      hasMaturity: result.technologyMaturity ? '✓' : '✗',
+    }));
     lines.push('');
 
     // Executive Summary
@@ -407,62 +575,58 @@ export class UnifiedResearchService {
       lines.push('');
     }
 
-    // Prior Art Analysis
+    // Prior Art Analysis with Solution Path Comparison
     lines.push(`## 2. ${t('priorArtAnalysis', lang)}`);
     lines.push('');
 
-    if (result.priorArt.patents.length > 0) {
-      lines.push(`### ${t('patentLandscape', lang)}（${result.priorArt.patents.length} ${t('found', lang) || 'found'}）`);
-      lines.push('');
-      lines.push(`**${t('summary', lang)}:** ${t('patentLandscapeSummary', lang)} ${result.priorArt.patents.length} ${t('relevantPatents', lang) || 'relevant patents'}。` +
-        `${t('keyPlayers', lang)} ${this.extractTopAuthors(result.priorArt.patents)}。` +
-        `${t('patentsSpan', lang)} ${this.extractDateRange(result.priorArt.patents)}，${t('indicating', lang)} ${this.getPatentTrend(result.priorArt.patents)}。`);
+    const domain = this.detectDomain(request.problemDescription, result.preferences);
+    const improvingName = result.contradictionAnalysis
+      ? String(result.contradictionAnalysis.improvingParameter)
+      : '';
+    const worseningName = result.contradictionAnalysis
+      ? String(result.contradictionAnalysis.worseningParameter)
+      : '';
+
+    // Determine section ordering by result abundance and domain
+    const sectionOrder = this.determineSectionOrder(result.priorArt, domain);
+
+    for (const key of sectionOrder) {
+      const items = key === 'patents' ? result.priorArt.patents
+        : key === 'papers' ? result.priorArt.papers
+        : result.priorArt.techSolutions;
+      if (items.length === 0) continue;
+
+      const label = key === 'patents' ? t('patentLandscape', lang)
+        : key === 'papers' ? t('academicResearch', lang)
+        : t('techSolutions', lang);
+      const insightFn = key === 'patents' ? this.getPatentInsight.bind(this)
+        : key === 'papers' ? this.getResearchInsight.bind(this)
+        : this.getTechSolutionInsight.bind(this);
+
+      lines.push(`### ${label}（${items.length} ${t('found', lang) || 'found'}）`);
       lines.push('');
 
-      lines.push(`| # | ${t('title', lang)} | ${t('date', lang)} | ${t('authors', lang) || 'Authors'} |`);
-      lines.push(`|---|-------|------|---------|`);
-      for (let i = 0; i < result.priorArt.patents.length; i++) {
-        const p = result.priorArt.patents[i];
-        lines.push(`| ${i + 1} | ${p.title.slice(0, 50)}${p.title.length > 50 ? '...' : ''} | ${p.publishedDate || 'N/A'} | ${p.authors?.slice(0, 2).join(', ') || 'N/A'} |`);
+      // Dynamic detail: show full table if ≤8 items, compact if more
+      if (items.length <= 8) {
+        // Detailed table with solution path analysis
+        lines.push(`| # | ${t('title', lang)} | ${t('date', lang)} | ${t('solutionPath', lang) || 'Solution Path'} |`);
+        lines.push(`|---|-------|------|---------|`);
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const solutionPath = this.analyzeSolutionPath(item, improvingName, worseningName, lang);
+          lines.push(`| ${i + 1} | [${item.title.slice(0, 45)}${item.title.length > 45 ? '...' : ''}](${item.url}) | ${item.publishedDate || 'N/A'} | ${solutionPath} |`);
+        }
+      } else {
+        // Compact: just list with URLs
+        lines.push(`| # | ${t('title', lang)} | ${t('date', lang)} |`);
+        lines.push(`|---|-------|------|`);
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          lines.push(`| ${i + 1} | [${item.title.slice(0, 50)}${item.title.length > 50 ? '...' : ''}](${item.url}) | ${item.publishedDate || 'N/A'} |`);
+        }
       }
       lines.push('');
-      lines.push(`**${t('keyInsight', lang)}:** ${this.getPatentInsight(result.priorArt.patents)}`);
-      lines.push('');
-    }
-
-    if (result.priorArt.papers.length > 0) {
-      lines.push(`### ${t('academicResearch', lang)}（${result.priorArt.papers.length} ${t('found', lang) || 'found'}）`);
-      lines.push('');
-      lines.push(`**${t('summary', lang)}:** ${t('academicSummary', lang) || 'Academic research provides'} ${result.priorArt.papers.length} ${t('relevantPapers', lang) || 'relevant papers'}。` +
-        `${t('recentWork', lang)} ${this.extractTopAuthors(result.priorArt.papers)} ${t('demonstrates', lang)} ${this.getResearchTrend(result.priorArt.papers)}。`);
-      lines.push('');
-
-      lines.push(`| # | ${t('title', lang)} | ${t('year', lang)} | ${t('authors', lang) || 'Authors'} |`);
-      lines.push(`|---|-------|------|---------|`);
-      for (let i = 0; i < result.priorArt.papers.length; i++) {
-        const p = result.priorArt.papers[i];
-        lines.push(`| ${i + 1} | ${p.title.slice(0, 50)}${p.title.length > 50 ? '...' : ''} | ${p.publishedDate || 'N/A'} | ${p.authors?.slice(0, 2).join(', ') || 'N/A'} |`);
-      }
-      lines.push('');
-      lines.push(`**${t('keyInsight', lang)}:** ${this.getResearchInsight(result.priorArt.papers)}`);
-      lines.push('');
-    }
-
-    if (result.priorArt.techSolutions.length > 0) {
-      lines.push(`### ${t('techSolutions', lang)}（${result.priorArt.techSolutions.length} ${t('found', lang) || 'found'}）`);
-      lines.push('');
-      lines.push(`**${t('summary', lang)}:** ${result.priorArt.techSolutions.length} ${t('techSolutionSummary', lang) || 'practical implementations demonstrate'} TRIZ原理的实际应用。` +
-        `${t('show', lang)} ${this.getTechSolutionTrend(result.priorArt.techSolutions)}。`);
-      lines.push('');
-
-      lines.push(`| # | ${t('title', lang)} | ${t('date', lang)} |`);
-      lines.push(`|---|-------|------|`);
-      for (let i = 0; i < result.priorArt.techSolutions.length; i++) {
-        const item = result.priorArt.techSolutions[i];
-        lines.push(`| ${i + 1} | ${item.title.slice(0, 50)}${item.title.length > 50 ? '...' : ''} | ${item.publishedDate || 'N/A'} |`);
-      }
-      lines.push('');
-      lines.push(`**${t('keyInsight', lang)}:** ${this.getTechSolutionInsight(result.priorArt.techSolutions)}`);
+      lines.push(`**${t('keyInsight', lang)}:** ${insightFn(items)}`);
       lines.push('');
     }
 
@@ -627,25 +791,76 @@ export class UnifiedResearchService {
     return srv('patentTrendMature', lang);
   }
 
-  private getPatentInsight(_results: SearchResult[]): string {
+  private getPatentInsight(results: SearchResult[]): string {
     const lang = this.locale.language;
-    return srv('patentInsightText', lang);
+    if (results.length === 0) return srv('patentInsightText', lang);
+    const topAuthors = this.extractTopAuthors(results);
+    const yearRange = this.extractDateRange(results);
+    const trend = this.getPatentTrend(results);
+    const uniqueAssignees = new Set(results.flatMap(r => r.authors || []).filter(Boolean)).size;
+    return srv('patentInsightDynamic', lang, {
+      count: results.length,
+      authors: topAuthors,
+      yearRange,
+      trend,
+      assigneeCount: uniqueAssignees,
+    });
   }
 
-  private getResearchTrend(_results: SearchResult[]): string {
-    return t('researchTrend', this.locale.language);
+  private getResearchTrend(results: SearchResult[]): string {
+    const lang = this.locale.language;
+    const dates = results.map(r => r.publishedDate).filter(Boolean);
+    if (dates.length === 0) return t('report.researchTrend', lang);
+    const recent = dates.filter(d => {
+      const year = parseInt(d.slice(0, 4));
+      return year > 2022;
+    }).length;
+    if (recent > dates.length / 2) return lang === 'zh' ? '近期研究活跃，新兴成果不断涌现' : 'recent research activity is high with emerging findings';
+    if (recent > 0) return lang === 'zh' ? '研究活动持续，部分近期成果值得关注' : 'ongoing research activity with some recent findings';
+    return lang === 'zh' ? '研究主要基于较早的成果，需关注最新进展' : 'research is primarily based on earlier work; check for recent updates';
   }
 
-  private getResearchInsight(_results: SearchResult[]): string {
-    return t('researchInsight', this.locale.language);
+  private getResearchInsight(results: SearchResult[]): string {
+    const lang = this.locale.language;
+    if (results.length === 0) return t('report.researchInsight', lang);
+    const topAuthors = this.extractTopAuthors(results);
+    const yearRange = this.extractDateRange(results);
+    const trend = this.getResearchTrend(results);
+    const institutions = results.flatMap(r => r.authors || []).filter(Boolean);
+    const uniqueInstitutions = new Set(institutions).size;
+    return srv('researchInsightDynamic', lang, {
+      count: results.length,
+      authors: topAuthors,
+      yearRange,
+      trend,
+      institutionCount: uniqueInstitutions,
+    });
   }
 
-  private getTechSolutionTrend(_results: SearchResult[]): string {
-    return t('techSolutionTrend', this.locale.language);
+  private getTechSolutionTrend(results: SearchResult[]): string {
+    const lang = this.locale.language;
+    const dates = results.map(r => r.publishedDate).filter(Boolean);
+    if (dates.length === 0) return t('report.techSolutionTrend', lang);
+    const recent = dates.filter(d => {
+      const year = parseInt(d.slice(0, 4));
+      return year > 2021;
+    }).length;
+    if (recent > dates.length / 2) return lang === 'zh' ? '近期技术方案快速迭代，实用化程度高' : 'recent solutions show rapid iteration and high practicality';
+    return lang === 'zh' ? '技术方案持续累积，部分经典方案仍为参考基准' : 'solutions continue to accumulate; classic references remain relevant';
   }
 
-  private getTechSolutionInsight(_results: SearchResult[]): string {
-    return t('techSolutionInsight', this.locale.language);
+  private getTechSolutionInsight(results: SearchResult[]): string {
+    const lang = this.locale.language;
+    if (results.length === 0) return t('report.techSolutionInsight', lang);
+    const yearRange = this.extractDateRange(results);
+    const trend = this.getTechSolutionTrend(results);
+    const uniqueSources = new Set(results.map(r => r.url).filter(Boolean)).size;
+    return srv('techSolutionInsightDynamic', lang, {
+      count: results.length,
+      yearRange,
+      trend,
+      sourceCount: uniqueSources,
+    });
   }
 
   private getMaturitySummary(stage: string, trl: number): string {

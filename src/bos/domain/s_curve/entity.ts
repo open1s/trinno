@@ -64,9 +64,9 @@ export class SCurve {
     this._s2Estimated = s2Estimated;
     this._dataPoints = dataPoints || [];
     this._milestones = milestones || [];
-    this._s1TRL = s1TRL;
-    this._s2TRLRange = s2TRLRange;
-    this._trlReconciliation = trlReconciliation;
+    this._s1TRL = s1TRL ?? undefined as any;
+    this._s2TRLRange = s2TRLRange ?? undefined as any;
+    this._trlReconciliation = trlReconciliation ?? undefined as any;
   }
 
   get s1Parameters(): CurveParameters { return this._s1Parameters; }
@@ -129,7 +129,7 @@ export class SCurve {
   }
 
   getYearsToS1Peak(): number {
-    return Math.max(0, this._s1Parameters.t0 - (this._dataPoints.length > 0 ? this._dataPoints[this._dataPoints.length - 1].x : this._s1Parameters.t0));
+    return Math.max(0, this._s1Parameters.t0 - (this._dataPoints.length > 0 ? this._dataPoints[this._dataPoints.length - 1]!.x : this._s1Parameters.t0));
   }
 
   toJSON(): SCurveProps {
@@ -144,9 +144,9 @@ export class SCurve {
       s2Estimated: this._s2Estimated,
       dataPoints: [...this._dataPoints],
       milestones: [...this._milestones],
-      s1TRL: this._s1TRL,
-      s2TRLRange: this._s2TRLRange,
-      trlReconciliation: this._trlReconciliation,
+      s1TRL: this._s1TRL as any,
+      s2TRLRange: this._s2TRLRange as any,
+      trlReconciliation: this._trlReconciliation as any,
     };
   }
 }

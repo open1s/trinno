@@ -20,6 +20,7 @@ import { AiSCurveDataExtractor } from '../s_curve/ai_data_extractor.js';
 import { TRLAssessor } from '../triz/trl_assessor.js';
 import { UnifiedResearchService } from '../../application/unified_research/service.js';
 import { AIResearchOrchestrator } from '../../application/unified_research/ai_orchestrator.js';
+import { ResearchAnalysisTools } from '../ai/research_analysis_tools.js';
 import { createTrizTools } from '../http/triz_tools.js';
 import { createCodingTools } from '../http/coding_tools.js';
 import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
@@ -44,6 +45,7 @@ export interface TrizDeps {
   aiSCurveDataExtractor: AiSCurveDataExtractor;
   trlAssessor: TRLAssessor;
   searchService: CachedSearchService;
+  analysisTools: ResearchAnalysisTools;
   summarizer: AISummarizer;
   unifiedResearch: UnifiedResearchService;
   aiResearchOrchestrator: AIResearchOrchestrator;
@@ -126,9 +128,9 @@ export async function composeRoot(options: {
   });
 
   const trizTools = createTrizTools(
-    analysisService,
     principleEngine,
     suFieldService,
+    analyzeContradictionHandler,
     idealityHandler,
     aiAgent,
     searchService,
@@ -145,11 +147,12 @@ export async function composeRoot(options: {
   const allTools = [...trizTools, ...codingTools];
   const tools = wrapAllTools(allTools, toolPermissions);
 
+  const researchAnalysisTools = new ResearchAnalysisTools(brain, locale);
+
   const aiResearchOrchestrator = new AIResearchOrchestrator(
     brain,
     searchService,
-    summarizer,
-    unifiedResearch,
+    researchAnalysisTools,
     tools,
     [beforeHook, afterHook],
     locale,
@@ -173,6 +176,7 @@ export async function composeRoot(options: {
     aiSCurveDataExtractor,
     trlAssessor,
     searchService,
+    analysisTools: researchAnalysisTools,
     summarizer,
     unifiedResearch,
     aiResearchOrchestrator,

@@ -3,6 +3,9 @@ export interface EvaluateIdealityCommand {
   benefits: string[];
   costs: string[];
   harms: string[];
+  benefitWeight?: number;
+  costWeight?: number;
+  harmWeight?: number;
 }
 
 export interface IdealityScore {

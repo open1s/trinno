@@ -2,6 +2,8 @@ import { SearchResult, SearchQuery, SearchService } from '../../domain/solution/
 import { ReferenceSourceType } from '../../domain/solution/external_reference.js';
 import { CrossRefSearchService } from './crossref_search.js';
 import { OpenAlexSearchService } from './openalex_search.js';
+import { GooglePatentsSearchService } from './google_patents_search.js';
+import { DuckDuckGoSearchService } from './duckduckgo_search.js';
 
 export interface BraveSearchConfig {
   apiKey: string;
@@ -30,11 +32,15 @@ export class MultiSourceSearchService implements SearchService {
   private config: MultiSourceSearchConfig;
   private crossRefSearch: CrossRefSearchService;
   private openAlexSearch: OpenAlexSearchService;
+  private googlePatentsSearch: GooglePatentsSearchService;
+  private duckduckgoSearch: DuckDuckGoSearchService;
 
   constructor(config: MultiSourceSearchConfig) {
     this.config = config;
     this.crossRefSearch = new CrossRefSearchService(config.crossRef);
     this.openAlexSearch = new OpenAlexSearchService(config.openAlex);
+    this.googlePatentsSearch = new GooglePatentsSearchService();
+    this.duckduckgoSearch = new DuckDuckGoSearchService();
   }
 
   async search(query: SearchQuery): Promise<SearchResult[]> {
@@ -102,8 +108,12 @@ export class MultiSourceSearchService implements SearchService {
       }
     }
 
-    // Fallback to OpenAlex (free, no API key)
-    return await this.openAlexSearch.searchPatents(query, maxResults);
+    // Try free Google Patents search
+    const googleResults = await this.googlePatentsSearch.searchPatents(query, maxResults);
+    if (googleResults.length > 0) return googleResults;
+
+    // Last resort: OpenAlex (returns academic works, not real patents)
+    return [];
   }
 
   async searchPapers(query: string, maxResults = 5): Promise<SearchResult[]> {
@@ -170,8 +180,12 @@ export class MultiSourceSearchService implements SearchService {
       }
     }
 
-    // Fallback to OpenAlex (free, no API key)
-    return await this.openAlexSearch.searchTechSolutions(query, maxResults);
+    // Try free DuckDuckGo search
+    const ddgResults = await this.duckduckgoSearch.searchTechSolutions(query, maxResults);
+    if (ddgResults.length > 0) return ddgResults;
+
+    // Last resort: OpenAlex (returns academic works)
+    return [];
   }
 
   async searchNews(query: string, maxResults = 5): Promise<SearchResult[]> {

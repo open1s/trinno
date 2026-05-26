@@ -48,39 +48,30 @@ async initialize(): Promise<void> {
     const factory = getAgentFactory();
     const builder = factory.create({
       name: 'triz-scurve-data-extractor',
-      systemPrompt: `${langPrefix}You are a TRIZ S-Curve data extraction expert. Your task is to provide historical performance data and KEY REAL-WORLD MILESTONES that cover the FULL technology lifecycle.
+      systemPrompt: `${langPrefix}You are a TRIZ S-Curve data extraction expert. Your ONLY task is to extract real historical performance data from the provided search results.
 
-Given a technology name and performance metric, provide realistic historical data points and MILESTONES that span from the technology's INVENTION to the PRESENT DAY.
+STRICT RULES — READ CAREFULLY:
+1. NEVER fabricate or estimate data points. Only extract data explicitly stated in search results.
+2. If search results contain no usable performance data (no numeric values, no year-over-year comparisons), return empty dataPoints and milestones arrays.
+3. Do NOT generate "realistic" or "plausible" data — that is fabrication.
+4. Milestones must be directly mentioned in search results, not from your training knowledge.
+5. Return as many or as few data points as the search results support (0 is acceptable).
 
-CRITICAL REQUIREMENTS FOR DATA POINTS:
-- 8-12 data points covering ALL S-curve stages: INFANCY → GROWTH → MATURITY → DECLINE
-- First point should be from the technology's invention year
-- Show clear S-shaped growth pattern (slow start → rapid acceleration → slowing → plateau)
-
-CRITICAL REQUIREMENTS FOR MILESTONES:
-- 4-8 key events, each MUST reference a SPECIFIC, REAL, IMPACTFUL tech/market event
-- Good examples: "RSA algorithm published", "Tesla Model S launch", "CRISPR-Cas9 gene editing demonstrated", "iPhone released", "AlphaGo defeats Lee Sedol", "5G NR standard frozen by 3GPP"
-- Bad examples: "First Prototype", "Initial Research", "Commercial Launch" (too generic)
-- Each milestone must identify a concrete event with a specific year, recognizable name, and real market/technology impact
-- Cover invention, major breakthroughs, first product, standard adoption, peak, and replacement signs
-
-Return ONLY a JSON object with:
+The JSON schema is:
 {
   "dataPoints": [{"x": year, "y": performance_value, "stage": "infancy|growth|maturity|decline"}],
   "milestones": [
-    {"year": number, "label": "short specific name (e.g., 'RSA published' or 'Model S launch')", "description": "1-2 sentence impact description", "type": "invention|breakthrough|commercialization|standardization|peak|decline"}
+    {"year": number, "label": "short specific name", "description": "1-2 sentence from search results", "type": "invention|breakthrough|commercialization|standardization|peak|decline"}
   ],
-  "sources": ["list of typical sources for this data"],
-  "reasoning": "brief explanation of data sources, accuracy, and lifecycle coverage",
+  "sources": ["URLs from search results"],
+  "reasoning": "explain what data was found and what was missing",
   "lifecycleInfo": {
-    "inventionYear": number,
-    "growthStartYear": number,
-    "maturityStartYear": number,
+    "inventionYear": number or null,
+    "growthStartYear": number or null,
+    "maturityStartYear": number or null,
     "currentYear": number
   }
-}
-
-Provide 8-12 data points and 4-8 key milestones spanning the FULL lifecycle from invention to present. Be realistic with numbers. The data should show a clear S-shaped curve pattern.`,
+}`,
       temperature: 0.1,
     });
 
@@ -101,7 +92,7 @@ Provide 8-12 data points and 4-8 key milestones spanning the FULL lifecycle from
       ? searchResults
           .map(r => `Title: ${r.title}\nSnippet: ${r.snippet}\nURL: ${r.url}\nDate: ${r.publishedDate || 'unknown'}`)
           .join('\n\n')
-      : 'No search results available. Use your domain knowledge to provide realistic data points.';
+      : 'No search results available. Return empty dataPoints and milestones.';
 
     const rawSnippets = searchResults.length > 0
       ? searchResults.map(r => ({
@@ -112,29 +103,24 @@ Provide 8-12 data points and 4-8 key milestones spanning the FULL lifecycle from
         }))
       : [];
 
-    const prompt = `Extract or estimate historical performance data points for ${technologyName} measured in ${performanceMetric}.
+    const prompt = `Extract real historical performance data points for ${technologyName} measured in ${performanceMetric} from the search results below.
 
-IMPORTANT: Provide data covering the FULL technology lifecycle from INVENTION to PRESENT (2026).
-Include data points for: Infancy (early slow growth) → Growth (rapid acceleration) → Maturity (slowing) → Decline (near ceiling).
-
-Also identify 4-8 KEY REAL-WORLD MILESTONES in the technology's history. Each milestone MUST reference a SPECIFIC, RECOGNIZABLE event:
-- A famous paper/algorithm published (e.g., "RSA paper published", "Transformer architecture paper")
-- A major product launch (e.g., "iPhone released", "Tesla Model S delivery")
-- A standard adoption (e.g., "HTML5 W3C Recommendation", "5G NR Rel-15 frozen")
-- A record-breaking achievement (e.g., "AlphaGo defeats Lee Sedol")
-- A regulatory event (e.g., "GDPR enforcement begins")
-
-Each milestone MUST have a concrete year, specific recognizable name, and describe the real market/technology impact in 1-2 sentences.
+RULES — STRICTLY ENFORCED:
+1. ONLY extract data explicitly stated in search results. Do NOT fabricate or estimate.
+2. If no search results contain usable performance data (year + numeric value pairs), return empty dataPoints and milestones.
+3. Do NOT generate "realistic" or "plausible" data from your training knowledge.
+4. Milestones must be directly referenced in search results.
+5. Quantity does not matter — 0 data points is an acceptable valid answer.
 
 Search results:
 ${snippets}
 
 Return JSON with:
-- dataPoints: 8-12 points spanning full lifecycle (x=year, y=performance value, stage="infancy|growth|maturity|decline")
-- milestones: 4-8 key events (year, label, description, type="invention|breakthrough|commercialization|standardization|peak|decline")
-- sources: list of typical sources
-- reasoning: explanation of data and lifecycle coverage
-- lifecycleInfo: {inventionYear, growthStartYear, maturityStartYear, currentYear}
+- dataPoints: only from search results (x=year, y=performance value, stage optional)
+- milestones: only from search results (year, label, description, type)
+- sources: URLs from search results
+- reasoning: describe what was found and what was missing
+- lifecycleInfo: {inventionYear: number|null, growthStartYear: number|null, maturityStartYear: number|null, currentYear: 2026}
 
 ${getLanguagePrompt(this.locale.language)}`;
 
@@ -207,27 +193,11 @@ ${getLanguagePrompt(this.locale.language)}`;
   }
 
   private generateLifecycleDefaults(searchResults: SearchResult[], rawResponse?: string): AiSCurveDataResult {
-    const now = new Date().getFullYear();
     return {
-      dataPoints: [
-        { x: now - 30, y: 10, source: 'estimated' },
-        { x: now - 25, y: 20, source: 'estimated' },
-        { x: now - 20, y: 40, source: 'estimated' },
-        { x: now - 15, y: 80, source: 'estimated' },
-        { x: now - 10, y: 150, source: 'estimated' },
-        { x: now - 5, y: 220, source: 'estimated' },
-        { x: now - 2, y: 280, source: 'estimated' },
-        { x: now, y: 300, source: 'estimated' },
-      ],
-      milestones: [
-        { year: now - 30, label: 'Fundamental discovery', description: 'Core principles established through pioneering research', type: 'invention' },
-        { year: now - 20, label: 'Proof-of-concept demonstration', description: 'First working prototype validates the approach', type: 'breakthrough' },
-        { year: now - 10, label: 'First market product', description: 'Initial commercial release begins market adoption', type: 'commercialization' },
-        { year: now - 5, label: 'Industry standard adopted', description: 'Major standards bodies ratify specifications', type: 'standardization' },
-        { year: now, label: 'Performance plateau', description: 'Growth decelerating as technology matures', type: 'peak' },
-      ],
+      dataPoints: [],
+      milestones: [],
       sources: searchResults.map(r => r.url),
-      reasoning: 'Default lifecycle-spanning data points (AI-estimated). Covers infancy → growth → maturity stages.',
+      reasoning: 'FALLBACK: S-curve data extraction failed. No real data points or milestones available. Provide specific performance data (year + performance value pairs) for accurate S-curve analysis.',
       rawResponse,
     };
   }

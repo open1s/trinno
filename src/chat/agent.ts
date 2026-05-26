@@ -102,7 +102,8 @@ export async function sendMessage(
   sessionId?: string,
   brainOsSession?: string,
   skillContent?: string,
-  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
+  workspaceRoot?: string
 ): Promise<void> {
   currentCallbacks = { token: onToken, done: onDone, approval: onApproval };
 
@@ -127,6 +128,7 @@ export async function sendMessage(
     type: 'chat',
     messageId,
     text,
+    workspaceRoot: workspaceRoot || process.cwd(),
     context: config.context.autoInject ? formatContextForPrompt(ctx) : null,
     persona: {
       name: config.persona.name,

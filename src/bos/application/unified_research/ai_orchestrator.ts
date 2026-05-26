@@ -1,12 +1,9 @@
-import * as os from 'os';
-import * as path from 'path';
-import * as fs from 'fs';
 import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../../infrastructure/agent-factory.js';
 import { SearchResult } from '../../domain/solution/search_port.js';
 import { CachedSearchService } from '../../infrastructure/search/cached_search.js';
-import { AISummarizer, SummarizationResult } from '../../infrastructure/search/ai_summarizer.js';
-import { streamAgent } from '../../infrastructure/ai/streaming.js';
+import { streamAgent, streamAgentCollect } from '../../infrastructure/ai/streaming.js';
+import { ResearchAnalysisTools } from '../../infrastructure/ai/research_analysis_tools.js';
 import {
   UnifiedResearchRequest,
   UnifiedResearchResult,
@@ -14,8 +11,8 @@ import {
   ResearchMetadata,
   PriorArtItem,
 } from './types.js';
-import { UnifiedResearchService } from './service.js';
-import { LocaleConfig, DEFAULT_LOCALE, t, stageLabel, trlTitle, svgLabel, getLanguagePrompt, progressMsg } from '../../domain/shared/i18n.js';
+import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt, t, progressMsg } from '../../domain/shared/i18n.js';
+import { setupProxy } from '../../infrastructure/search/proxy_fetch.js';
 
 export interface AIResearchConfig {
   maxSearchResults?: number;
@@ -23,25 +20,7 @@ export interface AIResearchConfig {
   onThinking?: (text: string) => void;
   showThinking?: boolean;
   skillContent?: string;
-}
-
-interface ExtractedParameters {
-  improvingParameter?: string;
-  worseningParameter?: string;
-  technologyName?: string;
-  performanceMetric?: string;
-  keyInsights?: string[];
-  recommendedApproach?: string;
-}
-
-interface ExtractedSearchKeywords {
-  patentQueryEn: string;
-  patentQueryZh: string;
-  paperQueryEn: string;
-  paperQueryZh: string;
-  techQueryEn: string;
-  techQueryZh: string;
-  reasoning: string;
+  preferences?: string;
 }
 
 export class AIResearchOrchestrator {
@@ -50,8 +29,7 @@ export class AIResearchOrchestrator {
   private tools: any[];
   private hooks: any[];
   private searchService: CachedSearchService;
-  private summarizer: AISummarizer;
-  private researchService: UnifiedResearchService;
+  private analysisTools: ResearchAnalysisTools;
   private errors: ResearchError[] = [];
   private metadata: Partial<ResearchMetadata> = {};
   private locale: LocaleConfig;
@@ -59,106 +37,315 @@ export class AIResearchOrchestrator {
   constructor(
     brain: BrainOS,
     searchService: CachedSearchService,
-    summarizer: AISummarizer,
-    researchService: UnifiedResearchService,
+    analysisTools: ResearchAnalysisTools,
     tools: any[] = [],
     hooks: any[] = [],
     locale?: LocaleConfig,
   ) {
     this.brain = brain;
     this.searchService = searchService;
-    this.summarizer = summarizer;
-    this.researchService = researchService;
+    this.analysisTools = analysisTools;
     this.tools = tools;
     this.hooks = hooks;
     this.locale = locale || DEFAULT_LOCALE;
   }
 
-async initialize(): Promise<void> {
+  async initialize(): Promise<void> {
+    setupProxy();
+
     const langPrefix = this.locale.language === 'zh'
-      ? '【中文模式】你必须用中文进行所有思考、推理和输出。包括内部推理过程、分析、总结都用中文。\n\n'
+      ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
+
+    await this.analysisTools.initialize();
 
     initAgentFactory(this.brain, {
       defaultTools: this.tools,
       defaultHooks: this.hooks,
     });
 
+    const orchestrator = this;
+
     const factory = getAgentFactory();
-    let builder = factory.create({
+    const builder = factory.create({
       name: 'triz-research-orchestrator',
-      systemPrompt: `${langPrefix}You are a TRIZ research expert. You analyze problems, search for prior art, summarize findings, and generate comprehensive research reports.
+      systemPrompt: `${langPrefix}You are a TRIZ research expert. Your task is to produce a comprehensive technical research report by following a structured workflow using your tools.
 
-Your workflow:
-1. Analyze the problem description
-2. Search for patents, papers, and technical solutions — use the search tools available to you
-3. Summarize each result in context of the problem
-4. Generate a comprehensive research report with:
-   - Executive summary
-   - Contradiction analysis (if applicable)
-   - Prior art analysis with AI-generated summaries
-   - Technology maturity assessment (TRL + S-curve)
-   - Actionable recommendations
+REQUIRED REPORT SECTIONS (in order):
+1. Patent Landscape Map — technology trends, top assignees, filing activity
+2. Academic Literature Review — key papers, research directions, emerging findings
+3. Technical Solutions Analysis — practical implementations, product approaches
+4. Technology Bottlenecks — critical unresolved challenges with TRIZ contradiction mapping
+5. Technology Maturity Assessment — TRL, S-curve stage, key milestones
+6. Technology Trends Forecast — convergence direction, disruptive threats, time horizons
+7. TRIZ Contradiction Analysis — identified contradictions with inventive principle recommendations
+8. Comparative Analysis — comparison matrix of different technical approaches
+9. Recommendations — prioritized actionable next steps citing specific prior art
 
-You have access to specialized SKILLs through the skill tool. Call a relevant skill to enhance your analysis if it matches the problem domain.
-You also have access to coding and research tools — use them to search, read files, execute commands, and analyze code.
+WORKFLOW — You MUST follow these phases in order:
 
-Return ONLY a JSON object with the report structure. No markdown, no explanation.`,
+PHASE 1 — SEARCH
+- Extract 3-5 core keywords per query language (EN + ZH)
+- Use search_prior_art to find patents, papers, and tech solutions
+- Collect all search results before moving on
+
+PHASE 2 — TRIZ ANALYSIS (analyze each result)
+- For each patent/paper/tech solution found in search: call analyze_prior_art
+- Collect the TRIZ parameter mappings, principle applications, and summaries
+
+PHASE 3 — SYNTHESIS
+- Call identify_bottlenecks with the summarized search data
+- Call assess_maturity with publication dates and technology context  
+- Call forecast_trends with bottlenecks + maturity data
+- Call compare_approaches to compare different technical paths
+
+PHASE 4 — REPORT GENERATION
+- Using ALL gathered data from phases 1-3, compile the final report
+- Include ALL 9 required sections with substantial detail
+- Cite specific patents/papers by title and URL in the report
+- End with numbered references section listing all cited prior art
+
+CRITICAL RULES — VIOLATING ANY OF THESE PRODUCES A USELESS REPORT:
+- You MUST call search_prior_art as your VERY FIRST action. Do NOT write anything before searching.
+- If search returns 0 results for a category, explicitly state "No patents/papers/tech solutions found" in the report.
+- You MUST call at least one analysis tool (analyze_prior_art, identify_bottlenecks, assess_maturity, forecast_trends, compare_approaches) before writing the final report.
+- NEVER fabricate data — if search returns nothing, the report section for that category should say "No data available from search."
+- Each fact in the report MUST be traceable to a tool result. If you cannot trace it, delete it.
+- Before writing Phase 4, verify: did I call search_prior_art? Did I call at least one analysis tool? If not, go back and call them.`,
+
       temperature: 0.3,
       extraTools: [
         {
           name: 'search_prior_art',
-          description: 'Search for patents, papers, and technical solutions across English and Chinese databases.',
+          description: 'Search for patents, papers, and tech solutions. Provide focused keyword queries (3-5 terms each). Call with different EN and ZH queries for broader coverage.',
           parameters: {
             type: 'object',
             properties: {
-              patentQueryEn: { type: 'string' },
-              patentQueryZh: { type: 'string' },
-              paperQueryEn: { type: 'string' },
-              paperQueryZh: { type: 'string' },
-              techQueryEn: { type: 'string' },
-              techQueryZh: { type: 'string' },
+              patentQueryEn: { type: 'string', description: 'English patent search keywords (3-5 terms)' },
+              patentQueryZh: { type: 'string', description: 'Chinese patent search keywords (3-5 terms)' },
+              paperQueryEn: { type: 'string', description: 'English paper search keywords (3-5 terms)' },
+              paperQueryZh: { type: 'string', description: 'Chinese paper search keywords (3-5 terms)' },
+              techQueryEn: { type: 'string', description: 'English tech solution keywords (3-5 terms)' },
+              techQueryZh: { type: 'string', description: 'Chinese tech solution keywords (3-5 terms)' },
             },
             required: ['patentQueryEn'],
           },
           execute: async (args: any) => {
             const { patentQueryEn, patentQueryZh, paperQueryEn, paperQueryZh, techQueryEn, techQueryZh } = args;
-            const halfResults = 5;
-            const [pEn, paEn, tEn] = await this.searchWithTracking(
-              { patentQuery: patentQueryEn, paperQuery: paperQueryEn, techQuery: techQueryEn },
-              halfResults,
-            );
+            const maxResults = 5;
+
+            const [pEn, paEn, tEn] = await Promise.all([
+              orchestrator.searchService.searchPatents(patentQueryEn || args.paperQueryEn, maxResults),
+              orchestrator.searchService.searchPapers(paperQueryEn || args.paperQueryEn, maxResults),
+              orchestrator.searchService.searchTechSolutions(techQueryEn || args.techQueryEn, maxResults),
+            ]);
+
             let pZh: SearchResult[] = [], paZh: SearchResult[] = [], tZh: SearchResult[] = [];
             if (patentQueryZh || paperQueryZh || techQueryZh) {
-              const zh = await this.searchWithTracking(
-                { patentQuery: patentQueryZh, paperQuery: paperQueryZh, techQuery: techQueryZh },
-                halfResults,
-              );
-              [pZh, paZh, tZh] = zh;
+              [pZh, paZh, tZh] = await Promise.all([
+                orchestrator.searchService.searchPatents(patentQueryZh || '', maxResults),
+                orchestrator.searchService.searchPapers(paperQueryZh || '', maxResults),
+                orchestrator.searchService.searchTechSolutions(techQueryZh || '', maxResults),
+              ]);
             }
-            return JSON.stringify({
-              patents: this.mergeResults(pEn, pZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
-              papers: this.mergeResults(paEn, paZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
-              techSolutions: this.mergeResults(tEn, tZh).map(r => ({ title: r.title, snippet: r.snippet, url: r.url })),
-            });
+
+            const mergeResults = (en: SearchResult[], zh: SearchResult[]): Partial<SearchResult>[] => {
+              const seen = new Set<string>();
+              const merged: Partial<SearchResult>[] = [];
+              for (const r of [...en, ...zh]) {
+                const key = r.title.toLowerCase().trim();
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  merged.push({
+                    title: r.title,
+                    snippet: r.snippet.slice(0, 600),
+                    url: r.url,
+                    publishedDate: r.publishedDate,
+                    authors: r.authors,
+                  });
+                }
+              }
+              return merged;
+            };
+
+            const result = {
+              patents: mergeResults(pEn, pZh),
+              papers: mergeResults(paEn, paZh),
+              techSolutions: mergeResults(tEn, tZh),
+              summary: `Found ${pEn.length + pZh.length} patents, ${paEn.length + paZh.length} papers, ${tEn.length + tZh.length} tech solutions`,
+            };
+
+            return JSON.stringify(result);
           },
         },
         {
-          name: 'summarize_result',
-          description: 'Summarize a specific search result in context of the problem.',
+          name: 'analyze_prior_art',
+          description: 'Analyze a single patent/paper/tech solution for TRIZ relevance. Returns contradiction parameters, applicable inventive principles, technical summary, and limitations.',
           parameters: {
             type: 'object',
             properties: {
-              title: { type: 'string' },
-              snippet: { type: 'string' },
-              problemDescription: { type: 'string' },
+              title: { type: 'string', description: 'Title of the work' },
+              abstract: { type: 'string', description: 'Full abstract text of the work' },
+              sourceType: { type: 'string', description: 'patent, paper, or tech_solution' },
+              problemDescription: { type: 'string', description: 'The overall research problem' },
             },
-            required: ['title', 'snippet', 'problemDescription'],
+            required: ['title', 'sourceType', 'problemDescription'],
           },
           execute: async (args: any) => {
-            const { title, snippet, problemDescription } = args;
-            const res = await this.summarizer.summarizeSnippet(title, snippet, problemDescription);
-            return JSON.stringify(res);
+            try {
+              const result = await orchestrator.analysisTools.analyzePriorArt({
+                title: args.title,
+                abstract: args.abstract || '',
+                sourceType: args.sourceType,
+                problemDescription: args.problemDescription,
+              });
+              return JSON.stringify(result);
+            } catch (err) {
+              return JSON.stringify({ relevant: false, relevanceScore: 0, error: String(err) });
+            }
+          },
+        },
+        {
+          name: 'compare_approaches',
+          description: 'Compare multiple technical approaches side-by-side. Provide strengths, weaknesses, maturity, trade-offs, and recommendations.',
+          parameters: {
+            type: 'object',
+            properties: {
+              approaches: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    title: { type: 'string' },
+                    summary: { type: 'string' },
+                    improvingParameter: { type: 'string' },
+                    worseningParameter: { type: 'string' },
+                    trizPrinciples: { type: 'array', items: { type: 'object', properties: { index: { type: 'number' }, name: { type: 'string' } } } },
+                    technologyApproach: { type: 'string' },
+                  },
+                },
+              },
+              problemDescription: { type: 'string' },
+            },
+            required: ['approaches', 'problemDescription'],
+          },
+          execute: async (args: any) => {
+            try {
+              const result = await orchestrator.analysisTools.compareApproaches({
+                approaches: args.approaches || [],
+                problemDescription: args.problemDescription,
+              });
+              return JSON.stringify(result);
+            } catch (err) {
+              return JSON.stringify({ error: String(err) });
+            }
+          },
+        },
+        {
+          name: 'assess_maturity',
+          description: 'Assess technology readiness (TRL 1-9), S-curve stage, lifecycle timeline, and key milestones.',
+          parameters: {
+            type: 'object',
+            properties: {
+              technologyName: { type: 'string' },
+              searchResults: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { title: { type: 'string' }, abstract: { type: 'string' }, publishedDate: { type: 'string' } },
+                },
+              },
+              problemDescription: { type: 'string' },
+            },
+            required: ['technologyName', 'problemDescription'],
+          },
+          execute: async (args: any) => {
+            try {
+              const result = await orchestrator.analysisTools.assessMaturity({
+                technologyName: args.technologyName,
+                searchResults: args.searchResults || [],
+                problemDescription: args.problemDescription,
+              });
+              return JSON.stringify(result);
+            } catch (err) {
+              return JSON.stringify({ error: String(err) });
+            }
+          },
+        },
+        {
+          name: 'identify_bottlenecks',
+          description: 'Identify critical technology bottlenecks with TRIZ contradiction mapping for each.',
+          parameters: {
+            type: 'object',
+            properties: {
+              technologyName: { type: 'string' },
+              searchResults: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { title: { type: 'string' }, abstract: { type: 'string' } },
+                },
+              },
+              problemDescription: { type: 'string' },
+              currentTRL: { type: 'number' },
+              currentSCurveStage: { type: 'string' },
+            },
+            required: ['technologyName', 'problemDescription'],
+          },
+          execute: async (args: any) => {
+            try {
+              const result = await orchestrator.analysisTools.identifyBottlenecks({
+                technologyName: args.technologyName,
+                searchResults: args.searchResults || [],
+                problemDescription: args.problemDescription,
+                currentTRL: args.currentTRL || 5,
+                currentSCurveStage: args.currentSCurveStage || 'growth',
+              });
+              return JSON.stringify(result);
+            } catch (err) {
+              return JSON.stringify({ error: String(err) });
+            }
+          },
+        },
+        {
+          name: 'forecast_trends',
+          description: 'Forecast technology trends — convergence points, disruptive threats, time horizons, and actionable recommendations.',
+          parameters: {
+            type: 'object',
+            properties: {
+              technologyName: { type: 'string' },
+              searchResults: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { title: { type: 'string' }, abstract: { type: 'string' }, publishedDate: { type: 'string' } },
+                },
+              },
+              bottlenecks: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { name: { type: 'string' }, severity: { type: 'string' } },
+                },
+              },
+              currentSCurveStage: { type: 'string' },
+              problemDescription: { type: 'string' },
+            },
+            required: ['technologyName', 'problemDescription'],
+          },
+          execute: async (args: any) => {
+            try {
+              const result = await orchestrator.analysisTools.forecastTrends({
+                technologyName: args.technologyName,
+                searchResults: args.searchResults || [],
+                bottlenecks: args.bottlenecks || [],
+                currentSCurveStage: args.currentSCurveStage || 'growth',
+                problemDescription: args.problemDescription,
+              });
+              return JSON.stringify(result);
+            } catch (err) {
+              return JSON.stringify({ error: String(err) });
+            }
           },
         },
       ],
@@ -173,7 +360,7 @@ Return ONLY a JSON object with the report structure. No markdown, no explanation
   ): Promise<UnifiedResearchResult> {
     const lang = this.locale.language;
     const langPrefix = this.locale.language === 'zh'
-      ? '【中文模式】你必须用中文进行所有思考、推理和输出。包括内部推理过程、分析、总结都用中文。\n\n'
+      ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
     this.errors = [];
     this.metadata = {
@@ -185,658 +372,320 @@ Return ONLY a JSON object with the report structure. No markdown, no explanation
     };
 
     if (!this.agent) {
-      try {
-        await this.initialize();
-      } catch (err) {
-        this.addError('orchestrator', `Failed to initialize AI agent: ${err instanceof Error ? err.message : String(err)}`, 'error');
-      }
+      await this.withRetry('initialization', () => this.initialize());
     }
 
-    const maxResults = config.maxSearchResults || 5;
     const onProgress = config.onProgress || (() => {});
     const onThinking = config.onThinking || (() => {});
     const showThinking = config.showThinking ?? true;
+    const maxResults = config.maxSearchResults || 5;
+    const maxRetries = config.maxRetries || 2;
 
-    // Step 1: Extract search keywords from problem description
-    onProgress('keywords', progressMsg('extractingKeywords', lang));
-    
-    // We now let the agent drive the entire research process using tools.
-    // We'll use streamAgent with a prompt that encourages tool use for searching and summarizing.
-    
-    const researchPrompt = `${langPrefix}You are now starting the research for: "${problemDescription}".
-    
-    Your goal is to produce a comprehensive research report. 
-    To do this, you MUST:
-    1. Use 'search_prior_art' to find relevant patents, papers, and technical solutions.
-    2. Use 'summarize_result' to analyze the most promising results.
-    3. After gathering enough evidence, generate the final JSON report.
-
-    Step 1: Start by extracting keywords and searching for prior art.
-    Step 2: Analyze the results.
-    Step 3: Provide the final JSON report.
-
-    Current Problem: ${problemDescription}
-    ${config.skillContent ? `Relevant Skill Knowledge:\n${config.skillContent}` : ''}
-
-    Begin research now.`;
-
-    let finalResponse = '';
-    try {
-      finalResponse = await streamAgent(this.agent!, researchPrompt, {
-        onThinking: (text) => {
-          if (showThinking) onThinking(text);
-        },
-        onToolCall: (name) => {
-          onProgress('tool', `${progressMsg('callingTool', lang)}: ${name}`);
-        },
-      });
-      this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
-    } catch (err) {
-      this.addError('orchestrator', `Research loop failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
-    }
-
-    const aiAnalysis = this.parseAIAnalysisWithSchema(finalResponse);
-    
-    // Fallback and TRIZ Analysis (kept from original logic as it's a separate service)
-    const fallbackParams = this.extractParametersFallback(problemDescription);
-    aiAnalysis.improvingParameter = aiAnalysis.improvingParameter || fallbackParams.improvingParameter;
-    aiAnalysis.worseningParameter = aiAnalysis.worseningParameter || fallbackParams.worseningParameter;
-    aiAnalysis.technologyName = aiAnalysis.technologyName || fallbackParams.technologyName;
-    aiAnalysis.performanceMetric = aiAnalysis.performanceMetric || fallbackParams.performanceMetric;
-    onProgress('analyze', `${progressMsg('extracted', lang)}: improving="${aiAnalysis.improvingParameter}", worsening="${aiAnalysis.worseningParameter}"`);
-
-    onProgress('triz', progressMsg('runningTRIZ', lang));
-    let trizResult: UnifiedResearchResult | null = null;
-    try {
-      trizResult = await this.researchService.research({
-        problemDescription,
-        improvingParameter: aiAnalysis.improvingParameter,
-        worseningParameter: aiAnalysis.worseningParameter,
-        technologyName: aiAnalysis.technologyName,
-        performanceMetric: aiAnalysis.performanceMetric,
-        searchQuery: problemDescription,
-        maxSearchResults: 0,
-        onProgress: (step, message) => {
-          onProgress(step, message);
-        },
-      });
-    } catch (err) {
-      this.addError('triz', `${progressMsg('failedTRIZ', lang)}: ${err instanceof Error ? err.message : String(err)}`, 'warning');
-    }
-    onProgress('triz', `${progressMsg('trizComplete', lang)}: ${trizResult?.contradictionAnalysis?.principles.length || 0} ${progressMsg('principles', lang)}，TRL ${trizResult?.technologyMaturity?.trl.level || 'N/A'}`);
-
-    if (trizResult?.errors) {
-      this.errors.push(...trizResult.errors);
-    }
-
-    // For the final report, since we let the agent do the research, 
-    // we need to extract the prior art it found from its conversation history or the final response.
-    // As a simplification for this refactor, we'll use the results gathered in the session.
-    // Since streamAgent doesn't easily return the tool results, we'll adapt the buildFinalReport.
-    
-    const finalReport = this.buildFinalReport(
-      problemDescription,
-      { patents: [], papers: [], techSolutions: [] }, // In a real scenario, we'd track tool results here
-      trizResult,
-      aiAnalysis,
-      null,
+    // ======= PHASE 1: CODE-FORCED SEARCH =======
+    const allSearchResults = await this.executeSearchPhase(
+      problemDescription, lang, langPrefix, maxResults, onProgress
     );
+
+    const technologyName = this.parsedTechnologyName || problemDescription.slice(0, 40);
+
+    // ======= PHASE 2: PER-RESULT TRIZ ANALYSIS (sequential — Agent.stream() is not reentrant) =======
+    onProgress('analysis', `${progressMsg('analyzingPriorArt', lang)} (${allSearchResults.length} results)...`);
+    const artAnalyses: any[] = [];
+    for (let i = 0; i < allSearchResults.length; i++) {
+      const r = allSearchResults[i];
+      const result = await this.withRetry(`prior-art-${i}`, () =>
+        this.analysisTools.analyzePriorArt({
+          title: r.title,
+          abstract: r.snippet,
+          sourceType: r.sourceType,
+          problemDescription,
+        }),
+        maxRetries
+      );
+      artAnalyses.push(result);
+      this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+    }
+
+    // ======= PHASE 3: SYNTHESIS (sequential, each retryable) =======
+    onProgress('analysis', `${progressMsg('identifyingBottlenecks', lang)}...`);
+    const bottlenecks = await this.withRetry('bottlenecks', () =>
+      this.analysisTools.identifyBottlenecks({
+        technologyName,
+        searchResults: allSearchResults.map(r => ({ title: r.title, abstract: r.snippet })),
+        problemDescription,
+        currentTRL: 5,
+        currentSCurveStage: 'unknown',
+      }),
+      maxRetries
+    );
+    this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+
+    onProgress('analysis', `${progressMsg('assessingMaturity', lang)}...`);
+    const maturity = await this.withRetry('maturity', () =>
+      this.analysisTools.assessMaturity({
+        technologyName,
+        searchResults: allSearchResults.map(r => ({ title: r.title, abstract: r.snippet, publishedDate: r.publishedDate || '' })),
+        problemDescription,
+      }),
+      maxRetries
+    );
+    this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+
+    onProgress('analysis', `${progressMsg('forecastingTrends', lang)}...`);
+    const trends = await this.withRetry('trends', () =>
+      this.analysisTools.forecastTrends({
+        technologyName,
+        searchResults: allSearchResults.map(r => ({ title: r.title, abstract: r.snippet, publishedDate: r.publishedDate || '' })),
+        bottlenecks: (bottlenecks?.bottlenecks || []).map((b: any) => ({ name: b.name, severity: b.severity })),
+        currentSCurveStage: maturity?.sCurveStage || 'unknown',
+        problemDescription,
+      }),
+      maxRetries
+    );
+    this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+
+    onProgress('analysis', `${progressMsg('comparingApproaches', lang)}...`);
+    const comparison = await this.withRetry('comparison', () =>
+      this.analysisTools.compareApproaches({
+        approaches: artAnalyses
+          .filter((a: any) => a && a.relevant !== false)
+          .map((a: any) => ({
+            title: a.summary?.slice(0, 60) || 'Unknown',
+            summary: a.summary || a.keyFindings?.join('; ') || '',
+            improvingParameter: a.improvingParameter || 'unknown',
+            worseningParameter: a.worseningParameter || 'unknown',
+            trizPrinciples: a.trizPrinciples || [],
+            technologyApproach: a.technologyApproach || 'unknown',
+          })),
+        problemDescription,
+      }),
+      maxRetries
+    );
+    this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+
+    // ======= PHASE 4: REPORT GENERATION =======
+    onProgress('report', `${progressMsg('generatingReport', lang)}...`);
+    const finalReport = await this.generateReport({
+      lang, langPrefix, problemDescription, config,
+      allSearchResults, artAnalyses, bottlenecks, maturity, trends, comparison, technologyName,
+      onProgress, onThinking, showThinking
+    });
 
     this.metadata.completedAt = Date.now();
     this.metadata.durationMs = this.metadata.completedAt - (this.metadata.startedAt || 0);
+    this.metadata.sourcesUsed = allSearchResults.length > 0
+      ? [...new Set(allSearchResults.map(r => r.sourceType))]
+      : [];
 
     return {
-      summary: finalReport,
-      contradictionAnalysis: trizResult?.contradictionAnalysis,
+      summary: finalReport || t('noReportGenerated', lang),
       priorArt: {
-        patents: [],
-        papers: [],
-        techSolutions: [],
+        patents: allSearchResults.filter(r => r.sourceType === 'patent') as PriorArtItem[],
+        papers: allSearchResults.filter(r => r.sourceType === 'paper') as PriorArtItem[],
+        techSolutions: allSearchResults.filter(r => r.sourceType === 'tech_solution') as PriorArtItem[],
       },
-      technologyMaturity: trizResult?.technologyMaturity,
-      recommendations: trizResult?.recommendations || [],
+      recommendations: [],
       errors: this.errors,
       metadata: this.metadata as ResearchMetadata,
     };
   }
 
-  private async searchWithTracking(
-    queries: { patentQuery: string; paperQuery: string; techQuery: string },
-    maxResults: number,
-  ): Promise<[SearchResult[], SearchResult[], SearchResult[]]> {
-    const cache = this.searchService.getCache();
-    const keys = [
-      `patents:${queries.patentQuery}:${maxResults}`,
-      `papers:${queries.paperQuery}:${maxResults}`,
-      `tech:${queries.techQuery}:${maxResults}`,
-    ];
+  private parsedTechnologyName = '';
 
-    for (const key of keys) {
-      if (cache.get(key)) {
-        this.metadata.cacheHits = (this.metadata.cacheHits || 0) + 1;
-      } else {
-        this.metadata.cacheMisses = (this.metadata.cacheMisses || 0) + 1;
-      }
-    }
+  private async executeSearchPhase(
+    problemDescription: string, lang: string, langPrefix: string, maxResults: number,
+    onProgress: (phase: string, msg: string) => void
+  ): Promise<{ title: string; snippet: string; url: string; publishedDate?: string; authors?: string[]; sourceType: string }[]> {
+    onProgress('search', `CODE-FORCED: ${progressMsg('extractingKeywords', lang)}...`);
+    let allSearchResults: { title: string; snippet: string; url: string; publishedDate?: string; authors?: string[]; sourceType: string }[] = [];
 
-    const [patents, papers, techSolutions] = await Promise.all([
-      this.searchService.searchPatents(queries.patentQuery, maxResults),
-      this.searchService.searchPapers(queries.paperQuery, maxResults),
-      this.searchService.searchTechSolutions(queries.techQuery, maxResults),
-    ]);
+    try {
+      const keywordPrompt = `${langPrefix}Extract research keywords. Return ONLY JSON.
 
-    this.metadata.sourcesUsed = [
-      patents.length > 0 ? 'patents' : '',
-      papers.length > 0 ? 'papers' : '',
-      techSolutions.length > 0 ? 'tech_solutions' : '',
-    ].filter(Boolean);
+Problem: ${problemDescription}
 
-    return [patents, papers, techSolutions];
-  }
+{
+  "patentQueryEn": "3-5 English patent keywords",
+  "patentQueryZh": "3-5 Chinese patent keywords",
+  "paperQueryEn": "3-5 English paper keywords",
+  "paperQueryZh": "3-5 Chinese paper keywords",
+  "techQueryEn": "3-5 English tech solution keywords",
+  "techQueryZh": "3-5 Chinese tech solution keywords",
+  "technologyName": "short technology name"
+}`;
 
-  private mergeResults(en: SearchResult[], zh: SearchResult[]): SearchResult[] {
-    const seen = new Set<string>();
-    const merged: SearchResult[] = [];
-    for (const r of [...en, ...zh]) {
-      const key = r.title.toLowerCase().trim();
-      if (!seen.has(key)) {
+      const keywordResponse = await streamAgentCollect(this.agent!, keywordPrompt);
+      this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+      const kw = this.parseKeywords(keywordResponse);
+      this.parsedTechnologyName = kw.technologyName;
+
+      const [[pEn, paEn, tEn], [pZh, paZh, tZh]] = await Promise.all([
+        Promise.all([
+          this.searchService.searchPatents(kw.patentQueryEn, maxResults),
+          this.searchService.searchPapers(kw.paperQueryEn, maxResults),
+          this.searchService.searchTechSolutions(kw.techQueryEn, maxResults),
+        ]),
+        Promise.all([
+          this.searchService.searchPatents(kw.patentQueryZh || kw.patentQueryEn, maxResults),
+          this.searchService.searchPapers(kw.paperQueryZh || kw.paperQueryEn, maxResults),
+          this.searchService.searchTechSolutions(kw.techQueryZh || kw.techQueryEn, maxResults),
+        ]),
+      ]);
+
+      const pushResults = (items: SearchResult[], sourceType: string) => {
+        for (const item of items) {
+          allSearchResults.push({
+            title: item.title,
+            snippet: item.snippet.slice(0, 600),
+            url: item.url,
+            publishedDate: item.publishedDate,
+            authors: item.authors,
+            sourceType,
+          });
+        }
+      };
+
+      pushResults(pEn, 'patent');
+      pushResults(paEn, 'paper');
+      pushResults(tEn, 'tech_solution');
+      pushResults(pZh, 'patent');
+      pushResults(paZh, 'paper');
+      pushResults(tZh, 'tech_solution');
+
+      const seen = new Set<string>();
+      allSearchResults = allSearchResults.filter(r => {
+        const key = r.title.toLowerCase().trim();
+        if (seen.has(key)) return false;
         seen.add(key);
-        merged.push(r);
-      }
+        return true;
+      });
+
+      onProgress('search', `${progressMsg('foundResults', lang)} ${allSearchResults.length} results total`);
+    } catch (err) {
+      this.addError('search', `Code-forced search failed: ${err instanceof Error ? err.message : String(err)}`, 'warning');
     }
-    return merged;
+
+    return allSearchResults;
   }
 
-  private async summarizeAllResultsParallel(
-    results: { patents: SearchResult[]; papers: SearchResult[]; techSolutions: SearchResult[] },
-    problemDescription: string,
-    onProgress: (step: string, message: string) => void,
-  ): Promise<{
-    patents: PriorArtItem[];
-    papers: PriorArtItem[];
-    techSolutions: PriorArtItem[];
-  }> {
-    const lang = this.locale.language;
-    const allItems = [
-      ...results.patents.map((item, i) => ({ item, type: 'patent' as const, index: i })),
-      ...results.papers.map((item, i) => ({ item, type: 'paper' as const, index: i })),
-      ...results.techSolutions.map((item, i) => ({ item, type: 'tech_solution' as const, index: i })),
+  private async generateReport(params: {
+    lang: string; langPrefix: string; problemDescription: string; config: AIResearchConfig;
+    allSearchResults: any[]; artAnalyses: any[]; bottlenecks: any; maturity: any; trends: any; comparison: any; technologyName: string;
+    onProgress: (phase: string, msg: string) => void; onThinking: (text: string) => void; showThinking: boolean;
+  }): Promise<string> {
+    const { lang, langPrefix, problemDescription, config, allSearchResults, artAnalyses, bottlenecks, maturity, trends, comparison, technologyName } = params;
+
+    const searchDataBlock = allSearchResults.length > 0
+      ? allSearchResults.map(r =>
+          `[${r.sourceType.toUpperCase()}] ${r.title} (${r.publishedDate || 'N/A'})\n  Abstract: ${r.snippet}\n  URL: ${r.url}`
+        ).join('\n\n')
+      : 'NO SEARCH RESULTS FOUND.';
+
+    const prefs = config.preferences ? `\nRESEARCHER PREFERENCES: ${config.preferences}` : '';
+
+    const analysesBlock = [
+      `TRIZ PRIOR ART ANALYSES (${artAnalyses.length} items):`,
+      ...artAnalyses.map((a, i) => `[${i + 1}] ${JSON.stringify(a)}`),
+      `\nBOTTLENECKS: ${JSON.stringify(bottlenecks)}`,
+      `MATURITY: ${JSON.stringify(maturity)}`,
+      `TRENDS: ${JSON.stringify(trends)}`,
+      `COMPARISON: ${JSON.stringify(comparison)}`,
+    ].join('\n');
+
+    const reportPrompt = `${langPrefix}FINAL REPORT GENERATION
+
+TECHNOLOGY: ${technologyName}
+PROBLEM: ${problemDescription}${prefs}
+${config.skillContent ? `\nDOMAIN KNOWLEDGE:\n${config.skillContent}` : ''}
+
+CITED LITERATURE (${allSearchResults.length} search results):
+${searchDataBlock}
+
+ANALYSIS DATA (pre-computed by specialized agents):
+${analysesBlock}
+
+Generate a comprehensive data-driven research report with all 9 standard sections.
+- Cite specific sources by number: [1], [2], etc. matching the cited literature above.
+- The analysis data is pre-computed — synthesize it, do not re-analyze.
+- If any data is missing or analysis returned an error, note the gap honestly.
+- Express uncertainty where data is limited.
+- Use numbered references with a bibliography section at the end.`;
+
+    try {
+      const report = await streamAgent(this.agent!, reportPrompt, {
+        onThinking: (text) => {
+          if (params.showThinking) params.onThinking(text);
+        },
+        onToolCall: (name) => {
+          params.onProgress('tool', `${progressMsg('callingTool', lang)}: ${name}`);
+        },
+      });
+      this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
+      return report;
+    } catch (err) {
+      this.addError('report', `Report generation failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+      return this.buildFallbackReport({
+        lang, problemDescription, technologyName, allSearchResults, artAnalyses, bottlenecks, maturity, trends, comparison, config
+      });
+    }
+  }
+
+  private buildFallbackReport(data: {
+    lang: string; problemDescription: string; technologyName: string;
+    allSearchResults: any[]; artAnalyses: any[]; bottlenecks: any; maturity: any; trends: any; comparison: any; config: AIResearchConfig;
+  }): string {
+    const { lang, problemDescription, technologyName, allSearchResults, artAnalyses, bottlenecks, maturity, trends, comparison, config } = data;
+    const results = allSearchResults.map((r, i) => `[${i + 1}] **${r.title}** (${r.sourceType}) — ${r.snippet.slice(0, 150)}`);
+    const sections = [
+      `# ${technologyName} Research Report\n\n**Problem:** ${problemDescription}\n`,
+      `## Methodology\n${t('methodologyText', lang)} (${allSearchResults.length} sources, ${artAnalyses.length} analyzed)`,
+      `## Search Results\n${results.join('\n') || 'No search results found.'}`,
+      `## TRIZ Analysis\n\`\`\`json\n${JSON.stringify({ bottlenecks, maturity, trends, comparison }, null, 2)}\n\`\`\``,
     ];
+    if (config.preferences) {
+      sections.push(`## Notes\nResearcher preferences: ${config.preferences}`);
+    }
+    return sections.join('\n\n');
+  }
 
-    const total = allItems.length;
-    let completed = 0;
-
-    const summarizeItem = async (
-      entry: { item: SearchResult; type: 'patent' | 'paper' | 'tech_solution'; index: number },
-    ): Promise<PriorArtItem> => {
+  private async withRetry<T>(
+    phase: string,
+    fn: () => Promise<T>,
+    maxRetries = 2,
+  ): Promise<T> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const summary = await this.summarizer.summarizeSnippet(
-          entry.item.title,
-          entry.item.snippet,
-          problemDescription,
-        );
-        this.metadata.aiCallsMade = (this.metadata.aiCallsMade || 0) + 1;
-        completed++;
-        const typeLabel = entry.type === 'patent' ? t('report.typePatent', lang) : entry.type === 'paper' ? t('report.typePaper', lang) : t('report.typeTech', lang);
-        const summaryPreview = summary.summary.slice(0, 120).replace(/\n/g, ' ');
-        onProgress('summarize', `[${completed}/${total}] ${typeLabel}: ${entry.item.title.slice(0, 60)}... → ${summaryPreview}`);
-        return {
-          ...entry.item,
-          summary,
-          sourceType: entry.type,
-          relevanceScore: this.calculateRelevance(summary, problemDescription),
-        };
-      } catch {
-        completed++;
-        return {
-          ...entry.item,
-          summary: undefined,
-          sourceType: entry.type,
-          relevanceScore: 0,
-        };
-      }
-    };
-
-    const summarized = await Promise.all(allItems.map(summarizeItem));
-
-    const patents = summarized.filter((s): s is PriorArtItem => s.sourceType === 'patent');
-    const papers = summarized.filter((s): s is PriorArtItem => s.sourceType === 'paper');
-    const techSolutions = summarized.filter((s): s is PriorArtItem => s.sourceType === 'tech_solution');
-
-    // Sort by relevance score descending
-    patents.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-    papers.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-    techSolutions.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-
-    return { patents, papers, techSolutions };
-  }
-
-  private calculateRelevance(summary: SummarizationResult, problemDescription: string): number {
-    const problemLower = problemDescription.toLowerCase();
-    const problemKeywords = problemLower.split(/\s+/).filter(w => w.length > 3);
-
-    let score = 0;
-    const summaryText = `${summary.summary} ${summary.keyFindings.join(' ')} ${summary.relevanceToProblem}`.toLowerCase();
-
-    for (const keyword of problemKeywords) {
-      if (summaryText.includes(keyword)) score += 1;
-    }
-
-    // Bonus for high confidence
-    if (summary.confidence && summary.confidence > 0.7) score += 2;
-
-    // Penalty for low relevance statements
-    if (summary.relevanceToProblem.toLowerCase().includes('low relevance')) score -= 3;
-    if (summary.relevanceToProblem.toLowerCase().includes('not relevant')) score -= 5;
-
-    return Math.max(0, score);
-  }
-
-  private buildAnalysisPrompt(
-    problemDescription: string,
-    results: { patents: PriorArtItem[]; papers: PriorArtItem[]; techSolutions: PriorArtItem[] },
-    skillContent?: string,
-  ): string {
-    const formatResult = (r: PriorArtItem) => {
-      const summaryText = r.summary
-        ? `Summary: ${r.summary.summary}\nKey Findings: ${r.summary.keyFindings.join(', ')}\nRelevance: ${r.summary.relevanceToProblem}`
-        : 'No summary available';
-      return `Title: ${r.title}\nDate: ${r.publishedDate || 'N/A'}\nAuthors: ${r.authors?.join(', ') || 'N/A'}\n${summaryText}`;
-    };
-
-    const langPrefix = this.locale.language === 'zh'
-      ? '【中文模式】你必须用中文进行所有思考、推理和输出。包括内部推理过程、分析、总结都用中文。\n\n'
-      : '';
-
-    let prompt = `${langPrefix}Analyze this problem and prior art:\n\nPROBLEM: ${problemDescription}\n\n`;
-    
-    if (skillContent) {
-      prompt += `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n(Apply the instructions from the skill block above to guide your analysis if relevant.)\n\n`;
-    }
-
-    prompt += `PRIOR ART:
-
-PATENTS:
-${results.patents.map((p, i) => `${i + 1}. ${formatResult(p)}`).join('\n\n')}
-
-PAPERS:
-${results.papers.map((p, i) => `${i + 1}. ${formatResult(p)}`).join('\n\n')}
-
-TECH SOLUTIONS:
-${results.techSolutions.map((t, i) => `${i + 1}. ${formatResult(t)}`).join('\n\n')}
-
-Extract these fields. For improvingParameter and worseningParameter, use ONLY these exact names from the 39 TRIZ engineering parameters:
-Weight of moving object, Weight of stationary object, Length of moving object, Length of stationary object, Area of moving object, Area of stationary object, Volume of moving object, Volume of stationary object, Speed, Force, Stress or pressure, Shape, Stability, Strength, Durability of moving object, Durability of stationary object, Temperature, Brightness, Energy spent by moving object, Energy spent by stationary object, Power, Loss of energy, Loss of substance, Loss of information, Loss of time, Amount of substance, Reliability, Measurement accuracy, Manufacturing precision, Harmful effects on object, Manufacturability, Convenience of use, Repairability, Adaptability, Complexity, Difficulty of detecting, Extent of automation, Productivity
-
-Return ONLY valid JSON matching this schema:
-{
-  "improvingParameter": "EXACT parameter name from list above",
-  "worseningParameter": "EXACT parameter name from list above",
-  "technologyName": "string",
-  "performanceMetric": "string",
-  "keyInsights": ["string", "string", "string"],
-  "recommendedApproach": "string"
-}`;
-
-    return prompt;
-  }
-
-  private parseAIAnalysisWithSchema(response: string): ExtractedParameters {
-    try {
-      // Try to extract JSON from markdown code blocks first
-      const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (codeBlockMatch) {
-        const parsed = JSON.parse(codeBlockMatch[1].trim());
-        return this.validateExtractedParameters(parsed);
-      }
-
-      // Try to find any JSON object
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return this.validateExtractedParameters(parsed);
-      }
-    } catch {
-      // Will fall through to empty return
-    }
-
-    this.addError('parse', 'Failed to parse AI analysis response as JSON', 'warning');
-    return {};
-  }
-
-  private validateExtractedParameters(parsed: unknown): ExtractedParameters {
-    if (typeof parsed !== 'object' || parsed === null) {
-      return {};
-    }
-
-    const result: ExtractedParameters = {};
-    const obj = parsed as Record<string, unknown>;
-
-    if (typeof obj.improvingParameter === 'string' && obj.improvingParameter.length > 0) {
-      result.improvingParameter = obj.improvingParameter;
-    }
-    if (typeof obj.worseningParameter === 'string' && obj.worseningParameter.length > 0) {
-      result.worseningParameter = obj.worseningParameter;
-    }
-    if (typeof obj.technologyName === 'string' && obj.technologyName.length > 0) {
-      result.technologyName = obj.technologyName;
-    }
-    if (typeof obj.performanceMetric === 'string' && obj.performanceMetric.length > 0) {
-      result.performanceMetric = obj.performanceMetric;
-    }
-    if (Array.isArray(obj.keyInsights) && obj.keyInsights.length > 0) {
-      result.keyInsights = obj.keyInsights.filter((i): i is string => typeof i === 'string');
-    }
-    if (typeof obj.recommendedApproach === 'string' && obj.recommendedApproach.length > 0) {
-      result.recommendedApproach = obj.recommendedApproach;
-    }
-
-    return result;
-  }
-
-  private buildKeywordPrompt(problemDescription: string, skillContent?: string): string {
-    let prompt = `Extract optimized search keywords for prior art research based on this problem:\n\nProblem: "${problemDescription}"\n\n`;
-    
-    if (skillContent) {
-      prompt += `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n(Use the domain knowledge from the skill block above to guide your keyword selection if relevant.)\n\n`;
-    }
-
-    prompt += `Generate SIX sets of search keywords — THREE in English and THREE in Chinese — optimized for different databases.
-
-Target databases:
-1. English patentQuery: For patent databases (Google Patents, USPTO, EPO, etc.) - English technical terms
-2. Chinese patentQuery: For patent databases (CNIPA, Google Patents CN, etc.) - Chinese technical terms
-3. English paperQuery: For academic databases (CrossRef, OpenAlex, etc.) - English academic terminology
-4. Chinese paperQuery: For academic databases (CNKI, WanFang, etc.) - Chinese academic terminology
-5. English techQuery: For technical articles and solutions - English industry terms
-6. Chinese techQuery: For technical articles and solutions - Chinese industry terms
-
-Rules:
-- Include synonyms, abbreviations, and related terms
-- DO NOT mix English and Chinese in the same query — keep them strictly separated
-- Separate keywords with spaces (for OR-style search)
-- Don't use overly specific phrases - keep it broad enough to catch relevant results
-
-Example format:
-"electric vehicle EV battery energy density range lightweight cost optimization materials solid-state lithium-ion"
-
-Return ONLY valid JSON:
-{
-  "patentQueryEn": "english keywords for patent search",
-  "patentQueryZh": "中文关键词用于专利搜索",
-  "paperQueryEn": "english keywords for paper search",
-  "paperQueryZh": "中文关键词用于论文搜索",
-  "techQueryEn": "english keywords for tech solutions search",
-  "techQueryZh": "中文关键词用于技术方案搜索",
-  "reasoning": "brief explanation of keyword choices"
-}`;
-    return prompt;
-  }
-
-  private parseSearchKeywords(response: string): ExtractedSearchKeywords | null {
-    try {
-      const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (codeBlockMatch) {
-        const parsed = JSON.parse(codeBlockMatch[1].trim());
-        return this.validateSearchKeywords(parsed);
-      }
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return this.validateSearchKeywords(parsed);
-      }
-    } catch {
-      // Fall through
-    }
-    return null;
-  }
-
-  private validateSearchKeywords(parsed: unknown): ExtractedSearchKeywords | null {
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    const obj = parsed as Record<string, unknown>;
-
-    const patentQueryEn = typeof obj.patentQueryEn === 'string' ? obj.patentQueryEn.trim() : '';
-    const patentQueryZh = typeof obj.patentQueryZh === 'string' ? obj.patentQueryZh.trim() : '';
-    const paperQueryEn = typeof obj.paperQueryEn === 'string' ? obj.paperQueryEn.trim() : '';
-    const paperQueryZh = typeof obj.paperQueryZh === 'string' ? obj.paperQueryZh.trim() : '';
-    const techQueryEn = typeof obj.techQueryEn === 'string' ? obj.techQueryEn.trim() : '';
-    const techQueryZh = typeof obj.techQueryZh === 'string' ? obj.techQueryZh.trim() : '';
-    const reasoning = typeof obj.reasoning === 'string' ? obj.reasoning : '';
-
-    if (!patentQueryEn && !patentQueryZh) return null;
-    if (!paperQueryEn && !paperQueryZh) return null;
-    if (!techQueryEn && !techQueryZh) return null;
-
-    return {
-      patentQueryEn,
-      patentQueryZh,
-      paperQueryEn,
-      paperQueryZh,
-      techQueryEn,
-      techQueryZh,
-      reasoning,
-    };
-  }
-
-  private extractParametersFallback(problemDescription: string): ExtractedParameters {
-    const lower = problemDescription.toLowerCase();
-
-    if (lower.includes('small') || lower.includes('size') || lower.includes('compact') || lower.includes('miniatur')) {
-      return {
-        improvingParameter: 'Size of moving object',
-        worseningParameter: 'Loss of information',
-        technologyName: 'Antenna Technology',
-        performanceMetric: 'Signal range (km)',
-      };
-    }
-
-    if (lower.includes('strength') || lower.includes('power') || lower.includes('durability')) {
-      return {
-        improvingParameter: 'Strength',
-        worseningParameter: 'Weight',
-        technologyName: 'Material Technology',
-        performanceMetric: 'Strength-to-weight ratio',
-      };
-    }
-
-    if (lower.includes('续航') || lower.includes('range') || lower.includes('duration') || lower.includes('speed')) {
-      return {
-        improvingParameter: 'Speed',
-        worseningParameter: 'Weight',
-        technologyName: 'Battery Technology',
-        performanceMetric: 'Energy density (Wh/kg)',
-      };
-    }
-
-    return {
-      improvingParameter: 'Productivity',
-      worseningParameter: 'Complexity',
-      technologyName: 'System',
-      performanceMetric: 'Performance',
-    };
-  }
-
-  private buildFinalReport(
-    problemDescription: string,
-    results: { patents: PriorArtItem[]; papers: PriorArtItem[]; techSolutions: PriorArtItem[] },
-    trizResult: UnifiedResearchResult | null,
-    aiAnalysis: ExtractedParameters,
-    searchKeywords: ExtractedSearchKeywords | null,
-  ): string {
-    const lang = this.locale.language;
-    const lines: string[] = [];
-
-    lines.push(`# ${t('title', lang)}`);
-    lines.push('');
-    lines.push(`**${t('problem', lang)}:** ${problemDescription}`);
-    lines.push(`**${t('date', lang)}:** ${new Date().toISOString().split('T')[0]}`);
-    lines.push('');
-
-    // Search keywords
-    if (searchKeywords) {
-      lines.push(`## ${t('searchKeywords', lang)}`);
-      lines.push('');
-      lines.push(`| ${t('source', lang) || 'Source'} | Query |`);
-      lines.push(`|--------|-------|`);
-      lines.push(`| 🔍 ${t('patents', lang)} (EN) | \`${searchKeywords.patentQueryEn}\` |`);
-      if (searchKeywords.patentQueryZh) {
-        lines.push(`| 🔍 ${t('patents', lang)} (ZH) | \`${searchKeywords.patentQueryZh}\` |`);
-      }
-      lines.push(`| 📚 ${t('academicPapersTitle', lang)} (EN) | \`${searchKeywords.paperQueryEn}\` |`);
-      if (searchKeywords.paperQueryZh) {
-        lines.push(`| 📚 ${t('academicPapersTitle', lang)} (ZH) | \`${searchKeywords.paperQueryZh}\` |`);
-      }
-      lines.push(`| 🔧 ${t('technicalSolutions', lang)} (EN) | \`${searchKeywords.techQueryEn}\` |`);
-      if (searchKeywords.techQueryZh) {
-        lines.push(`| 🔧 ${t('technicalSolutions', lang)} (ZH) | \`${searchKeywords.techQueryZh}\` |`);
-      }
-      if (searchKeywords.reasoning) {
-        lines.push('');
-        lines.push(`**${t('reasoning', lang) || 'Reasoning'}:** ${searchKeywords.reasoning}`);
-      }
-      lines.push('');
-    }
-
-    // Confidence banner
-    const errorCount = this.errors.filter(e => e.severity === 'error').length;
-    const warningCount = this.errors.filter(e => e.severity === 'warning').length;
-    if (errorCount > 0 || warningCount > 0) {
-      lines.push(`> ⚠️ **${t('analysisQuality', lang) || 'Analysis Quality'}:** ${errorCount} ${t('errors', lang) || 'error(s)'}，${warningCount} ${t('warnings', lang) || 'warning(s)'}。${t('reviewErrors', lang) || 'Review errors section for details.'}`);
-      lines.push('');
-    }
-
-    // Executive Summary
-    lines.push(`## ${t('executiveSummary', lang)}`);
-    lines.push('');
-    if (aiAnalysis.keyInsights && aiAnalysis.keyInsights.length > 0) {
-      lines.push(`**${t('keyInsights', lang) || 'Key Insights'}:**`);
-      lines.push('');
-      for (const insight of aiAnalysis.keyInsights.slice(0, 3)) {
-        lines.push(`- ${insight}`);
-      }
-      lines.push('');
-    }
-    if (aiAnalysis.recommendedApproach) {
-      lines.push(`**${t('recommendedApproach', lang) || 'Recommended Approach'}:** ${aiAnalysis.recommendedApproach}`);
-      lines.push('');
-    }
-
-    // Prior Art with AI Summaries (sorted by relevance)
-    lines.push(`## ${t('priorArtAnalysis', lang)}`);
-    lines.push('');
-
-    const renderItems = (items: PriorArtItem[], category: string) => {
-      if (items.length === 0) return;
-      lines.push(`### ${category}（${items.length} ${t('found', lang) || 'found'}）`);
-      lines.push('');
-      for (const item of items) {
-        const relevanceBadge = item.relevanceScore !== undefined
-          ? ` [${t('relevance', lang) || 'Relevance'}: ${item.relevanceScore}]`
-          : '';
-        lines.push(`**${item.title}**${relevanceBadge}`);
-        lines.push(`- **${t('date', lang)}:** ${item.publishedDate || 'N/A'}`);
-        lines.push(`- **${t('authors', lang)}:** ${item.authors?.join(', ') || 'N/A'}`);
-        if (item.summary) {
-          lines.push(`- **${t('summary', lang)}:** ${item.summary.summary}`);
-          lines.push(`- **${t('keyFindings', lang) || 'Key Findings'}:** ${item.summary.keyFindings.join('; ')}`);
-          lines.push(`- **${t('relevance', lang) || 'Relevance'}:** ${item.summary.relevanceToProblem}`);
-          if (item.summary.trizPrinciples.length > 0) {
-            lines.push(`- **TRIZ ${t('principles', lang) || 'Principles'}:** ${item.summary.trizPrinciples.join(', ')}`);
-          }
-        } else {
-          lines.push(`- **Summary:** _${t('report.summaryNotAvailable', lang)}_`);
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        if (attempt < maxRetries) {
+          this.addError(phase, `Phase ${phase} attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : String(err)}. Retrying...`, 'warning');
         }
-        lines.push(`- **URL:** ${item.url}`);
-        lines.push('');
-      }
-    };
-
-    renderItems(results.patents, t('categoryPatents', lang));
-    renderItems(results.papers, t('categoryAcademicPapers', lang));
-    renderItems(results.techSolutions, t('technicalSolutions', lang));
-
-    // TRIZ Analysis
-    if (trizResult?.contradictionAnalysis) {
-      lines.push(`## ${t('trizContradictionAnalysis', lang)}`);
-      lines.push('');
-      lines.push(`**${t('improving', lang)}:** ${trizResult.contradictionAnalysis.improvingParameter}`);
-      lines.push(`**${t('worsening', lang)}:** ${trizResult.contradictionAnalysis.worseningParameter}`);
-      lines.push('');
-      lines.push(`**${t('recommendedPrinciples', lang)}:**`);
-      lines.push('');
-      for (const p of trizResult.contradictionAnalysis.principles) {
-        lines.push(`- **#${p.index} ${p.name}**: ${p.description}`);
-      }
-      lines.push('');
-    }
-
-    // Technology Maturity
-    if (trizResult?.technologyMaturity) {
-      const { trl, trlNext, sCurveStage, sCurveStageNext, crossoverYear, sCurveData, svgPath, milestones } = trizResult.technologyMaturity;
-      lines.push(`## ${t('technologyMaturity', lang)}`);
-      lines.push('');
-
-      const estBadge = trl.isEstimated ? ` (_${t('aiEstimate', lang)}_)` : '';
-      const dataBadge = sCurveData.isEstimated ? ` (_${t('aiEstimatedData', lang)}_)` : '';
-
-      lines.push(`- **${t('sCurveStage', lang)}:** ${sCurveStage} → ${sCurveStageNext}${dataBadge}`);
-      lines.push(`- **TRL:** ${trl.level}/9 - ${trlTitle(trl.level, lang)} (${Math.round(trl.confidence * 100)}% ${t('confidence', lang)})${estBadge}`);
-      lines.push(`- **${t('nextGenTRL', lang)}:** ${trlNext.min}-${trlNext.max}/9`);
-      lines.push(`- **${t('crossover', lang)}:** ~${crossoverYear}`);
-      if (sCurveData.dataPointCount > 0) {
-        lines.push(`- **${t('dataPoints', lang)}:** ${sCurveData.dataPointCount}${sCurveData.isEstimated ? ` (${t('estimated', lang)})` : ` (${t('real', lang)})`}`);
-      }
-      if (svgPath) {
-        lines.push(`- **${t('scurveChart', lang)}:** \`${svgPath}\``);
-      }
-      lines.push('');
-
-      if (milestones && milestones.length > 0) {
-        lines.push(`### ${t('keyEventsMilestones', lang)}`);
-        lines.push('');
-        for (const m of milestones) {
-          lines.push(`- **${m.year}** - ${m.label}: ${m.description}`);
-        }
-        lines.push('');
       }
     }
+    this.addError(phase, `Phase ${phase} failed after ${maxRetries + 1} attempts: ${lastErr instanceof Error ? (lastErr as Error).message : String(lastErr)}`, 'error');
+    throw lastErr;
+  }
 
-    // Recommendations
-    lines.push(`## ${t('recommendations', lang)}`);
-    lines.push('');
-    const recs = trizResult?.recommendations || [];
-    for (const r of recs) {
-      lines.push(`- ${r}`);
+  private parseKeywords(raw: string): { patentQueryEn: string; patentQueryZh: string; paperQueryEn: string; paperQueryZh: string; techQueryEn: string; techQueryZh: string; technologyName: string } {
+    const defaults = { patentQueryEn: 'patent technology', patentQueryZh: '', paperQueryEn: 'research paper', paperQueryZh: '', techQueryEn: 'technical solution', techQueryZh: '', technologyName: 'Technology' };
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return defaults;
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        patentQueryEn: parsed.patentQueryEn || defaults.patentQueryEn,
+        patentQueryZh: parsed.patentQueryZh || '',
+        paperQueryEn: parsed.paperQueryEn || defaults.paperQueryEn,
+        paperQueryZh: parsed.paperQueryZh || '',
+        techQueryEn: parsed.techQueryEn || defaults.techQueryEn,
+        techQueryZh: parsed.techQueryZh || '',
+        technologyName: parsed.technologyName || defaults.technologyName,
+      };
+    } catch {
+      return defaults;
     }
-    if (recs.length === 0) {
-      lines.push(`- ${t('noRecommendations', lang)}`);
-    }
-    lines.push('');
-
-    // Errors section
-    if (this.errors.length > 0) {
-      lines.push(`## ${t('analysisErrors', lang)}`);
-      lines.push('');
-      for (const err of this.errors) {
-        const icon = err.severity === 'error' ? '❌' : '⚠️';
-        lines.push(`- ${icon} **[${err.component}]** ${err.message}`);
-      }
-      lines.push('');
-    }
-
-    // Metadata
-    if (this.metadata.completedAt) {
-      lines.push(`## ${t('researchMetadata', lang)}`);
-      lines.push('');
-      lines.push(`- **${t('duration', lang)}:** ${Math.round((this.metadata.durationMs || 0) / 1000)}s`);
-      lines.push(`- **${t('sourcesUsed', lang)}:** ${(this.metadata.sourcesUsed || []).join(', ') || 'none'}`);
-      lines.push(`- **${t('cache', lang) || 'Cache'}:** ${this.metadata.cacheHits || 0} ${t('cacheHits', lang)}, ${this.metadata.cacheMisses || 0} ${t('cacheMisses', lang)}`);
-      lines.push(`- **${t('aiCalls', lang)}:** ${this.metadata.aiCallsMade || 0}`);
-      lines.push('');
-    }
-
-    return lines.join('\n');
   }
 
   private addError(component: string, message: string, severity: 'warning' | 'error'): void {
@@ -853,5 +702,6 @@ Return ONLY valid JSON:
       await this.agent.close();
       this.agent = null;
     }
+    await this.analysisTools.close();
   }
 }

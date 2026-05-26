@@ -5,7 +5,7 @@ import { SuFieldAnalysisService } from '../domain/solution/su_field_service.js';
 import { createReference, enrichReferenceWithSummary } from '../domain/solution/external_reference.js';
 import { MultiSourceSearchService } from '../infrastructure/search/multi_source_search.js';
 import { CachedSearchService, SearchCache } from '../infrastructure/search/cached_search.js';
-import { getMockPatents, getMockPapers, getMockTechSolutions } from '../infrastructure/search/mock_data.js';
+
 import { ContentExtractor } from '../infrastructure/search/content_extractor.js';
 import { CurveFittingService, StageDetectionService, SCurveAnalysisService } from '../domain/s_curve/services.js';
 import { SvgCurveGenerator } from '../domain/s_curve/svg_generator.js';
@@ -194,29 +194,7 @@ test('MultiSource Search Service combined search filters by source type', async 
   }
 });
 
-// ─── Mock Data Tests ───
 
-test('Mock data returns patent results', async () => {
-  const patents = getMockPatents('speed fuel', 3);
-  assert(patents.length === 3, `Returns 3 mock patents (got ${patents.length})`);
-  assert(patents[0].sourceType === 'patent', 'Source type is patent');
-  assert(patents[0].url.startsWith('https://'), 'Patent has valid URL');
-  assert(patents[0].authors && patents[0].authors.length > 0, 'Patent has authors');
-});
-
-test('Mock data returns paper results', async () => {
-  const papers = getMockPapers('TRIZ automotive', 3);
-  assert(papers.length === 3, `Returns 3 mock papers (got ${papers.length})`);
-  assert(papers[0].sourceType === 'paper', 'Source type is paper');
-  assert(papers[0].authors && papers[0].authors.length > 0, 'Paper has authors');
-  assert(!!papers[0].publishedDate, 'Paper has publication date');
-});
-
-test('Mock data returns tech solution results', async () => {
-  const tech = getMockTechSolutions('hybrid vehicle', 2);
-  assert(tech.length === 2, `Returns 2 mock tech solutions (got ${tech.length})`);
-  assert(tech[0].sourceType === 'tech_solution', 'Source type is tech_solution');
-});
 
 // ─── Cached Search Tests ───
 

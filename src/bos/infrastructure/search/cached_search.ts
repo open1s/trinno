@@ -6,20 +6,18 @@ export interface CachedSearchResult {
   results: SearchResult[];
   timestamp: number;
   ttlMs: number;
-  isFallback: boolean;
 }
 
 export class SearchCache {
   private cache: Map<string, CachedSearchResult> = new Map();
   private defaultTtlMs = 5 * 60 * 1000;
 
-  set(query: string, results: SearchResult[], ttlMs?: number, isFallback = false): void {
+  set(query: string, results: SearchResult[], ttlMs?: number): void {
     this.cache.set(query, {
       query,
       results,
       timestamp: Date.now(),
       ttlMs: ttlMs || this.defaultTtlMs,
-      isFallback,
     });
   }
 
@@ -31,11 +29,6 @@ export class SearchCache {
       return null;
     }
     return entry.results;
-  }
-
-  isFallback(query: string): boolean {
-    const entry = this.cache.get(query);
-    return entry?.isFallback || false;
   }
 
   getAll(): CachedSearchResult[] {

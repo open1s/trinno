@@ -298,8 +298,8 @@ export class SvgCurveGenerator {
       let line = `${Math.round(threshold).toString().padStart(4)} │`;
 
       for (let col = 0; col < s1Points.length; col++) {
-        const s1y = s1Points[col].y;
-        const s2y = s2Points[col].y;
+        const s1y = s1Points[col]!.y;
+        const s2y = s2Points[col]!.y;
         const s1level = Math.min(8, Math.round((s1y / maxY) * 8));
         const s2level = Math.min(8, Math.round((s2y / maxY) * 8));
 
@@ -347,31 +347,29 @@ export class SvgCurveGenerator {
   private buildSmoothPath(points: CurvePoint[], xScale: (x: number) => number, yScale: (y: number) => number): string {
     if (points.length < 2) return '';
 
-    let d = `M ${xScale(points[0].x)} ${yScale(points[0].y)}`;
-
+let d = `M ${xScale(points[0]!.x)} ${yScale(points[0]!.y)}`;
     for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const curr = points[i];
+      const prev = points[i - 1]!;
+      const curr = points[i]!;
       const cpx1 = xScale(prev.x + (curr.x - prev.x) * 0.4);
       const cpy1 = yScale(prev.y);
       const cpx2 = xScale(curr.x - (curr.x - prev.x) * 0.4);
       const cpy2 = yScale(curr.y);
       d += ` C ${cpx1} ${cpy1}, ${cpx2} ${cpy2}, ${xScale(curr.x)} ${yScale(curr.y)}`;
     }
-
-    d += ` L ${xScale(points[points.length - 1].x)} ${yScale(0)}`;
-    d += ` L ${xScale(points[0].x)} ${yScale(0)} Z`;
+    d += ` L ${xScale(points[points.length - 1]!.x)} ${yScale(0)}`;
+    d += ` L ${xScale(points[0]!.x)} ${yScale(0)} Z`;
     return d;
   }
 
   private buildCurveLine(points: CurvePoint[], xScale: (x: number) => number, yScale: (y: number) => number): string {
     if (points.length < 2) return '';
 
-    let d = `M ${xScale(points[0].x)} ${yScale(points[0].y)}`;
+    let d = `M ${xScale(points[0]!.x)} ${yScale(points[0]!.y)}`;
 
     for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const curr = points[i];
+      const prev = points[i - 1]!;
+      const curr = points[i]!;
       const cpx1 = xScale(prev.x + (curr.x - prev.x) * 0.4);
       const cpy1 = yScale(prev.y);
       const cpx2 = xScale(curr.x - (curr.x - prev.x) * 0.4);

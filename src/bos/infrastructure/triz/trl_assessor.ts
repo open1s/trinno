@@ -77,6 +77,18 @@ Your task:
 For S1 (current technology): Provide a single TRL level with evidence.
 For S2 (next-gen technology): Provide a TRL range (min-max) with most likely level.
 
+EVIDENCE TYPE CRITERIA — Map evidence to specific TRL signal types:
+- TRL 1-2 (Basic research): Look for academic papers, first principles, fundamental science discoveries, no application context
+- TRL 3 (Proof of concept): Look for analytical/experimental proof-of-concept, lab validation, simulation results
+- TRL 4 (Lab validation): Look for component/subsystem validation in lab environment, breadboard testing
+- TRL 5 (Relevant environment): Look for component/subsystem validation in simulated environment, semi-integrated system
+- TRL 6 (Prototype demo): Look for prototype/system demonstration in relevant environment, near-operational conditions
+- TRL 7 (Operational demo): Look for system prototype demonstration in operational environment, real conditions
+- TRL 8 (Qualified): Look for system completed and qualified through test and demonstration, first-of-a-kind
+- TRL 9 (Proven): Look for system proven through successful mission operations, commercially available, wide adoption
+
+For each evidence item, specify which TRL level it supports and why (e.g., "paper describes bench-top prototype tested in controlled lab conditions → TRL 3-4").
+
 When user provides their own TRL assessment:
 - Integrate their reasoning into the evidence
 - Adjust confidence based on user's domain knowledge

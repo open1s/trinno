@@ -10,9 +10,12 @@ export class EvaluateIdealityHandler {
 
   async execute(command: EvaluateIdealityCommand): Promise<EvaluateIdealityResult> {
     const lang = this.locale.language;
-    const benefitScore = command.benefits.length * 10;
-    const costScore = command.costs.length * 5;
-    const harmScore = command.harms.length * 8;
+    const bw = command.benefitWeight ?? 10;
+    const cw = command.costWeight ?? 5;
+    const hw = command.harmWeight ?? 8;
+    const benefitScore = command.benefits.length * bw;
+    const costScore = command.costs.length * cw;
+    const harmScore = command.harms.length * hw;
 
     const denominator = costScore + harmScore;
     const score = denominator === 0 ? 100 : Math.round((benefitScore / denominator) * 100);
