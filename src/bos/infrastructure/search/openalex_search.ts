@@ -39,23 +39,32 @@ export class OpenAlexSearchService implements SearchService {
   async searchPatents(query: string, maxResults = 5): Promise<SearchResult[]> {
     const baseUrl = this.config.baseUrl || 'https://api.openalex.org';
 
-    const response = await fetch(
-      `${baseUrl}/works?search=${encodeURIComponent(query + ' patent')}&per_page=${maxResults}&select=title,doi,abstract_inverted_index,publication_date,authorships,primary_location`,
-    );
+    // OpenAlex has limited patent support. The `types` filter uses work-type
+    // IDs; patent-type works exist but are rare.  Search broadly and let
+    // the relevance scoring do the filtering — this gives better coverage
+    // than filtering on a narrow type that may not match.
+    try {
+      const response = await fetch(
+        `${baseUrl}/works?search=${encodeURIComponent(query)}&per_page=${maxResults}&select=title,doi,publication_date,authorships,primary_location,type`,
+      );
 
-    if (!response.ok) return [];
+      if (response.ok) {
+        const data: any = await response.json();
+        const works = data.results || [];
 
-    const data: any = await response.json();
-    const works = data.results || [];
+        return works.map((w: any) => ({
+          title: w.title || 'Unknown',
+          url: w.primary_location?.landing_page_url || w.doi || '',
+          snippet: '',
+          sourceType: 'patent' as ReferenceSourceType,
+          publishedDate: w.publication_date || undefined,
+          authors: w.authorships?.map((a: any) => a.author?.display_name).filter(Boolean) || undefined,
+        }));
+      }
+    } catch {
+    }
 
-    return works.map((w: any) => ({
-      title: w.title || 'Unknown Patent',
-      url: w.primary_location?.landing_page_url || w.doi || '',
-      snippet: reconstructAbstract(w.abstract_inverted_index),
-      sourceType: 'patent' as ReferenceSourceType,
-      publishedDate: w.publication_date || undefined,
-      authors: w.authorships?.map((a: any) => a.author?.display_name).filter(Boolean) || undefined,
-    }));
+    return [];
   }
 
   async searchPapers(query: string, maxResults = 5): Promise<SearchResult[]> {

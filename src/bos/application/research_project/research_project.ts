@@ -83,7 +83,7 @@ export class ResearchProject {
   async runPhase(
     phaseId: PhaseId,
     onProgress: (msg: string) => void,
-    onStream?: (type: 'Text' | 'ReasoningContent', text: string) => void,
+    onStream?: (type: 'Text' | 'ReasoningContent' | 'ToolCall' | 'ToolResult', text: string) => void,
   ): Promise<void> {
     const phase = this.state.phases.find(p => p.id === phaseId);
     if (!phase) { onProgress(`Phase ${phaseId} not found`); return; }
@@ -96,6 +96,8 @@ export class ResearchProject {
       const scb: StreamingCallbacks | undefined = onStream ? {
         onThinking: (text) => onStream('ReasoningContent', text),
         onText: (text) => onStream('Text', text),
+        onToolCall: (name) => onStream('ToolCall', name),
+        onToolResult: () => onStream('ToolResult', ''),
       } : undefined;
       switch (phaseId) {
         case '00_Init':      await this.execInit(root, onProgress, scb); break;
@@ -729,6 +731,15 @@ private async execSynthesize(root: string, onProgress: (msg: string) => void, sc
         fs.writeFileSync(path.join(root, '05_Deliver', 'executive_summary.md'),
           `# Executive Summary\n\n${report.executiveSummary}\n`, 'utf-8');
       }
+
+      // Check if amendments request a presentation / PPT format
+      if (reportAmendments && /ppt|powerpoint|presentation|slides?|keynote|演示|幻灯片/i.test(reportAmendments)) {
+        onProgress('Building presentation slides...');
+        const presentationDir = path.join(root, '05_Deliver', 'presentation');
+        if (!fs.existsSync(presentationDir)) fs.mkdirSync(presentationDir, { recursive: true });
+        this.writePresentation(presentationDir, this.state.name, report);
+        onProgress('Presentation saved to 05_Deliver/presentation/');
+      }
     } catch (e) {
       onProgress(`AI report failed, generating template report: ${e instanceof Error ? e.message : String(e)}`);
 
@@ -919,6 +930,235 @@ private async execSynthesize(root: string, onProgress: (msg: string) => void, sc
   }
 
   
+
+  private writePresentation(dir: string, name: string, report: any): void {
+    const slides: string[] = [];
+
+    // Title slide
+    slides.push(`---
+marp: true
+theme: default
+paginate: true
+size: 16:9
+---
+
+# ${report.title || name + ' — 研究报告'}
+
+**TRIZ 系统性分析**
+
+---`);
+
+    // Executive summary
+    if (report.executiveSummary) {
+      const summary = report.executiveSummary.replace(/\n\n/g, '\n\n> ').split(/\n\n/).slice(0, 3).join('\n\n> ');
+      slides.push(`# 执行摘要
+
+> ${summary}
+
+---`);
+    }
+
+    // Sections
+    if (report.sections) {
+      for (const s of report.sections) {
+        const findTitle = (t: string) => {
+          const m: Record<string, string> = {
+            引言: '📖 引言', 文献综述: '📚 文献综述', TRL: '📊 技术成熟度', 成熟度: '📊 技术成熟度',
+            矛盾: '⚡ 矛盾与瓶颈', 瓶颈: '⚡ 矛盾与瓶颈', 方案: '💡 创新解决方案', 创新: '💡 创新解决方案',
+            趋势: '🔮 技术趋势与路线图', 路线: '🔮 技术趋势与路线图', 参考文献: '📝 参考文献',
+          };
+          return Object.entries(m).find(([k]) => t.includes(k))?.[1] || `📌 ${t}`;
+        };
+        const heading = findTitle(s.title);
+
+        // Section title slide
+        slides.push(`# ${heading}
+
+---
+
+`);
+
+        // Content slide — split long content into multiple slides
+        const paragraphs = s.content.split(/\n\n+/).filter((p: string) => p.trim());
+        let currentSlide = '';
+        let slideCount = 0;
+
+        for (const para of paragraphs) {
+          // If adding this paragraph would exceed ~800 chars, start a new slide
+          if (currentSlide && (currentSlide.length + para.length > 800)) {
+            slides.push(`## ${heading.replace(/^[^\s]+\s+/, '')} (${++slideCount > 1 ? slideCount : ''})
+
+${currentSlide.trim()}
+
+---`);
+            currentSlide = para;
+          } else {
+            currentSlide += (currentSlide ? '\n\n' : '') + para;
+          }
+        }
+        if (currentSlide.trim()) {
+          slides.push(`## ${heading.replace(/^[^\s]+\s+/, '')}${slideCount > 0 ? ` (${++slideCount})` : ''}
+
+${currentSlide.trim()}
+
+---`);
+        }
+
+        // Key findings slide
+        if (s.keyFindings?.length) {
+          slides.push(`## 🔑 关键发现
+
+${s.keyFindings.map((f: string) => `- ${f}`).join('\n')}
+
+---`);
+        }
+      }
+    }
+
+    // Recommendations slide
+    if (report.recommendations?.length) {
+      const recItems = report.recommendations.map((r: any) => {
+        const icon = r.priority === 'high' ? '🔴' : r.priority === 'medium' ? '🟡' : '🟢';
+        return `- ${icon} **${r.action}**: ${r.rationale}`;
+      }).join('\n\n');
+      slides.push(`# 📋 建议
+
+${recItems}
+
+---`);
+    }
+
+    // Conclusion slide
+    if (report.conclusion) {
+      slides.push(`# 🎯 结论
+
+${report.conclusion}
+
+---`);
+    }
+
+    // Next steps slide
+    if (report.nextSteps?.length) {
+      slides.push(`# 🏃 下一步
+
+${report.nextSteps.map((s: string) => `- ${s}`).join('\n')}
+
+---`);
+    }
+
+    // Thank you slide
+    slides.push(`# 谢谢
+
+---
+
+*由 TRP 框架自动生成*`);
+
+    fs.writeFileSync(path.join(dir, 'presentation.md'), slides.join('\n'), 'utf-8');
+
+    // Also generate a simple HTML presentation for browser viewing
+    const html = this.buildHtmlPresentation(name, report);
+    fs.writeFileSync(path.join(dir, 'presentation.html'), html, 'utf-8');
+  }
+
+  private buildHtmlPresentation(_name: string, report: any): string {
+    const slideHtml: string[] = [];
+
+    // Title slide
+    slideHtml.push(`<section><h1>${this.escapeHtml(report.title || 'Research Report')}</h1><p class="subtitle">TRIZ 系统性分析研究报告</p></section>`);
+
+    if (report.executiveSummary) {
+      const summaryPara = report.executiveSummary.split(/\n\n/)[0] || '';
+      slideHtml.push(`<section><h2>执行摘要</h2><div class="small"><p>${this.escapeHtml(summaryPara)}</p></div></section>`);
+    }
+
+    if (report.sections) {
+      for (const s of report.sections) {
+        const title = this.escapeHtml(s.title);
+        const content = this.escapeHtml(s.content.slice(0, 600));
+        slideHtml.push(`<section><h2>${title}</h2><div class="small"><p>${content}</p></div></section>`);
+
+        if (s.keyFindings?.length) {
+          const findings = s.keyFindings.map((f: string) => `<li>${this.escapeHtml(f)}</li>`).join('');
+          slideHtml.push(`<section><h2>关键发现 — ${title}</h2><ul class="small">${findings}</ul></section>`);
+        }
+      }
+    }
+
+    if (report.recommendations?.length) {
+      const recs = report.recommendations.map((r: any) => {
+        const icon = r.priority === 'high' ? '🔴' : r.priority === 'medium' ? '🟡' : '🟢';
+        return `<li>${icon} <strong>${this.escapeHtml(r.action)}</strong>: ${this.escapeHtml(r.rationale)}</li>`;
+      }).join('');
+      slideHtml.push(`<section><h2>建议</h2><ul class="small">${recs}</ul></section>`);
+    }
+
+    if (report.conclusion) {
+      slideHtml.push(`<section><h2>结论</h2><div class="small"><p>${this.escapeHtml(report.conclusion)}</p></div></section>`);
+    }
+
+    if (report.nextSteps?.length) {
+      const steps = report.nextSteps.map((s: string) => `<li>${this.escapeHtml(s)}</li>`).join('');
+      slideHtml.push(`<section><h2>下一步</h2><ul>${steps}</ul></section>`);
+    }
+
+    slideHtml.push(`<section><h2>谢谢</h2><p class="subtitle">由 TRP 框架自动生成</p></section>`);
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${this.escapeHtml(report.title || 'Research Report')}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
+  body { margin: 0; font-family: 'Noto Sans SC', sans-serif; background: #1a1a2e; color: #eee; }
+  .reveal { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+  section { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    box-sizing: border-box; padding: 60px 80px; flex-direction: column; justify-content: center; }
+  section.active { display: flex; }
+  h1 { font-size: 3em; margin: 0 0 20px 0; color: #e94560; }
+  h2 { font-size: 2.2em; margin: 0 0 30px 0; color: #0f3460; background: #e94560; display: inline-block; padding: 8px 24px; border-radius: 8px; }
+  .subtitle { font-size: 1.5em; color: #aaa; margin-top: 20px; }
+  .small { font-size: 0.85em; line-height: 1.8; }
+  ul { text-align: left; padding-left: 40px; }
+  li { margin: 10px 0; }
+  .nav { position: fixed; bottom: 20px; right: 30px; z-index: 100; display: flex; gap: 10px; }
+  .nav button { background: #e94560; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; }
+  .nav button:hover { background: #c73a55; }
+  .counter { position: fixed; bottom: 24px; left: 30px; z-index: 100; color: #666; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="reveal">${slideHtml.join('\n')}</div>
+<div class="counter"><span id="current">1</span> / <span id="total">${slideHtml.length}</span></div>
+<div class="nav">
+  <button onclick="prev()">◀ 上一页</button>
+  <button onclick="next()">下一页 ▶</button>
+</div>
+<script>
+  let idx = 0;
+  const slides = document.querySelectorAll('section');
+  slides[0].classList.add('active');
+  document.getElementById('total').textContent = slides.length;
+  function show(i) {
+    slides[idx].classList.remove('active');
+    idx = ((i % slides.length) + slides.length) % slides.length;
+    slides[idx].classList.add('active');
+    document.getElementById('current').textContent = idx + 1;
+  }
+  function next() { show(idx + 1); }
+  function prev() { show(idx - 1); }
+  document.addEventListener('keydown', e => { if (e.key === 'ArrowRight') next(); if (e.key === 'ArrowLeft') prev(); });
+</script>
+</body>
+</html>`;
+  }
+
+  private escapeHtml(text: string): string {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+
 
   private async execReferences(root: string, onProgress: (msg: string) => void): Promise<void> {
     onProgress('Auto-generating bibliography from search results...');

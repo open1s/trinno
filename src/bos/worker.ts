@@ -167,6 +167,12 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 
   if (!deps) {
     deps = await composeRoot({ workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() });
+    // Init factory with tools so the chat agent path also benefits (fixes race condition)
+    await initApprovalBus(deps.brain);
+    initAgentFactory(deps.brain, {
+      defaultTools: deps.tools,
+      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
+    });
   }
 
   const { command, args } = match;

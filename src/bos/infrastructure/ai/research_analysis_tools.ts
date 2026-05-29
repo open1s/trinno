@@ -3,9 +3,16 @@ import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { streamAgent, StreamingCallbacks } from '../ai/streaming.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
 
-const RESEARCH_TOOLS_SYSTEM_PROMPT = `You are a TRIZ research analysis specialist. Your ONLY role is to execute specific analysis functions, each identified by a "Function:" header.
+const RESEARCH_TOOLS_SYSTEM_PROMPT = `You are a TRIZ research analysis specialist. You can use available tools (search, file read/write, TRIZ matrix lookup, etc.) to gather information autonomously, then synthesize results into structured JSON.
 
-Available functions:
+When called with a "Function:" header, you should:
+1. Use tools as needed to search for data, read prior phase outputs, or look up TRIZ parameters
+2. Once you have enough context, produce the requested analysis
+3. Return ONLY valid JSON matching the requested schema — no markdown, no explanation, no preamble around the JSON
+
+If the prompt contains full context inline (search results, prior phase data), you may answer directly without tool calls. If you need more information, use the tools available to you.
+
+Available analysis functions:
 1. analyze_prior_art — Analyze a patent/paper/tech solution for TRIZ relevance
 2. compare_approaches — Compare multiple technical approaches and their trade-offs
 3. assess_maturity — Assess TRL, S-curve stage, and technology lifecycle
@@ -20,9 +27,7 @@ Available functions:
 12. screen_relevance — Score multiple search results for relevance to research topic
 13. extract_contradictions — Extract TRIZ contradictions from search results with parameter mapping
 14. identify_bottlenecks — Identify technology bottlenecks given contradictions
-15. analyze_root_causes — Analyze root causes using 5-Why methodology
-
-When called with a function name and input, analyze the data and return ONLY valid JSON matching the requested schema. No markdown, no explanation, no preamble.`;
+15. analyze_root_causes — Analyze root causes using 5-Why methodology`;
 
 export interface ScreenRelevanceInput {
   technologyName: string;
@@ -102,6 +107,8 @@ export class ResearchAnalysisTools {
   }
 
   async initialize(): Promise<void> {
+    if (this.agent) return; // already initialized
+
     if (!this.brain) {
       this.brain = new BrainOS();
       await this.brain.start();
@@ -111,9 +118,19 @@ export class ResearchAnalysisTools {
       ? '【中文模式】你必须用中文进行所有思考、推理和输出。\n\n'
       : '';
 
-    initAgentFactory(this.brain);
+    // Reuse existing factory if available — composeRoot() or worker.ts
+    // already initialized it with tools/hooks/MCP. If not, fall back.
+    let factory: ReturnType<typeof getAgentFactory>;
+    try {
+      factory = getAgentFactory();
+    } catch {
+      initAgentFactory(this.brain);
+      factory = getAgentFactory();
+    }
 
-    const factory = getAgentFactory();
+    // No extra tools/config — factory.create() merges defaults (tools,
+    // hooks, MCP, skills, plugins) automatically.  The agent now inherits
+    // everything registered via initAgentFactory().
     const builder = factory.create({
       name: 'triz-research-analysis-tools',
       systemPrompt: `${langPrefix}${RESEARCH_TOOLS_SYSTEM_PROMPT}`,

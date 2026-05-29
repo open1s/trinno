@@ -21,6 +21,7 @@ import { TRLAssessor } from '../triz/trl_assessor.js';
 import { UnifiedResearchService } from '../../application/unified_research/service.js';
 import { AIResearchOrchestrator } from '../../application/unified_research/ai_orchestrator.js';
 import { ResearchAnalysisTools } from '../ai/research_analysis_tools.js';
+import { initAgentFactory } from '../agent-factory.js';
 import { createTrizTools } from '../http/triz_tools.js';
 import { createCodingTools } from '../http/coding_tools.js';
 import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
@@ -146,6 +147,15 @@ export async function composeRoot(options: {
 
   const allTools = [...trizTools, ...codingTools];
   const tools = wrapAllTools(allTools, toolPermissions);
+
+  // Initialize AgentFactory with tools/hooks so ALL agents (TRP + chat)
+  // get them during create().  This fixes the race condition where the
+  // extension or handleSlashCommand starts first and leaves the factory
+  // empty.
+  initAgentFactory(brain, {
+    defaultTools: tools,
+    defaultHooks: [beforeHook, afterHook],
+  });
 
   const researchAnalysisTools = new ResearchAnalysisTools(brain, locale);
 

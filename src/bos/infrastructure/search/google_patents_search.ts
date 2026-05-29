@@ -9,7 +9,51 @@ export class GooglePatentsSearchService implements SearchService {
   async searchPatents(query: string, maxResults = 5): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
 
-    // Try Google Patents SPA page (may not work — JS-rendered, no server-side data)
+    // Strategy 1: Google Patents internal JSON API (used by their React frontend)
+    try {
+      const apiUrl = `https://patents.google.com/patent/search?q=${encodeURIComponent(query)}&num=${maxResults}&f=json`;
+      const response = await fetch(apiUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; TRIZ-Research/1.0)',
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('json')) {
+          const data: any = await response.json();
+          const items = data.results || data.patents || data.clusters?.[0]?.result || [];
+
+          if (items.length > 0) {
+            for (const item of items) {
+              if (results.length >= maxResults) break;
+              const doc = item.patent || item.document || item;
+              const title = doc.title || item.title || '';
+              const id = doc.publication_number || doc.patent_number || doc.id || '';
+              if (!title && !id) continue;
+
+              results.push({
+                title: title || `Patent ${id}`,
+                url: id ? `https://patents.google.com/patent/${id}` : (doc.url || ''),
+                snippet: doc.abstract || doc.snippet || '',
+                sourceType: 'patent' as ReferenceSourceType,
+                publishedDate: doc.publication_date || doc.filing_date || undefined,
+                authors: doc.inventor
+                  ? (Array.isArray(doc.inventor) ? doc.inventor : [doc.inventor]).map((i: any) => typeof i === 'string' ? i : i.name).filter(Boolean)
+                  : doc.assignee ? (Array.isArray(doc.assignee) ? doc.assignee : [doc.assignee]).map((a: any) => typeof a === 'string' ? a : a.name).filter(Boolean)
+                  : undefined,
+              });
+            }
+            if (results.length > 0) return results;
+          }
+        }
+      }
+    } catch {
+    }
+
+    // Strategy 2: Google Patents search via patent result page
     try {
       const url = `https://patents.google.com/?q=${encodeURIComponent(query)}&num=${maxResults}&language=EN`;
       const response = await fetch(url, {
@@ -23,33 +67,85 @@ export class GooglePatentsSearchService implements SearchService {
       if (response.ok) {
         const html = await response.text();
 
-        // Check if page is SPA shell (no actual results rendered server-side)
-        const hasResults = html.includes('result') || html.includes('patent-result') || (html.match(/\/patent\/[A-Z]{2}\d/gi) || []).length > 2;
-
-        if (hasResults) {
-          // Try multiple regex patterns for patent links
-          const patentMatches = html.matchAll(
-            /<a[^>]*href="\/patent\/([A-Z]{2}\d+[A-Z]?\d*[A-Z]?\/[^"]*)"[^>]*>(.*?)<\/a>/gi,
-          );
-
-          const resultMap = new Map<string, SearchResult>();
-          for (const match of patentMatches) {
-            if (resultMap.size >= maxResults) break;
-            const patentId = match[1];
-            const title = this.stripHtml(match[2] || 'Unknown Patent');
-            const key = title.slice(0, 50);
-            if (!resultMap.has(key) && title.length > 5) {
-              resultMap.set(key, {
-                title,
-                url: `https://patents.google.com/patent/${patentId}`,
-                snippet: '',
-                sourceType: 'patent' as ReferenceSourceType,
-                publishedDate: this.extractDateFromPatentId(patentId),
-              });
+        // Check for embedded initial state JSON (Next.js/Nuxt SSR hydration)
+        const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i)
+          || html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/);
+        if (scriptMatch) {
+          try {
+            const json = JSON.parse(scriptMatch[1]!);
+            // Walk into the JSON to find results — Next.js places them in props.pageProps
+            const walk = (obj: any, depth = 0): any[] => {
+              if (depth > 6) return [];
+              if (!obj || typeof obj !== 'object') return [];
+              const found: any[] = [];
+              if (Array.isArray(obj)) {
+                for (const item of obj) {
+                  if (item && typeof item === 'object') {
+                    if ((item.patent_number || item.publication_number) && item.title) {
+                      found.push(item);
+                    } else {
+                      found.push(...walk(item, depth + 1));
+                    }
+                  }
+                }
+              } else {
+                const keys = Object.keys(obj);
+                for (const k of keys) {
+                  if (typeof obj[k] === 'object') {
+                    found.push(...walk(obj[k], depth + 1));
+                  }
+                }
+              }
+              return found;
+            };
+            const patentItems = walk(json);
+            const resultMap = new Map<string, SearchResult>();
+            for (const item of patentItems) {
+              if (resultMap.size >= maxResults) break;
+              const title = item.title || item.invention_title || '';
+              const id = item.patent_number || item.publication_number || '';
+              const key = (title + id).slice(0, 60);
+              if (!resultMap.has(key) && (title || id)) {
+                resultMap.set(key, {
+                  title: title || `Patent ${id}`,
+                  url: id ? `https://patents.google.com/patent/${id}` : '',
+                  snippet: item.abstract || item.snippet || '',
+                  sourceType: 'patent' as ReferenceSourceType,
+                  publishedDate: item.publication_date || item.filing_date || item.grant_date || undefined,
+                  authors: item.inventor
+                    ? (Array.isArray(item.inventor) ? item.inventor : [item.inventor]).map((i: any) => typeof i === 'string' ? i : i.name).filter(Boolean)
+                    : undefined,
+                });
+              }
             }
+            results.push(...resultMap.values());
+            if (results.length > 0) return results;
+          } catch {
           }
-          results.push(...resultMap.values());
         }
+
+        // Strategy 3: regex scrape patent links from HTML
+        const patentLinkMatches = html.matchAll(
+          /<a[^>]*href="\/patent\/([A-Z]{2}\d+[A-Z]?\d*[A-Z]?\/[^"]*)"[^>]*>(.*?)<\/a>/gi,
+        );
+
+        const resultMap = new Map<string, SearchResult>();
+        for (const match of patentLinkMatches) {
+          if (resultMap.size >= maxResults) break;
+          const patentId = match[1];
+          const title = this.stripHtml(match[2] || 'Unknown Patent');
+          const key = title.slice(0, 50);
+          if (!resultMap.has(key) && title.length > 5) {
+            resultMap.set(key, {
+              title,
+              url: `https://patents.google.com/patent/${patentId}`,
+              snippet: '',
+              sourceType: 'patent' as ReferenceSourceType,
+              publishedDate: this.extractDateFromPatentId(patentId),
+            });
+          }
+        }
+        results.push(...resultMap.values());
       }
     } catch {
     }

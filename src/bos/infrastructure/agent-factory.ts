@@ -69,6 +69,10 @@ export function initAgentFactory(
       ? options.defaultMcpServers
       : loadMcpFromConfig();
     instance = new AgentFactory(brain, { ...options, defaultMcpServers: mcpServers });
+  } else if (options) {
+    // Late registration: if factory already exists (e.g., ResearchAnalysisTools ran first),
+    // register tools/hooks that may have been missed. Merges, not overwrites.
+    instance.registerDefaults(options);
   }
   return instance;
 }
@@ -112,6 +116,32 @@ class AgentFactory {
 
   clearSessionContext(sessionId: string): void {
     this.sessionContexts.delete(sessionId);
+  }
+
+  /**
+   * Register defaults that may have been missed on initial construction.
+   * Merges — does NOT overwrite existing values.  Used when
+   * initAgentFactory is called a second time (e.g. TRP ran first, now
+   * chat wants to add tools).
+   */
+  registerDefaults(options: {
+    defaultTools?: any[];
+    defaultHooks?: any[];
+    defaultPlugins?: any[];
+    defaultMcpServers?: McpServerConfig[];
+  }): void {
+    if (options.defaultTools && this.defaultTools.length === 0) {
+      this.defaultTools = options.defaultTools;
+    }
+    if (options.defaultHooks && this.defaultHooks.length === 0) {
+      this.defaultHooks = options.defaultHooks;
+    }
+    if (options.defaultPlugins && this.defaultPlugins.length === 0) {
+      this.defaultPlugins = options.defaultPlugins;
+    }
+    if (options.defaultMcpServers && this.defaultMcpServers.length === 0) {
+      this.defaultMcpServers = options.defaultMcpServers;
+    }
   }
 
   create(config: AgentConfig): any {

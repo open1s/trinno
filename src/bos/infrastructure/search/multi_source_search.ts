@@ -3,6 +3,7 @@ import { ReferenceSourceType } from '../../domain/solution/external_reference.js
 import { CrossRefSearchService } from './crossref_search.js';
 import { OpenAlexSearchService } from './openalex_search.js';
 import { GooglePatentsSearchService } from './google_patents_search.js';
+import { UsptoPatentsViewSearchService } from './uspto_patentsview_search.js';
 import { DuckDuckGoSearchService } from './duckduckgo_search.js';
 
 export interface BraveSearchConfig {
@@ -33,6 +34,7 @@ export class MultiSourceSearchService implements SearchService {
   private crossRefSearch: CrossRefSearchService;
   private openAlexSearch: OpenAlexSearchService;
   private googlePatentsSearch: GooglePatentsSearchService;
+  private usptoPatentsViewSearch: UsptoPatentsViewSearchService;
   private duckduckgoSearch: DuckDuckGoSearchService;
 
   constructor(config: MultiSourceSearchConfig) {
@@ -40,6 +42,7 @@ export class MultiSourceSearchService implements SearchService {
     this.crossRefSearch = new CrossRefSearchService(config.crossRef);
     this.openAlexSearch = new OpenAlexSearchService(config.openAlex);
     this.googlePatentsSearch = new GooglePatentsSearchService();
+    this.usptoPatentsViewSearch = new UsptoPatentsViewSearchService();
     this.duckduckgoSearch = new DuckDuckGoSearchService();
   }
 
@@ -108,11 +111,24 @@ export class MultiSourceSearchService implements SearchService {
       }
     }
 
-    // Try free Google Patents search
+    // Try free Google Patents
     const googleResults = await this.googlePatentsSearch.searchPatents(query, maxResults);
     if (googleResults.length > 0) return googleResults;
 
-    // Last resort: OpenAlex (returns academic works, not real patents)
+    // Try USPTO PatentsView (free, covers US patents)
+    try {
+      const usptoResults = await this.usptoPatentsViewSearch.searchPatents(query, maxResults);
+      if (usptoResults.length > 0) return usptoResults;
+    } catch {
+    }
+
+    // Last resort: OpenAlex API
+    try {
+      const openAlexResults = await this.openAlexSearch.searchPatents(query, maxResults);
+      if (openAlexResults.length > 0) return openAlexResults;
+    } catch {
+    }
+
     return [];
   }
 
@@ -184,7 +200,13 @@ export class MultiSourceSearchService implements SearchService {
     const ddgResults = await this.duckduckgoSearch.searchTechSolutions(query, maxResults);
     if (ddgResults.length > 0) return ddgResults;
 
-    // Last resort: OpenAlex (returns academic works)
+    // Last resort: OpenAlex for relevant engineering papers
+    try {
+      const openAlexResults = await this.openAlexSearch.searchTechSolutions(query, maxResults);
+      if (openAlexResults.length > 0) return openAlexResults;
+    } catch {
+    }
+
     return [];
   }
 
