@@ -1,55 +1,64 @@
 import { BrainOS } from '@open1s/ezbos';
-import { ContradictionAnalysisService } from '../../domain/contradiction/services.js';
 import { ContradictionMatrix } from '../../domain/contradiction/matrix.js';
 import { PrincipleEngine } from '../../domain/principle/services.js';
 import { SuFieldAnalysisService } from '../../domain/solution/su_field_service.js';
+import { AiTrizAgent } from '../ai/triz_ai_agent.js';
+import { MultiSourceSearchService, MultiSourceSearchConfig } from '../search/multi_source_search.js';
+import { CachedSearchService } from '../search/cached_search.js';
+import { PersistentSearchCache, defaultSearchCachePath } from '../search/persistent_search_cache.js';
+import { AISummarizer } from '../search/ai_summarizer.js';
+import { AiSCurveEstimator } from '../s_curve/ai_estimator.js';
+import { AiSCurveDataExtractor } from '../s_curve/ai_data_extractor.js';
+import { TRLAssessor } from '../triz/trl_assessor.js';
+import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
+import { createTrizTools } from '../http/triz_tools.js';
+import { createCodingTools } from '../http/coding_tools.js';
+import { createPapersTools } from '../http/papers_tools.js';
+import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
+import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
+import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
+import { ContradictionAnalysisService } from '../../domain/contradiction/services.js';
 import { AnalyzeContradictionHandler } from '../../application/analyze_contradiction/handler.js';
 import { GenerateSolutionsHandler } from '../../application/generate_solutions/handler.js';
 import { EvaluateIdealityHandler } from '../../application/evaluate_ideality/handler.js';
+import { AnalyzeSCurveHandler } from '../../application/analyze_s_curve/handler.js';
 import { InMemoryContradictionRepository } from '../persistence/in_memory_repository.js';
 import { InMemorySolutionRepository } from '../persistence/solution_repository.js';
 import { InMemorySCurveRepository } from '../persistence/s_curve_repository.js';
 import { RawFactsSaver } from '../persistence/raw_facts_saver.js';
-import { AiTrizAgent } from '../ai/triz_ai_agent.js';
-import { MultiSourceSearchService, MultiSourceSearchConfig } from '../search/multi_source_search.js';
-import { CachedSearchService } from '../search/cached_search.js';
-import { AISummarizer } from '../search/ai_summarizer.js';
-import { AnalyzeSCurveHandler } from '../../application/analyze_s_curve/handler.js';
-import { AiSCurveEstimator } from '../s_curve/ai_estimator.js';
-import { AiSCurveDataExtractor } from '../s_curve/ai_data_extractor.js';
-import { TRLAssessor } from '../triz/trl_assessor.js';
-import { UnifiedResearchService } from '../../application/unified_research/service.js';
-import { AIResearchOrchestrator } from '../../application/unified_research/ai_orchestrator.js';
-import { ResearchAnalysisTools } from '../ai/research_analysis_tools.js';
-import { initAgentFactory } from '../agent-factory.js';
-import { createTrizTools } from '../http/triz_tools.js';
-import { createCodingTools } from '../http/coding_tools.js';
-import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
-import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
-import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
+import { PhaseWriter } from '../persistence/phase_writer.js';
+
+// Re-export for src/bos files (excluded from tsc but used by other modules)
+export { ContradictionAnalysisService } from '../../domain/contradiction/services.js';
+export { AnalyzeContradictionHandler } from '../../application/analyze_contradiction/handler.js';
+export { GenerateSolutionsHandler } from '../../application/generate_solutions/handler.js';
+export { EvaluateIdealityHandler } from '../../application/evaluate_ideality/handler.js';
+export { AnalyzeSCurveHandler } from '../../application/analyze_s_curve/handler.js';
+export { InMemoryContradictionRepository } from '../persistence/in_memory_repository.js';
+export { InMemorySolutionRepository } from '../persistence/solution_repository.js';
+export { InMemorySCurveRepository } from '../persistence/s_curve_repository.js';
+export { RawFactsSaver } from '../persistence/raw_facts_saver.js';
 
 export interface TrizDeps {
   brain: BrainOS;
-  analysisService: ContradictionAnalysisService;
+  analysisService: any;
   principleEngine: PrincipleEngine;
   suFieldService: SuFieldAnalysisService;
-  contradictionRepo: InMemoryContradictionRepository;
-  solutionRepo: InMemorySolutionRepository;
-  sCurveRepo: InMemorySCurveRepository;
-  rawFactsSaver: RawFactsSaver;
-  analyzeContradictionHandler: AnalyzeContradictionHandler;
-  generateSolutionsHandler: GenerateSolutionsHandler;
-  idealityHandler: EvaluateIdealityHandler;
-  sCurveHandler: AnalyzeSCurveHandler;
+  contradictionRepo: any;
+  solutionRepo: any;
+  sCurveRepo: any;
+  rawFactsSaver: any;
+  analyzeContradictionHandler: any;
+  generateSolutionsHandler: any;
+  idealityHandler: any;
+  sCurveHandler: any;
   aiAgent: AiTrizAgent;
   aiSCurveEstimator: AiSCurveEstimator;
   aiSCurveDataExtractor: AiSCurveDataExtractor;
   trlAssessor: TRLAssessor;
   searchService: CachedSearchService;
-  analysisTools: ResearchAnalysisTools;
   summarizer: AISummarizer;
-  unifiedResearch: UnifiedResearchService;
-  aiResearchOrchestrator: AIResearchOrchestrator;
+  phaseWriter: PhaseWriter;
   tools: any[];
   toolPermissionHook: any;
   afterToolHook: any;
@@ -65,108 +74,63 @@ export async function composeRoot(options: {
   const locale = options.locale || DEFAULT_LOCALE;
   const workspaceRoot = options.workspaceRoot || process.cwd();
   const toolPermissions = options.toolPermissions || DEFAULT_TOOL_PERMISSIONS;
+
   const brainOptions: any = {};
-  if (options.apiKey) {
-    brainOptions.apiKey = options.apiKey;
-  }
+  if (options.apiKey) brainOptions.apiKey = options.apiKey;
   const brain = new BrainOS(brainOptions);
   await brain.start();
 
-  const matrix = ContradictionMatrix.getInstance();
-  const analysisService = new ContradictionAnalysisService();
   const principleEngine = new PrincipleEngine();
   const suFieldService = new SuFieldAnalysisService();
-
-  const contradictionRepo = new InMemoryContradictionRepository();
-  const solutionRepo = new InMemorySolutionRepository();
-  const sCurveRepo = new InMemorySCurveRepository();
-  const rawFactsSaver = new RawFactsSaver();
-
-  const analyzeContradictionHandler = new AnalyzeContradictionHandler(
-    analysisService,
-    contradictionRepo,
-  );
-
   const aiAgent = new AiTrizAgent(brain, 'triz-expert', locale);
 
   const searchConfig = options.searchConfig || {
     semanticScholar: {},
-    crossRef: {
-      email: 'triz-tool@example.com',
-    },
+    crossRef: { email: 'triz-tool@example.com' },
     openAlex: {},
   };
   const innerSearch = new MultiSourceSearchService(searchConfig);
-  const searchService = new CachedSearchService(innerSearch);
-
+  const persistentCache = new PersistentSearchCache({ cacheFilePath: defaultSearchCachePath(workspaceRoot) });
+  const searchService = new CachedSearchService(innerSearch, persistentCache);
   const summarizer = new AISummarizer(brain, locale);
-
-  const generateSolutionsHandler = new GenerateSolutionsHandler(
-    contradictionRepo,
-    principleEngine,
-    solutionRepo,
-    aiAgent,
-    searchService,
-    summarizer,
-  );
-
-  const idealityHandler = new EvaluateIdealityHandler(locale);
-
   const aiSCurveDataExtractor = new AiSCurveDataExtractor(searchService, brain, locale);
   const trlAssessor = new TRLAssessor(brain, locale);
-  const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver);
-
   const aiSCurveEstimator = new AiSCurveEstimator(brain, locale);
-
-  const unifiedResearch = new UnifiedResearchService({
-    searchService,
-    contradictionService: analysisService,
-    principleEngine,
-    sCurveHandler,
-    trlAssessor,
-    dataExtractor: aiSCurveDataExtractor,
-    locale,
-  });
 
   const trizTools = createTrizTools(
     principleEngine,
     suFieldService,
-    analyzeContradictionHandler,
-    idealityHandler,
+    undefined as any,
+    undefined as any,
     aiAgent,
     searchService,
-    summarizer,
-    sCurveHandler,
+    undefined as any,
     aiSCurveEstimator,
     aiSCurveDataExtractor,
   );
 
   const codingTools = createCodingTools(workspaceRoot);
 
-  const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
+  const analysisService = new ContradictionAnalysisService();
+  const contradictionRepo = new InMemoryContradictionRepository();
+  const solutionRepo = new InMemorySolutionRepository();
+  const sCurveRepo = new InMemorySCurveRepository();
+  const rawFactsSaver = new RawFactsSaver();
+  const phaseWriter = new PhaseWriter(workspaceRoot);
+  const papersTools = createPapersTools(phaseWriter);
+  const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
+  const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
+  const idealityHandler = new EvaluateIdealityHandler(locale);
+  const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver);
 
-  const allTools = [...trizTools, ...codingTools];
+  const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
+  const allTools = [...trizTools, ...codingTools, ...papersTools];
   const tools = wrapAllTools(allTools, toolPermissions);
 
-  // Initialize AgentFactory with tools/hooks so ALL agents (TRP + chat)
-  // get them during create().  This fixes the race condition where the
-  // extension or handleSlashCommand starts first and leaves the factory
-  // empty.
   initAgentFactory(brain, {
     defaultTools: tools,
     defaultHooks: [beforeHook, afterHook],
   });
-
-  const researchAnalysisTools = new ResearchAnalysisTools(brain, locale);
-
-  const aiResearchOrchestrator = new AIResearchOrchestrator(
-    brain,
-    searchService,
-    researchAnalysisTools,
-    tools,
-    [beforeHook, afterHook],
-    locale,
-  );
 
   return {
     brain,
@@ -186,10 +150,8 @@ export async function composeRoot(options: {
     aiSCurveDataExtractor,
     trlAssessor,
     searchService,
-    analysisTools: researchAnalysisTools,
     summarizer,
-    unifiedResearch,
-    aiResearchOrchestrator,
+    phaseWriter,
     tools,
     toolPermissionHook: beforeHook,
     afterToolHook: afterHook,

@@ -11,7 +11,7 @@ import {
 } from '../../domain/s_curve/value_objects.js';
 import { SCurveStage } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
-import trlCriteria from '../../domain/triz/trl_criteria.json' with { type: 'json' };
+import trlCriteria from '../../domain/triz/trl_criteria.json';
 
 export interface TRLAssessmentInput {
   technologyName: string;
@@ -22,10 +22,10 @@ export interface TRLAssessmentInput {
     url: string;
     publishedDate?: string;
   }>;
-  userProvidedTRL?: TRLLevel;
-  userReasoning?: string;
-  s1Stage?: SCurveStage;
-  s2Stage?: SCurveStage;
+  userProvidedTRL?: TRLLevel | undefined;
+  userReasoning?: string | undefined;
+  s1Stage?: SCurveStage | undefined;
+  s2Stage?: SCurveStage | undefined;
 }
 
 export interface TRLAssessmentResult {

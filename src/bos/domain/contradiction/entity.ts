@@ -11,7 +11,7 @@ export interface ContradictionProps {
   worseningParameter: number;
   description: string;
   type: ContradictionType;
-  context?: string;
+context?: string | undefined;
   recommendedPrinciples: number[];
 }
 
@@ -19,7 +19,7 @@ export class Contradiction {
   public readonly id: string;
   public readonly createdAt: Date;
   private _description: string;
-  private _context?: string;
+  private _context: string | undefined = undefined;
   private _resolved: boolean;
   private _resolutionNotes?: string;
 

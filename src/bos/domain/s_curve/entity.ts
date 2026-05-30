@@ -73,6 +73,9 @@ export class SCurve {
   get s2Parameters(): CurveParameters { return this._s2Parameters; }
   get s1Stage(): SCurveStage { return this._s1Stage; }
   get s2Stage(): SCurveStage { return this._s2Stage; }
+
+  setS1Stage(stage: SCurveStage): void { this._s1Stage = stage; }
+  setS2Stage(stage: SCurveStage): void { this._s2Stage = stage; }
   get s1Estimated(): boolean { return this._s1Estimated; }
   get s2Estimated(): boolean { return this._s2Estimated; }
   get dataPoints(): ReadonlyArray<CurvePoint> { return [...this._dataPoints]; }

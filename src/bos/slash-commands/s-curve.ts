@@ -8,7 +8,7 @@ export const sCurveCommand: SlashCommand = {
   usage: '/s-curve <technology name> <performance metric> [TRL <level>]',
   async execute(args: string, deps: TrizDeps, emit: (type: string, data: any) => void, signal: AbortSignal) {
     const trlMatch = args.match(/TRL\s*(\d+)/i);
-    const trlOverride: TRLLevel | undefined = trlMatch ? (parseInt(trlMatch[1], 10) as TRLLevel) : undefined;
+    const trlOverride: TRLLevel | undefined = trlMatch ? (parseInt(trlMatch[1]!, 10) as TRLLevel) : undefined;
 
     const baseArgs = args.replace(/TRL\s*\d+/i, '').trim();
     const parts = baseArgs.split(/\s+/);
@@ -39,13 +39,15 @@ export const sCurveCommand: SlashCommand = {
         return;
       }
 
-      const result = await deps.sCurveHandler.execute({
+      const cmdObj: any = {
         technologyName: techName,
         performanceMetric: metric,
         dataPoints: extracted.dataPoints,
         milestones: extracted.milestones,
-        trl: trlOverride,
-      });
+      };
+      if (trlOverride !== undefined) cmdObj.trl = trlOverride;
+
+      const result = await deps.sCurveHandler.execute(cmdObj);
 
       emit('token', { tokenType: 'Text', text: result.analysis });
 
@@ -57,6 +59,23 @@ export const sCurveCommand: SlashCommand = {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const sanitizedName = techName.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 20);
         emit('token', { tokenType: 'Text', text: `\n\nSVG chart will be saved to \`output/scurve_${sanitizedName}_${timestamp}.svg\`` });
+      }
+
+      const saved = deps.phaseWriter.write({
+        phase: '02_TRL',
+        name: techName,
+        suffix: `s_curve_${metric}`,
+        data: {
+          technology: techName,
+          metric,
+          trlOverride,
+          dataPoints: extracted.dataPoints,
+          milestones: extracted.milestones,
+          analysis: result.analysis,
+        },
+      });
+      if (saved) {
+        emit('token', { tokenType: 'Text', text: `\n_Saved analysis to \`${saved.filePath}\`_\n` });
       }
     } catch (err) {
       if (signal.aborted) {

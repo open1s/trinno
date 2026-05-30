@@ -34,7 +34,7 @@ export function compactMessages(
   const toCompact = messages.slice(0, -keepCount);
   const recent = messages.slice(-keepCount);
 
-  const summary = buildSummary(toCompact);
+  const summary = buildSummary(toCompact, config);
 
   return {
     messages: recent,
@@ -43,7 +43,7 @@ export function compactMessages(
   };
 }
 
-function buildSummary(messages: ChatMessage[]): string {
+function buildSummary(messages: ChatMessage[], config: CompactionConfig): string {
   const parts: string[] = [];
 
   let currentUserMsg = '';
@@ -83,14 +83,15 @@ function buildSummary(messages: ChatMessage[]): string {
   flushPair();
 
   const summary = parts.join('\n\n---\n\n');
-  return summary.length > 4000 ? summary.slice(0, 4000) + '\n...[truncated]' : summary;
+  const maxChars = config.summaryMaxTokens * 4;
+  return summary.length > maxChars ? summary.slice(0, maxChars) + '\n...[truncated]' : summary;
 }
 
 export function buildContextWithSummary(
   messages: ChatMessage[],
   existingSummary: string | undefined,
   config: CompactionConfig = DEFAULT_COMPACTION_CONFIG,
-): { messagesForAI: ChatMessage[]; systemSummary: string } {
+): { systemSummary: string } {
   const compaction = compactMessages(messages, config);
 
   let systemSummary = '';
@@ -103,8 +104,10 @@ export function buildContextWithSummary(
       : compaction.summary;
   }
 
-  return {
-    messagesForAI: compaction.messages,
-    systemSummary,
-  };
+  const maxChars = config.summaryMaxTokens * 4;
+  if (systemSummary.length > maxChars) {
+    systemSummary = systemSummary.slice(0, maxChars) + '\n...[truncated]';
+  }
+
+  return { systemSummary };
 }

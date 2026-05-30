@@ -45,7 +45,7 @@ export class OpenAlexSearchService implements SearchService {
     // than filtering on a narrow type that may not match.
     try {
       const response = await fetch(
-        `${baseUrl}/works?search=${encodeURIComponent(query)}&per_page=${maxResults}&select=title,doi,publication_date,authorships,primary_location,type`,
+        `${baseUrl}/works?search=${encodeURIComponent(query)}&per_page=${maxResults}&select=title,doi,abstract_inverted_index,publication_date,authorships,primary_location,type`,
       );
 
       if (response.ok) {
@@ -55,8 +55,8 @@ export class OpenAlexSearchService implements SearchService {
         return works.map((w: any) => ({
           title: w.title || 'Unknown',
           url: w.primary_location?.landing_page_url || w.doi || '',
-          snippet: '',
-          sourceType: 'patent' as ReferenceSourceType,
+          snippet: reconstructAbstract(w.abstract_inverted_index) || '',
+          sourceType: w.type?.toLowerCase().includes('patent') ? 'patent' as ReferenceSourceType : 'paper' as ReferenceSourceType,
           publishedDate: w.publication_date || undefined,
           authors: w.authorships?.map((a: any) => a.author?.display_name).filter(Boolean) || undefined,
         }));

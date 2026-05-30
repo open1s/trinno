@@ -58,17 +58,20 @@
   const vscode = acquireVsCodeApi();
 
   let slashCommands = [
-    { name: 'trp', description: 'TRIZ Research Project: init → survey → analyze → synthesize → deliver' },
+    { name: 'init', description: 'Initialize a Trinno workspace (creates 7 phase folders + README)' },
     { name: 'session', description: 'Manage sessions: list, select, delete, rename' },
     { name: 'new', description: 'Create a new chat session' },
     { name: 'compact', description: 'Compact current session: summarize old messages, reduce context' },
-    { name: 'research', description: 'Full TRIZ research: contradiction + prior art + S-curve + TRL' },
     { name: 'contradiction', description: 'Analyze technical contradictions using TRIZ matrix' },
     { name: 'search', description: 'Search patents, papers, and technical solutions' },
     { name: 's-curve', description: 'Technology maturity S-curve analysis with TRL' },
     { name: 'ideality', description: 'Evaluate system ideality (benefits/costs/harms)' },
     { name: 'principles', description: 'List or search the 40 TRIZ inventive principles' },
     { name: 'su-field', description: 'Substance-Field model analysis' },
+    { name: 'patent', description: 'Incrementally write a patent document (LLM appends section by section)' },
+    { name: 'download', description: 'Download a paper PDF by DOI / arXiv ID / PMID / URL' },
+    { name: 'get', description: 'Search OpenAlex and auto-download the top match (or top 3 with "all")' },
+    { name: 'papers', description: 'List downloaded papers in the output directory' },
     { name: 'help', description: 'Show all available commands' },
   ];
   let pendingApproval = null;
@@ -83,6 +86,19 @@
   let completionVisible = false;
   let completionIndex = 0;
   let filteredCommands = [];
+
+  let fileCompletionVisible = false;
+  let fileCompletionIndex = 0;
+  let fileCompletionItems = [];
+  let workspaceFiles = [];
+  let workspaceRootCached = '';
+  let fileListLoaded = false;
+  let fileListLoading = false;
+  let fileCompletionQuery = '';
+  let fileCompletionStart = 0;
+
+  let reasoningRafId = null;
+  let textRafId = null;
 
   const messageState = {
     content: '',
@@ -196,6 +212,9 @@
       if (completionVisible && !e.target.closest('.completion-popup')) {
         hideCompletion();
       }
+      if (fileCompletionVisible && !e.target.closest('.file-completion-popup')) {
+        hideFileCompletion();
+      }
       if (sessionMenuVisible && !e.target.closest('.session-menu')) {
         hideSessionMenu();
       }
@@ -298,6 +317,31 @@
   }
 
   function handleInputKeydown(e) {
+    if (fileCompletionVisible) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        fileCompletionIndex = Math.min(fileCompletionIndex + 1, fileCompletionItems.length - 1);
+        renderFileCompletion();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        fileCompletionIndex = Math.max(fileCompletionIndex - 1, 0);
+        renderFileCompletion();
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        selectFileCompletion(fileCompletionIndex);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hideFileCompletion();
+        return;
+      }
+    }
+
     if (completionVisible) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -325,7 +369,7 @@
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey && !completionVisible) {
+    if (e.key === 'Enter' && !e.shiftKey && !completionVisible && !fileCompletionVisible) {
       e.preventDefault();
       sendMessage();
     }
@@ -339,6 +383,7 @@
 
     const slashMatch = textBeforeCursor.match(/\/(\w*)$/);
     if (slashMatch) {
+      hideFileCompletion();
       const prefix = slashMatch[1].toLowerCase();
       filteredCommands = slashCommands.filter(c => c.name.toLowerCase().includes(prefix));
       if (filteredCommands.length > 0) {
@@ -347,9 +392,43 @@
       } else {
         hideCompletion();
       }
-    } else {
-      hideCompletion();
+      return;
     }
+
+    const atMatch = textBeforeCursor.match(/(^|[\s\u4e00-\u9fa5])@([^\s@]*)$/);
+    if (atMatch) {
+      hideCompletion();
+      const query = atMatch[2] || '';
+      fileCompletionStart = atMatch.index + atMatch[1].length;
+      fileCompletionQuery = query;
+      ensureFileListLoaded();
+      const items = filterWorkspaceFiles(query);
+      fileCompletionItems = items;
+      if (items.length > 0) {
+        fileCompletionIndex = 0;
+        showFileCompletion();
+      } else if (!fileListLoading) {
+        hideFileCompletion();
+      }
+      return;
+    }
+
+    hideCompletion();
+    hideFileCompletion();
+  }
+
+  function ensureFileListLoaded() {
+    if (fileListLoaded || fileListLoading) return;
+    fileListLoading = true;
+    vscode.postMessage({ type: 'request-file-list' });
+  }
+
+  function filterWorkspaceFiles(query) {
+    const q = query.toLowerCase();
+    if (!q) return workspaceFiles.slice(0, 30);
+    return workspaceFiles
+      .filter(f => f.path.toLowerCase().includes(q) || f.name.toLowerCase().includes(q))
+      .slice(0, 30);
   }
 
   function showCompletion() {
@@ -368,6 +447,65 @@
     completionVisible = false;
     const popup = document.querySelector('.completion-popup');
     if (popup) popup.remove();
+  }
+
+  function showFileCompletion() {
+    let popup = document.querySelector('.file-completion-popup');
+    if (!popup) {
+      popup = document.createElement('div');
+      popup.className = 'file-completion-popup completion-popup';
+      inputEl.parentElement.style.position = 'relative';
+      inputEl.parentElement.appendChild(popup);
+    }
+    fileCompletionVisible = true;
+    renderFileCompletion();
+  }
+
+  function hideFileCompletion() {
+    fileCompletionVisible = false;
+    const popup = document.querySelector('.file-completion-popup');
+    if (popup) popup.remove();
+  }
+
+  function renderFileCompletion() {
+    const popup = document.querySelector('.file-completion-popup');
+    if (!popup) return;
+    if (fileCompletionItems.length === 0) {
+      popup.innerHTML = `<div class="completion-empty">${fileListLoading ? '加载文件列表…' : '无匹配文件'}</div>`;
+      return;
+    }
+    popup.innerHTML = fileCompletionItems.map((f, i) => {
+      const active = i === fileCompletionIndex ? ' active' : '';
+      const icon = f.isDir ? '📁' : '📄';
+      const display = f.isDir ? f.path : f.path;
+      return `<div class="completion-item${active}" data-index="${i}">
+        <span class="completion-icon">${icon}</span>
+        <span class="completion-name">${escapeHtml(display)}</span>
+      </div>`;
+    }).join('');
+    popup.querySelectorAll('.completion-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        selectFileCompletion(parseInt(item.dataset.index, 10));
+      });
+    });
+    const activeEl = popup.querySelector('.completion-item.active');
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  function selectFileCompletion(index) {
+    const f = fileCompletionItems[index];
+    if (!f) return;
+    const val = inputEl.value;
+    const cursorPos = inputEl.selectionStart;
+    const textAfterCursor = val.slice(cursorPos);
+    const before = val.slice(0, fileCompletionStart);
+    const inserted = '@' + f.path;
+    inputEl.value = before + inserted + textAfterCursor;
+    const newCursor = before.length + inserted.length;
+    inputEl.selectionStart = inputEl.selectionEnd = newCursor;
+    inputEl.focus();
+    hideFileCompletion();
+    autoResize();
   }
 
   function toggleAttachMenu() {
@@ -959,6 +1097,8 @@
       autoRetryTimer = null;
     }
     isRetrying = false;
+    autoRetryAttempt = 0;
+    autoRetryCountdown = 15;
     const errorBanners = messagesContainer.querySelectorAll('.error-banner');
     errorBanners.forEach(b => b.remove());
     hideCompletion();
@@ -966,6 +1106,10 @@
     const attText = getAttachmentText();
     const fullText = attText ? (text ? attText + '\n\n' + text : attText) : text;
     if (!fullText || isGenerating) return;
+    sendBtn.disabled = true;
+    sendBtn.textContent = '■';
+    sendBtn.classList.add('stop-btn');
+    sendBtn.onclick = cancelGeneration;
     lastUserMessageText = fullText;
     inputEl.value = '';
     clearAttachments();
@@ -1014,7 +1158,7 @@
         break;
 
       case 'token':
-        appendToken(msg.tokenType, msg.text);
+        appendToken(msg);
         break;
 
       case 'done':
@@ -1110,6 +1254,26 @@
         showToolApproval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
         break;
 
+      case 'write-topic-prompt':
+        showWriteTopicPrompt(msg.docType, msg.originalText);
+        break;
+
+      case 'file-list':
+        fileListLoading = false;
+        fileListLoaded = true;
+        workspaceRootCached = msg.workspaceRoot || '';
+        workspaceFiles = (msg.files || []).map(f => ({
+          path: f.path,
+          name: f.path.split('/').pop().replace(/\/$/, ''),
+          isDir: !!f.isDir,
+        }));
+        if (fileCompletionVisible) {
+          fileCompletionItems = filterWorkspaceFiles(fileCompletionQuery);
+          fileCompletionIndex = Math.min(fileCompletionIndex, Math.max(0, fileCompletionItems.length - 1));
+          renderFileCompletion();
+        }
+        break;
+
       case 'rate-limited':
         showRateLimited(msg.messageId, msg.retryAfter);
         break;
@@ -1181,25 +1345,21 @@
 
   function renderToolLog(tools) {
     if (!tools || tools.length === 0) return '';
-    const doneCount = tools.filter(t => t.status === 'done').length;
-    const runningCount = tools.filter(t => t.status === 'running').length;
+    const doneCount = tools.filter(t => t.status === 'done' || t.status === 'result').length;
+    const runningCount = tools.filter(t => t.status === 'running' || t.status === 'called' || t.status === 'waiting').length;
     const errorCount = tools.filter(t => t.status === 'error').length;
+    const totalCount = tools.length;
 
     let html = `<div class="tool-section">`;
-    html += `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-log').classList.toggle('collapsed')">`;
-    html += `<span class="tool-count">${doneCount} done`;
-    if (runningCount > 0) html += `, ${runningCount} running`;
-    if (errorCount > 0) html += `, ${errorCount} failed`;
+    html += `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-list').classList.toggle('collapsed')">`;
+    html += `<span class="tool-count">`;
+    if (runningCount > 0) html += `<span class="tool-spinner-inline"></span> `;
+    html += `${doneCount}/${totalCount} tools`;
+    if (errorCount > 0) html += ` (${errorCount} failed)`;
     html += `</span><span class="tool-toggle">▼</span></div>`;
-    html += `<div class="tool-log collapsed">`;
+    html += `<div class="tool-list collapsed">`;
     for (const t of tools) {
-      const cls = t.status === 'done' ? 'done' : t.status === 'error' ? 'error' : 'running';
-      html += `<div class="tool-log-item ${cls}"><span class="tool-log-name">${escapeHtml(t.name)}</span>`;
-      if (t.status === 'done') html += `<span class="tool-log-status">✓</span>`;
-      else if (t.status === 'error') html += `<span class="tool-log-status">✗</span>`;
-      else html += `<span class="tool-log-spinner"></span>`;
-      if (t.result) html += `<div class="tool-log-result">${escapeHtml(t.result.slice(0, 200))}${t.result.length > 200 ? '...' : ''}</div>`;
-      html += `</div>`;
+      html += renderToolItem(t);
     }
     html += `</div></div>`;
     return html;
@@ -1251,14 +1411,14 @@
     messagesContainer.appendChild(currentMessageEl);
   }
 
-  function appendToken(tokenType, text) {
+  function appendToken(msg) {
     if (!currentContentEl) return;
 
-    const waitingIndicator = currentMessageEl?.querySelector('.waiting-indicator');
-    if (waitingIndicator) {
-      waitingIndicator.remove();
-      currentContentEl.style.display = '';
-    }
+    const tokenType = msg.tokenType;
+    const text = msg.text || '';
+    const msgArgs = msg.args;
+    const msgToolId = msg.toolId;
+    let hasVisibleContent = false;
 
     switch (tokenType) {
       case 'ReasoningContent':
@@ -1267,42 +1427,78 @@
         if (currentReasoningContentEl) {
           currentReasoningContentEl.textContent = messageState.reasoning;
         }
+        hasVisibleContent = messageState.reasoning.length > 0;
         break;
 
       case 'Text':
         messageState.content += text;
-        currentContentEl.innerHTML = formatContent(messageState.content);
-        renderMermaidDiagrams(currentContentEl).catch(() => {});
-        addInsertButtons();
+        if (textRafId === null) {
+          textRafId = requestAnimationFrame(() => {
+            textRafId = null;
+            currentContentEl.innerHTML = formatContent(messageState.content);
+            scrollToBottom();
+          });
+        }
+        hasVisibleContent = messageState.content.length > 0;
         break;
 
       case 'ToolCall':
         const toolName = text.trim();
         if (!toolName) break;
 
-        const existingTool = messageState.tools.find(t => t.name === toolName && (t.status === 'running' || t.status === 'waiting'));
-        if (existingTool) break;
+        const existingTool = messageState.tools.find(t => {
+          if (!(t.name === toolName && (t.status === 'running' || t.status === 'waiting'))) return false;
+          if (msgToolId && t.id) return t.id === msgToolId;
+          return true;
+        });
+        if (existingTool) {
+          if (msgArgs !== undefined && existingTool.args === undefined) {
+            existingTool.args = msgArgs;
+          }
+          if (msgToolId && !existingTool.id) existingTool.id = msgToolId;
+          renderToolBadges();
+          break;
+        }
 
-        messageState.tools.push({ name: toolName, status: 'running', result: '' });
-        messageState.toolLog.push({ name: toolName, status: 'running' });
+        const newTool = { name: toolName, status: 'running', result: '' };
+        if (msgArgs !== undefined) newTool.args = msgArgs;
+        if (msgToolId) newTool.id = msgToolId;
+        messageState.tools.push(newTool);
+        messageState.toolLog.push({ name: toolName, status: 'running', args: msgArgs });
         renderToolBadges();
+        hasVisibleContent = true;
         break;
 
       case 'ToolResult':
-        const lastRunning = [...messageState.tools].reverse().find(t => t.status === 'running');
+        const lastRunning = [...messageState.tools].reverse().find(t => {
+          if (t.status !== 'running') return false;
+          if (msgToolId && t.id) return t.id === msgToolId;
+          return true;
+        });
         if (lastRunning) {
           const isDenied = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
           lastRunning.status = isDenied ? 'error' : 'done';
           lastRunning.result = text || '';
         }
-        const lastLog = [...messageState.toolLog].reverse().find(t => t.status === 'running');
+        const lastLog = [...messageState.toolLog].reverse().find(t => {
+          if (t.status !== 'running') return false;
+          if (msgToolId && t.id) return t.id === msgToolId;
+          return true;
+        });
         if (lastLog) {
           const isDenied2 = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
           lastLog.status = isDenied2 ? 'error' : 'done';
           lastLog.result = text || '';
         }
         renderToolBadges();
+        hasVisibleContent = true;
         break;
+    }
+
+    const waitingIndicator = currentMessageEl?.querySelector('.waiting-indicator');
+    if (waitingIndicator && hasVisibleContent) {
+      waitingIndicator.remove();
+      currentContentEl.style.display = '';
     }
 
     scrollToBottom();
@@ -1319,7 +1515,8 @@
     }
 
     const doneCount = messageState.tools.filter(t => t.status === 'done').length;
-    const runningCount = messageState.tools.filter(t => t.status === 'running').length;
+    const runningCount = messageState.tools.filter(t => t.status === 'running' || t.status === 'waiting').length;
+    const errorCount = messageState.tools.filter(t => t.status === 'error').length;
     const totalCount = messageState.tools.length;
 
     if (totalCount === 0) {
@@ -1327,74 +1524,146 @@
       return;
     }
 
-    let html = `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-log').classList.toggle('collapsed')">`;
+    let html = `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-list').classList.toggle('collapsed')">`;
     html += `<span class="tool-count">`;
     if (runningCount > 0) {
       html += `<span class="tool-spinner-inline"></span> `;
     }
     html += `${doneCount}/${totalCount} tools`;
     if (runningCount > 0) html += ` (${runningCount} running)`;
+    if (errorCount > 0) html += `, ${errorCount} failed`;
     html += `</span><span class="tool-toggle">▼</span></div>`;
 
-    html += `<div class="tool-log">`;
+    html += `<div class="tool-list">`;
     for (const t of messageState.tools) {
-      const cls = t.status === 'done' ? 'done' : t.status === 'error' ? 'error' : 'running';
-      html += `<div class="tool-log-item ${cls}">`;
-      html += `<span class="tool-log-name">${escapeHtml(t.name)}</span>`;
-      if (t.status === 'done') html += `<span class="tool-log-status">✓</span>`;
-      else if (t.status === 'error') html += `<span class="tool-log-status">✗</span>`;
-      else html += `<span class="tool-log-spinner"></span>`;
-      if (t.result) {
-        const preview = t.result.length > 150 ? t.result.slice(0, 150) + '...' : t.result;
-        html += `<div class="tool-log-result">${escapeHtml(preview)}</div>`;
-      }
-      html += `</div>`;
+      html += renderToolItem(t);
     }
     html += `</div>`;
 
     toolsSection.innerHTML = html;
   }
 
-  function truncate10(s) {
-    return s.length > 10 ? s.substring(0, 10) + '…' : s;
+  function formatToolCommand(toolName, args) {
+    let parsed = args;
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+    }
+
+    if (toolName === 'bash' && parsed && typeof parsed === 'object') {
+      const cmd = parsed.command || parsed.cmd;
+      if (typeof cmd === 'string' && cmd.length > 0) return cmd;
+    }
+
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const parts = [];
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k.startsWith('_')) continue;
+        if (v === null || v === undefined) continue;
+        if (typeof v === 'object') continue;
+        parts.push(`${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`);
+      }
+      if (parts.length > 0) return `${toolName} ${parts.join(' ')}`;
+    }
+
+    return toolName;
+  }
+
+  function renderToolItem(tool) {
+    const status = tool.status === 'result' ? 'done' : tool.status === 'called' ? 'running' : tool.status;
+    const cls = status === 'done' ? 'done' : status === 'error' ? 'error' : status === 'waiting' ? 'waiting' : 'running';
+    const command = formatToolCommand(tool.name, tool.args);
+    const result = tool.result || '';
+    const resultHtml = result
+      ? `<pre class="tool-item-output">${escapeHtml(result)}</pre>`
+      : (cls === 'running' ? `<pre class="tool-item-output tool-item-output-pending">running…</pre>` : '');
+
+    let statusHtml;
+    if (status === 'done') statusHtml = '<span class="tool-item-status done">✓</span>';
+    else if (status === 'error') statusHtml = '<span class="tool-item-status error">✗</span>';
+    else if (status === 'waiting') statusHtml = '<span class="tool-item-status waiting">⏸</span>';
+    else statusHtml = '<span class="tool-item-spinner"></span>';
+
+    return `<div class="tool-item ${cls}">
+      <div class="tool-item-header" onclick="this.parentElement.querySelector('.tool-item-body').classList.toggle('collapsed')">
+        <span class="tool-item-prompt">$</span>
+        <span class="tool-item-cmd">${escapeHtml(command)}</span>
+        ${statusHtml}
+      </div>
+      <div class="tool-item-body collapsed">${resultHtml}</div>
+    </div>`;
   }
 
   function formatToolCall(toolName, args) {
-    if (args === null || args === undefined) {
-      return `${toolName}()`;
-    }
+    return formatToolCommand(toolName, args);
+  }
 
-    if (typeof args === 'string') {
-      try {
-        const parsed = JSON.parse(args);
-        const firstVal = Object.values(parsed)[0];
-        const display = typeof firstVal === 'string' ? truncate10(firstVal) : JSON.stringify(parsed);
-        return `${toolName}(${display})`;
-      } catch {
-        return `${toolName}(${truncate10(args)})`;
+  function showWriteTopicPrompt(docType, originalText) {
+    const existing = document.getElementById('write-topic-prompt');
+    if (existing) existing.remove();
+
+    const promptEl = document.createElement('div');
+    promptEl.id = 'write-topic-prompt';
+    promptEl.className = 'write-topic-prompt';
+    const labelText = docType === 'patent' ? '撰写专利' : '撰写论文';
+    const placeholder = docType === 'patent' ? '例如：一种基于梯度孔隙结构的气体扩散层' : '例如：区块链可扩展性 — 一层与二层方案的对比分析';
+    promptEl.innerHTML = `
+      <div class="write-topic-content">
+        <div class="write-topic-header">
+          <span class="write-topic-icon">📝</span>
+          <div class="write-topic-title">${labelText}需要标题</div>
+        </div>
+        <div class="write-topic-hint">你说的是 "${escapeHtml(originalText)}"，缺少标题。请输入 ${docType === 'patent' ? '专利' : '论文'} 标题，确认后将进入增量写作流程（最多 20 轮自动撰写）。</div>
+        <div class="write-topic-form">
+          <input type="text" class="write-topic-input" placeholder="${placeholder}" autofocus />
+          <button class="write-topic-confirm">开始撰写</button>
+          <button class="write-topic-cancel">取消</button>
+        </div>
+      </div>
+    `;
+
+    let target = currentContentEl;
+    if (!target) {
+      const lastMsg = messagesContainer.querySelector('.message:last-child .message-content');
+      target = lastMsg;
+    }
+    if (target) {
+      target.appendChild(promptEl);
+    } else {
+      messagesContainer.appendChild(promptEl);
+    }
+    scrollToBottom();
+
+    const input = promptEl.querySelector('.write-topic-input');
+    const confirmBtn = promptEl.querySelector('.write-topic-confirm');
+    const cancelBtn = promptEl.querySelector('.write-topic-cancel');
+
+    const submit = () => {
+      const topic = (input.value || '').trim();
+      if (!topic) {
+        input.focus();
+        input.classList.add('write-topic-input-error');
+        return;
       }
-    }
+      promptEl.remove();
+      vscode.postMessage({ type: 'write-topic-confirm', docType, topic, originalText });
+    };
+    const cancel = () => {
+      promptEl.remove();
+      vscode.postMessage({ type: 'write-topic-cancel', originalText });
+    };
 
-    if (typeof args !== 'object') {
-      return `${toolName}(${truncate10(String(args))})`;
-    }
-
-    const entries = Object.entries(args);
-    if (entries.length === 0) {
-      return `${toolName}()`;
-    }
-
-    const params = entries.map(([k, v]) => {
-      const strVal = typeof v === 'string' ? v : JSON.stringify(v);
-      if (k.startsWith('_') || k === 'toolName' || k === 'id' || k === 'name') return null;
-      return `${k}=${truncate10(strVal)}`;
-    }).filter(Boolean);
-
-    if (params.length === 0) {
-      return `${toolName}(${JSON.stringify(args)})`;
-    }
-
-    return `${toolName}(${params.join(', ')})`;
+    confirmBtn.addEventListener('click', submit);
+    cancelBtn.addEventListener('click', cancel);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel();
+      }
+    });
+    setTimeout(() => input.focus(), 50);
   }
 
   function showToolApproval(id, toolName, args, metadata, bashIntent) {
@@ -1529,13 +1798,9 @@ window.__denyTool = function(id) {
     const countdownEl = document.getElementById(`rate-countdown-${messageId}`);
     if (!countdownEl) return;
 
-    if (remaining <= 0) {
-      countdownEl.textContent = '0';
+    if (remaining <= 1) {
       const box = document.getElementById(`rate-limited-${messageId}`);
-      if (box) {
-        const btn = box.querySelector('.rate-limited-retry-btn');
-        if (btn) btn.textContent = 'Retry';
-      }
+      if (box) box.style.display = 'none';
     } else {
       countdownEl.textContent = remaining;
     }
@@ -1544,9 +1809,13 @@ window.__denyTool = function(id) {
   function ensureReasoningSection() {
     if (!messageState.reasoningVisible) {
       messageState.reasoningVisible = true;
-      const reasoningSection = currentMessageEl.querySelector('.reasoning-section');
+      const reasoningSection = currentMessageEl?.querySelector('.reasoning-section');
       if (reasoningSection) {
         reasoningSection.style.display = '';
+        const contentEl = reasoningSection.querySelector('.reasoning-content');
+        if (contentEl) {
+          contentEl.classList.remove('collapsed');
+        }
       }
     }
   }
@@ -1584,13 +1853,13 @@ window.__denyTool = function(id) {
     for (const tool of messageState.tools) {
       if (tool.status === 'running') {
         tool.status = 'done';
-        tool.result = `${tool.name}: Completed`;
+        if (!tool.result) tool.result = 'Completed';
       }
     }
     for (const tool of messageState.toolLog) {
       if (tool.status === 'running') {
         tool.status = 'done';
-        tool.result = `${tool.name}: Completed`;
+        if (!tool.result) tool.result = 'Completed';
       }
     }
     renderToolBadges();
@@ -1614,15 +1883,84 @@ window.__denyTool = function(id) {
 
   let autoRetryTimer = null;
   let autoRetryCountdown = 15;
+  let autoRetryAttempt = 0;
+  const MAX_AUTO_RETRIES = 3;
   let isRetrying = false;
+
+  function isNonRetryableError(text) {
+    if (!text) return true;
+    const trimmed = String(text).trim();
+    if (!trimmed) return true;
+    const t = trimmed.toLowerCase();
+    if (t.includes('not support such call')) return true;
+    if (t.includes('please follow openai tool')) return true;
+    if (t.includes('tool_call_format') || t.includes('toolcall format')) return true;
+    if (t.includes('schema') && t.includes('invalid')) return true;
+    if (t.includes('function name') && t.includes('not')) return true;
+    if (t.includes('unknown tool')) return true;
+    if (t.includes('tool_use_failed') || t.includes('tool use failed')) return true;
+    if (t.includes('malformed tool')) return true;
+    if (t.includes('error parsing tool')) return true;
+    if (t.includes('unexpected end of json') || t.includes('unexpected token')) return true;
+    if (t.includes('connectionclosed') && t.includes('downstream')) return true;
+    if (t.includes('prematurely before response body')) return true;
+    if (t.includes('hook abort') || t.includes('hook aborted')) return true;
+    if (t.includes('before_tool_call aborted') || t.includes('before tool call aborted')) return true;
+    if (t.includes('permission denied') && !t.includes('rate')) return true;
+    if (t === 'undefined' || t === 'null' || t === 'error' || t === '[object object]') return true;
+    if (t.includes('context_length_exceeded')) return true;
+    if (t.includes('maximum context length')) return true;
+    if (t.includes('invalid api key')) return true;
+    if (t.includes('incorrect api key')) return true;
+    if (t.includes('authentication')) return true;
+    if (t.includes('model_not_found')) return true;
+    if (t.includes('model does not exist')) return true;
+    if (t.includes('stream ended') || t.includes('stream closed') || t.includes('stream cut')) return true;
+    if (t.includes('sse') && t.includes('closed')) return true;
+    if (t.includes('aborted') && !t.includes('rate')) return true;
+    return false;
+  }
 
   function showError(messageId, errorText) {
     if (autoRetryTimer) {
       clearInterval(autoRetryTimer);
       autoRetryTimer = null;
     }
+
+    function stopAutoRetry(mid, errText) {
+      if (autoRetryTimer) {
+        clearInterval(autoRetryTimer);
+        autoRetryTimer = null;
+      }
+      isRetrying = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('stop-btn');
+      const existing = document.getElementById(`retry-btn-${mid}`);
+      if (existing) existing.remove();
+      const existingStop = document.getElementById(`retry-stop-${mid}`);
+      if (existingStop) existingStop.remove();
+      const capMsg = document.createElement('div');
+      capMsg.className = 'error-banner';
+      capMsg.innerHTML = `<span>已达到最大自动重试次数 (${MAX_AUTO_RETRIES})。请检查网络或 API 配额后手动重试。${errText ? '<br><small>' + escapeHtml(errText) + '</small>' : ''}</span>`;
+      if (currentContentEl) {
+        currentContentEl.appendChild(capMsg);
+      } else {
+        const msgEl = document.getElementById(mid);
+        if (msgEl) {
+          const contentDiv = msgEl.querySelector('.message-content');
+          if (contentDiv) contentDiv.appendChild(capMsg);
+        }
+      }
+    }
+
+    if (isNonRetryableError(errorText)) {
+      stopAutoRetry(messageId, errorText);
+      return;
+    }
     autoRetryCountdown = 15;
     isRetrying = true;
+    autoRetryAttempt = 0;
 
     for (const tool of messageState.tools) {
       if (tool.status === 'running') {
@@ -1644,31 +1982,41 @@ window.__denyTool = function(id) {
         autoRetryTimer = null;
       }
       isRetrying = false;
-      // Remove error banners
       const errorBanners = messagesContainer.querySelectorAll('.error-banner');
       errorBanners.forEach(b => b.remove());
-      // Resend last message
       if (lastUserMessageText) {
         vscode.postMessage({ type: 'userMessage', text: lastUserMessageText });
       }
     };
 
     const startCountdown = () => {
+      if (autoRetryAttempt >= MAX_AUTO_RETRIES) {
+        stopAutoRetry(messageId, errorText);
+        return;
+      }
       autoRetryTimer = setInterval(() => {
         autoRetryCountdown--;
         if (autoRetryCountdown <= 0) {
           clearInterval(autoRetryTimer);
           autoRetryTimer = null;
+          autoRetryAttempt++;
+          if (autoRetryAttempt >= MAX_AUTO_RETRIES) {
+            stopAutoRetry(messageId, errorText);
+            return;
+          }
           doRetry();
         } else {
           const retryBtn = document.getElementById(`retry-btn-${messageId}`);
-          if (retryBtn) retryBtn.textContent = `Retry(${autoRetryCountdown}s)`;
+          if (autoRetryCountdown <= 1 && retryBtn) {
+            retryBtn.style.display = 'none';
+          } else if (retryBtn) {
+            retryBtn.textContent = `Retry(${autoRetryCountdown}s)`;
+          }
         }
       }, 1000);
     };
 
     if (errorText && (errorText.includes('Hook abort') || errorText.includes('PERMISSION_DENIED') || errorText.includes('blocked by permission policy'))) {
-      // Do not show retry button for denied tool calls
       sendBtn.disabled = false;
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('stop-btn');
@@ -1686,11 +2034,10 @@ window.__denyTool = function(id) {
       return;
     }
 
-    // Show retry button in message content area
     const retryContainer = document.createElement('div');
     retryContainer.className = 'retry-container';
     retryContainer.innerHTML = `<button id="retry-btn-${messageId}" class="retry-btn-inline">Retry(${autoRetryCountdown}s)</button>`;
-    
+
     if (currentContentEl) {
       currentContentEl.appendChild(retryContainer);
     } else {
@@ -1701,7 +2048,6 @@ window.__denyTool = function(id) {
       }
     }
 
-    // Add click handler to stop retry
     setTimeout(() => {
       const retryBtn = document.getElementById(`retry-btn-${messageId}`);
       if (retryBtn) {
@@ -1745,109 +2091,82 @@ window.__denyTool = function(id) {
       .replace(/'/g, '&#039;');
   }
 
-  function formatContent(text) {
+function formatContent(text) {
     if (!text) return '';
-    
-    // Handle trinno_skill tags before escaping (they contain markdown)
+
+    let mermaidPlaceholders = [];
+    let mermaidIndex = 0;
+
+    // Extract skill tags before markdown parsing
     let skillContent = '';
     let userTask = '';
     text = text.replace(/<trinno_skill>\n?([\s\S]*?)\n?<\/trinno_skill>\n?/g, (_, content) => {
       skillContent = content.trim();
       return '';
     });
-    
-    // Extract task after --- separator
+
     text = text.replace(/---\n?\*\*Current task:\*\*\s*(.+)$/m, (_, task) => {
       userTask = task.trim();
       return '';
     });
-    
-    // Escape HTML
-    let html = escapeHtml(text);
-    
+
+    // Protect mermaid blocks from marked parsing (replace with placeholder)
+    text = text.replace(/```mermaid\n([\s\S]*?)```/g, (match, code) => {
+      const placeholder = `__MERMAID_${mermaidIndex}__`;
+      mermaidPlaceholders.push({ placeholder, code: code.trim(), index: mermaidIndex });
+      mermaidIndex++;
+      return placeholder;
+    });
+
+    // Protect SVG code blocks
+    let svgPlaceholders = [];
+    let svgIndex = 0;
+    text = text.replace(/```svg\n([\s\S]*?)```/g, (match, svgContent) => {
+      const placeholder = `__SVG_${svgIndex}__`;
+      svgPlaceholders.push({ placeholder, content: svgContent.trim() });
+      svgIndex++;
+      return placeholder;
+    });
+
+    // Parse markdown to HTML using marked
+    let html = '';
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({
+        breaks: true,
+        gfm: true,
+      });
+      html = marked.parse(text);
+    } else {
+      // Fallback: escape and do basic replacements
+      html = escapeHtml(text);
+    }
+
+    // Sanitize HTML: remove script tags and event handlers
+    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+    html = html.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
+
+    // Restore SVG blocks
+    for (const { placeholder, content } of svgPlaceholders) {
+      html = html.replace(placeholder, `<div class="svg-preview">${content.trim()}</div>`);
+    }
+
+    // Restore mermaid blocks (wrap in container for JS rendering)
+    for (const { placeholder, code, index } of mermaidPlaceholders) {
+      const containerId = `mermaid-${Date.now()}-${index}`;
+      const wrapped = `<div class="mermaid-container" data-mermaid-id="${containerId}"><pre class="mermaid-source" style="display:none">${escapeHtml(code)}</pre><div id="${containerId}" class="mermaid"></div></div>`;
+      html = html.replace(placeholder, wrapped);
+    }
+
     // Add skill badge if present
     if (skillContent) {
-      html = `<div class="skill-badge">🎯 Skill Applied</div>` + html;
+      html = `<div class="skill-badge">Skill Applied</div>` + html;
     }
-    
-    // Mermaid blocks (must be processed before other rules)
-    let mermaidCount = 0;
-    html = html.replace(/```mermaid\n([\s\S]*?)```/g, (_, mermaidCode) => {
-      const id = `mermaid-${++mermaidCount}`;
-      return `<div class="mermaid-container" data-mermaid-id="${id}"><pre class="mermaid-source" style="display:none">${escapeHtml(mermaidCode.trim())}</pre><div id="${id}" class="mermaid"></div></div>`;
-    });
-    
-    // SVG blocks
-    html = html.replace(/```svg\n([\s\S]*?)```/g, (_, svgContent) => {
-      return `<div class="svg-preview">${svgContent.trim()}</div>`;
-    });
-    
-    // Code blocks
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-      return `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`;
-    });
-    
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    
-    // Headers
-    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    
-    // Horizontal rules
-    html = html.replace(/^---$/gm, '<hr>');
-    
-    // Blockquotes
-    html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-    
-    // Bold and italic
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-    
-    // Images (including SVG)
-    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
-      if (src.endsWith('.svg') || src.startsWith('data:image/svg')) {
-        return `<img src="${src}" alt="${alt}" class="svg-image">`;
-      }
-      return `<img src="${src}" alt="${alt}">`;
-    });
-    
-    // Tables - handle various formats
-    html = html.replace(/(\|[^\n]+\|)\n(\|[^\n]+\|)\n((?:\|[^\n]+\|\n?)*)/g, (match, header, separator, body) => {
-      // Parse header
-      const headers = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
-      // Parse body rows
-      const rows = body.trim().split('\n').filter(row => row.trim()).map(row => {
-        const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
-        return `<tr>${cells}</tr>`;
-      }).join('');
-      return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
-    });
-    
-    // Unordered lists
-    html = html.replace(/^[\s]*[-*+] (.+)$/gm, '<li>$1</li>');
-    html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-    
-    // Ordered lists
-    html = html.replace(/^[\s]*\d+\. (.+)$/gm, '<li>$1</li>');
-    
-    // Paragraphs (lines not already wrapped in block elements)
-    html = html.replace(/^(?!<[hultbo]|<\/|<hr|<br|<pre|<code|<blockquote|<div|<img|<table)(.+)$/gm, '<p>$1</p>');
-    
-    // Clean up extra line breaks
-    html = html.replace(/<br>\n/g, '\n');
-    html = html.replace(/\n<br>/g, '\n');
-    
+
     // Add task footer if present
     if (userTask) {
       html += `<div class="task-footer"><strong>Task:</strong> ${escapeHtml(userTask)}</div>`;
     }
-    
+
     return html;
   }
 

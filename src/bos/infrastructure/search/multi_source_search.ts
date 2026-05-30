@@ -135,6 +135,8 @@ export class MultiSourceSearchService implements SearchService {
   async searchPapers(query: string, maxResults = 5): Promise<SearchResult[]> {
     const baseUrl = this.config.semanticScholar?.baseUrl || 'https://api.semanticscholar.org/graph/v1';
 
+    const tryCrossRef = async () => await this.crossRefSearch.searchPapers(query, maxResults);
+
     try {
       const response = await fetch(
         `${baseUrl}/paper/search?query=${encodeURIComponent(query)}&limit=${maxResults}&fields=title,abstract,authors,year,externalIds,url`,
@@ -145,7 +147,7 @@ export class MultiSourceSearchService implements SearchService {
         const papers = data.data || [];
 
         if (papers.length > 0) {
-          return papers.map((p: any) => ({
+          const results = papers.map((p: any) => ({
             title: p.title || 'Unknown Paper',
             url: p.url || `https://www.semanticscholar.org/paper/${p.paperId}`,
             snippet: p.abstract || '',
@@ -153,14 +155,33 @@ export class MultiSourceSearchService implements SearchService {
             publishedDate: p.year ? String(p.year) : undefined,
             authors: p.authors ? p.authors.map((a: any) => a.name) : undefined,
           }));
+
+          // If >50% of results have empty snippets, merge with CrossRef for better abstracts
+          const emptyCount = results.filter((r: SearchResult) => !r.snippet).length;
+          if (emptyCount > results.length / 2) {
+            const crResults = await tryCrossRef();
+            // Merge: use CrossRef snippet if SS has none, otherwise keep SS
+            const crByTitle = new Map<string, string>();
+            for (const cr of crResults) {
+              crByTitle.set(cr.title.toLowerCase(), cr.snippet);
+            }
+            for (const r of results) {
+              if (!r.snippet) {
+                const crSnippet = crByTitle.get(r.title.toLowerCase());
+                if (crSnippet) r.snippet = crSnippet;
+              }
+            }
+          }
+
+          return results;
         }
       }
 
-      // Semantic Scholar failed or rate-limited, try CrossRef
-      return await this.crossRefSearch.searchPapers(query, maxResults);
+      // Semantic Scholar returned empty, try CrossRef
+      return await tryCrossRef();
     } catch {
       // Fallback to CrossRef on any error
-      return await this.crossRefSearch.searchPapers(query, maxResults);
+      return await tryCrossRef();
     }
   }
 

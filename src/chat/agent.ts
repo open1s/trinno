@@ -11,7 +11,7 @@ interface InsertedCell {
 }
 
 type TokenCallback = (msg: ExtToWebViewMessage) => void;
- 
+
 type DoneCallback = (data?: any) => void;
 type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
 type McpStatusCallback = (servers: { name: string; type: string; connected: boolean }[]) => void;
@@ -22,6 +22,7 @@ let workerReady = false;
 let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined } | null = null;
 let mcpStatusCallback: McpStatusCallback | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
+let activeDataHandler: ((chunk: Buffer) => void) | null = null;
 const insertStack: InsertedCell[] = [];
 
 function spawnWorker(): childProcess.ChildProcess {
@@ -105,9 +106,11 @@ export async function sendMessage(
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
   workspaceRoot?: string
 ): Promise<void> {
+  console.log('[trinno-chat] sendMessage called', { messageId, textLength: text.length, sessionId });
   currentCallbacks = { token: onToken, done: onDone, approval: onApproval };
 
   await ensureWorker();
+  console.log('[trinno-chat] ensureWorker done, workerReady:', workerReady);
 
   if (!workerProcess || !workerReady) {
     console.log('[trinno-chat] worker not available');
@@ -142,10 +145,22 @@ export async function sendMessage(
     model: effectiveModel,
     baseUrl: effectiveBaseUrl,
     toolPermissions: config.tools.permissions,
-    mcp: config.mcp,
+    mcpServers: config.mcp.servers,
   };
 
   let dataBuffer = '';
+  const drainRemainingLines = (buffer: string): void => {
+    const lines = buffer.split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'token') {
+          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
   const handleData = (chunk: Buffer) => {
     dataBuffer += chunk.toString();
     const lines = dataBuffer.split('\n');
@@ -154,15 +169,20 @@ export async function sendMessage(
       if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
+        console.log('[trinno-chat] handleData received msg type:', msg.type);
         switch (msg.type) {
           case 'token':
             onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
             break;
           case 'done':
+            drainRemainingLines(dataBuffer);
+            dataBuffer = '';
+            console.log('[trinno-chat] handleData got done, cleaning up');
             cleanup();
             onDone(msg);
             break;
           case 'error':
+            console.log('[trinno-chat] handleData got error:', msg.error);
             cleanup();
             onError(msg.error);
             break;
@@ -177,7 +197,7 @@ export async function sendMessage(
               if (result) {
                 insertStack.push({ ...result, timestamp: Date.now() });
               }
-            }).catch(() => {});
+            }).catch(() => { });
             break;
           case 'tool-approval-needed':
             if (currentCallbacks?.approval) {
@@ -190,19 +210,27 @@ export async function sendMessage(
   };
 
   const cleanup = () => {
-    if (workerProcess?.stdout) {
+    if (workerProcess?.stdout && activeDataHandler === handleData) {
       workerProcess.stdout.removeListener('data', handleData);
+      activeDataHandler = null;
     }
     currentCallbacks = null;
   };
 
+  activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
+  console.log('[trinno-chat] about to write to stdin, payload sessionId:', payload.sessionId);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+  console.log('[trinno-chat] stdin.write completed');
 }
 
 export function cancelGeneration(): void {
   if (workerProcess?.stdin) {
     workerProcess.stdin.write(JSON.stringify({ type: 'cancel' }) + '\n');
+  }
+  if (workerProcess?.stdout && activeDataHandler) {
+    workerProcess.stdout.removeListener('data', activeDataHandler);
+    activeDataHandler = null;
   }
   if (currentCallbacks) {
     currentCallbacks.done();
@@ -214,6 +242,61 @@ export function sendToolApproval(id: string, approved: boolean): void {
   if (workerProcess?.stdin) {
     workerProcess.stdin.write(JSON.stringify({ type: 'tool-approval', id, approved }) + '\n');
   }
+}
+
+export function sendClearSession(sessionId: string): void {
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'clear-session', sessionId }) + '\n');
+  }
+}
+
+export function sendCompactResult(sessionId: string, summary: string): void {
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'compact-result', sessionId, summary }) + '\n');
+  }
+}
+
+export async function sendSetWorkspaceRoot(workspaceRoot: string): Promise<void> {
+  await ensureWorker();
+  const proc = workerProcess;
+  const stdin = proc?.stdin;
+  const stdout = proc?.stdout;
+  if (!stdin || !stdout) return;
+
+  return new Promise<void>((resolve) => {
+    let buffer = '';
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      stdout.removeListener('data', handleData);
+      clearTimeout(timer);
+      resolve();
+    };
+    const handleData = (chunk: Buffer): void => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'done' || msg.type === 'error') {
+            finish();
+            return;
+          }
+        } catch { /* ignore non-JSON */ }
+      }
+    };
+    const timer = setTimeout(finish, 15000);
+    stdout.on('data', handleData);
+    stdin.write(JSON.stringify({
+      type: 'chat',
+      messageId: `set_workspace_${Date.now()}`,
+      text: ' ',
+      workspaceRoot,
+    }) + '\n');
+  });
 }
 
 export async function undoLastAiInsert(): Promise<boolean> {
@@ -248,6 +331,8 @@ export function disposeAgent(): void {
   }
   insertStack.length = 0;
   currentCallbacks = null;
+  activeDataHandler = null;
+  workerMessageHandler = null;
 }
 
 export interface CompactMessage {
@@ -297,10 +382,100 @@ export async function sendCompactRequest(
   };
 
   let compactBuffer = '';
+  const drainRemainingLines = (buffer: string): void => {
+    const lines = buffer.split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'token') {
+          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
   const handleData = (chunk: Buffer) => {
     compactBuffer += chunk.toString();
     const lines = compactBuffer.split('\n');
     compactBuffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        switch (msg.type) {
+          case 'token':
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+            break;
+          case 'done':
+            drainRemainingLines(compactBuffer);
+            compactBuffer = '';
+            cleanup();
+            onDone(msg);
+            break;
+          case 'error':
+            cleanup();
+            onError(msg.error);
+            break;
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+
+  const cleanup = () => {
+    if (workerProcess?.stdout && activeDataHandler === handleData) {
+      workerProcess.stdout.removeListener('data', handleData);
+      activeDataHandler = null;
+    }
+    currentCallbacks = null;
+  };
+
+  activeDataHandler = handleData;
+  workerProcess.stdout?.on('data', handleData);
+  workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+}
+
+export async function sendSlashRequest(
+  messageId: string,
+  text: string,
+  onToken: TokenCallback,
+  onDone: DoneCallback,
+  onError: (err: string) => void,
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
+  workspaceRoot?: string
+): Promise<void> {
+  console.log('[trinno-chat] sendSlashRequest called, text:', text);
+  currentCallbacks = { token: onToken, done: onDone, approval: undefined };
+
+  await ensureWorker();
+
+  if (!workerProcess || !workerReady) {
+    onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    onDone();
+    return;
+  }
+
+  const config = getChatConfig();
+  const apiKey = await getApiKey();
+
+  const effectiveModel = modelConfig?.model || config.model.name;
+  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
+  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+
+  const payload = {
+    type: 'slash',
+    messageId,
+    text,
+    workspaceRoot: workspaceRoot || process.cwd(),
+    apiKey: effectiveApiKey || undefined,
+    model: effectiveModel,
+    baseUrl: effectiveBaseUrl,
+  };
+
+  let slashBuffer = '';
+  const handleData = (chunk: Buffer) => {
+    slashBuffer += chunk.toString();
+    const lines = slashBuffer.split('\n');
+    slashBuffer = lines.pop() || '';
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
@@ -322,13 +497,119 @@ export async function sendCompactRequest(
     }
   };
 
-  const cleanup = () => {
-    if (workerProcess?.stdout) {
+  const cleanup = (): void => {
+    if (workerProcess?.stdout && activeDataHandler === handleData) {
       workerProcess.stdout.removeListener('data', handleData);
+      activeDataHandler = null;
     }
     currentCallbacks = null;
   };
 
+  activeDataHandler = handleData;
+  workerProcess.stdout?.on('data', handleData);
+  workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+}
+
+export async function sendPaperRequest(
+  prompt: string,
+  onToken: TokenCallback,
+  onDone: DoneCallback,
+  onError: (err: string) => void,
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
+): Promise<void> {
+  currentCallbacks = { token: onToken, done: onDone, approval: undefined };
+
+  await ensureWorker();
+
+  if (!workerProcess || !workerReady) {
+    onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    onDone();
+    return;
+  }
+
+  const config = getChatConfig();
+  const apiKey = await getApiKey();
+
+  const effectiveModel = modelConfig?.model || config.model.name;
+  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
+  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+
+  const payload = {
+    type: 'paper',
+    prompt,
+    persona: {
+      name: config.persona.name,
+      prompt: config.persona.prompt,
+    },
+    apiKey: effectiveApiKey || undefined,
+    model: effectiveModel,
+    baseUrl: effectiveBaseUrl,
+  };
+
+  let paperBuffer = '';
+  let writeFileCmd: { filePath?: string; content?: string; resolved?: boolean } = {};
+  const drainPaperLines = (buffer: string): void => {
+    const lines = buffer.split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'token') {
+          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text ?? msg.result ?? '' });
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+  const handleData = (chunk: Buffer) => {
+    paperBuffer += chunk.toString();
+    const lines = paperBuffer.split('\n');
+    paperBuffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        switch (msg.type) {
+          case 'token':
+            if (msg.tokenType === 'ToolCall' && msg.name === 'write_file' && msg.args?.filePath) {
+              writeFileCmd = { filePath: String(msg.args.filePath), resolved: false };
+            }
+            if (msg.tokenType === 'ToolResult' && msg.toolId && !writeFileCmd.resolved) {
+              const prev = writeFileCmd;
+              if (!prev.filePath) {
+                try {
+                  const parsed = JSON.parse(typeof msg.result === 'string' ? msg.result : msg.text || '{}');
+                  if (parsed && typeof parsed.filePath === 'string') {
+                    writeFileCmd = { filePath: parsed.filePath, content: parsed.content ?? parsed.text ?? '', resolved: true };
+                  }
+                } catch { /* not structured */ }
+              }
+            }
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text ?? msg.result ?? '' });
+            break;
+          case 'done':
+            drainPaperLines(paperBuffer);
+            paperBuffer = '';
+            cleanup();
+            onDone({ ...msg, writeFilePath: writeFileCmd.filePath, writeFileContent: writeFileCmd.content });
+            break;
+          case 'error':
+            cleanup();
+            onError(msg.error);
+            break;
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+
+  const cleanup = () => {
+    if (workerProcess?.stdout && activeDataHandler === handleData) {
+      workerProcess.stdout.removeListener('data', handleData);
+      activeDataHandler = null;
+    }
+    currentCallbacks = null;
+  };
+
+  activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
 }
@@ -338,4 +619,136 @@ export async function requestMcpStatus(): Promise<void> {
   if (workerProcess?.stdin) {
     workerProcess.stdin.write(JSON.stringify({ type: 'mcp-status-request' }) + '\n');
   }
+}
+
+export interface IncrementalTurnResult {
+  filePath?: string | undefined;
+  appendedText?: string | undefined;
+  llmText: string;
+  usedEditFile: boolean;
+  usedWriteFile: boolean;
+}
+
+export async function sendIncrementalSectionRequest(
+  prompt: string,
+  onToken: TokenCallback,
+  onDone: (result: IncrementalTurnResult) => void,
+  onError: (err: string) => void,
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
+  onApproval?: ApprovalCallback,
+): Promise<void> {
+  currentCallbacks = { token: onToken, done: onDone as DoneCallback, approval: onApproval };
+
+  await ensureWorker();
+
+  if (!workerProcess || !workerReady) {
+    onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    onDone({ llmText: '', usedEditFile: false, usedWriteFile: false });
+    return;
+  }
+
+  const config = getChatConfig();
+  const apiKey = await getApiKey();
+
+  const effectiveModel = modelConfig?.model || config.model.name;
+  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
+  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+
+  const payload = {
+    type: 'incremental-write',
+    prompt,
+    apiKey: effectiveApiKey || undefined,
+    model: effectiveModel,
+    baseUrl: effectiveBaseUrl,
+    persona: {
+      name: config.persona.name,
+      prompt: config.persona.prompt,
+    },
+  };
+
+  let buffer = '';
+  const editCall: { filePath: string | undefined; oldString: string | undefined; newString: string | undefined } = {
+    filePath: undefined,
+    oldString: undefined,
+    newString: undefined,
+  };
+  let usedEditFile = false;
+  let usedWriteFile = false;
+  let llmText = '';
+
+  const drainLines = (buf: string): void => {
+    const lines = buf.split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'token' && msg.tokenType === 'Text' && typeof msg.text === 'string') {
+          llmText += msg.text;
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+
+  const handleData = (chunk: Buffer) => {
+    buffer += chunk.toString();
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        switch (msg.type) {
+          case 'token':
+            if (msg.tokenType === 'ToolCall' && msg.name === 'edit_file' && msg.args) {
+              usedEditFile = true;
+              editCall.filePath = msg.args.filePath ? String(msg.args.filePath) : editCall.filePath;
+              editCall.oldString = msg.args.oldString != null ? String(msg.args.oldString) : editCall.oldString;
+              editCall.newString = msg.args.newString != null ? String(msg.args.newString) : editCall.newString;
+            }
+            if (msg.tokenType === 'ToolCall' && msg.name === 'write_file' && msg.args) {
+              usedWriteFile = true;
+              editCall.filePath = msg.args.filePath ? String(msg.args.filePath) : editCall.filePath;
+            }
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text ?? msg.result ?? '' });
+            break;
+          case 'done':
+            drainLines(buffer);
+            buffer = '';
+            cleanup();
+            const appended = editCall.oldString != null && editCall.newString != null
+              ? editCall.newString.slice(editCall.oldString.length)
+              : undefined;
+            onDone({
+              filePath: editCall.filePath,
+              appendedText: appended,
+              llmText,
+              usedEditFile,
+              usedWriteFile,
+            });
+            break;
+          case 'error':
+            cleanup();
+            onError(msg.error);
+            break;
+          case 'tool-approval-needed':
+            if (currentCallbacks?.approval) {
+              currentCallbacks.approval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
+            }
+            break;
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+
+  const cleanup = (): void => {
+    if (workerProcess?.stdout && activeDataHandler === handleData) {
+      workerProcess.stdout.removeListener('data', handleData);
+      activeDataHandler = null;
+    }
+    currentCallbacks = null;
+  };
+
+  activeDataHandler = handleData;
+  workerProcess.stdout?.on('data', handleData);
+  workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
 }

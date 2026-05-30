@@ -10,10 +10,10 @@ import { LocaleConfig, DEFAULT_LOCALE, stageLabel, stageDesc, stageStrategy, trl
 export class AnalyzeSCurveHandler {
   private analysisService = new SCurveAnalysisService();
   private svgGenerator = new SvgCurveGenerator();
-  private trlAssessor?: TRLAssessor;
-  private locale: LocaleConfig;
-  private repository?: SCurveRepository;
-  private rawFactsSaver?: RawFactsSaver;
+  private trlAssessor: TRLAssessor | undefined = undefined;
+  private locale: LocaleConfig = DEFAULT_LOCALE;
+  private repository: SCurveRepository | undefined = undefined;
+  private rawFactsSaver: RawFactsSaver | undefined = undefined;
 
   constructor(trlAssessor?: TRLAssessor, locale?: LocaleConfig, repository?: SCurveRepository, rawFactsSaver?: RawFactsSaver) {
     this.trlAssessor = trlAssessor;

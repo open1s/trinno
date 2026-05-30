@@ -71,12 +71,16 @@ export class CurveFittingService {
     const now = new Date().getFullYear();
 
     if (dataPoints.length === 0) {
-      // Generate a full lifecycle curve spanning 30 years
+      // Generate a neutral lifecycle curve. Default to early-stage positioning
+      // (inflection point ~3 years in the future) so the stage detector returns
+      // 'growth' rather than 'maturity' for unknown technologies. The AI's
+      // TRL-based sCurveStage is the authoritative stage; this default is a
+      // fallback for the curve geometry only.
       return {
         parameters: {
           L: 300,
           k: 0.15,
-          t0: now - 10, // inflection point 10 years ago (maturity phase)
+          t0: now + 3,
         },
         estimated: true,
       };

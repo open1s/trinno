@@ -23,6 +23,8 @@ export interface AgentConfig {
   temperature?: number;
   model?: string;
   baseUrl?: string;
+  maxTokens?: number;
+  timeoutSecs?: number;
   tools?: any[];
   hooks?: any[];
   plugins?: any[];
@@ -45,6 +47,67 @@ const DEFAULT_SKILLS_DIRS = [
 const DEFAULT_MCP_SERVERS: McpServerConfig[] = [];
 
 const DEFAULT_PLUGINS: any[] = [];
+
+const POOL_MAX_SIZE = 16;
+
+function fnv1aHash(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+class BuilderLru {
+  private map: Map<string, { builder: any; refs: number }> = new Map();
+
+  constructor(private maxSize: number) {}
+
+  keyFor(config: AgentConfig): string {
+    const toolSig = (config.tools ?? []).map((t: any) => t?.name ?? String(t)).sort().join('|');
+    const hookSig = (config.hooks ?? []).map((h: any) => h?.name ?? String(h)).sort().join('|');
+    const mcpSig = ((config.mcpServers ?? []) as McpServerConfig[]).map(s => `${s.name}:${s.type}`).sort().join('|');
+    return [
+      config.name,
+      config.model ?? '-',
+      config.baseUrl ?? '-',
+      fnv1aHash(config.systemPrompt),
+      fnv1aHash(toolSig),
+      fnv1aHash(hookSig),
+      fnv1aHash(mcpSig),
+    ].join('::');
+  }
+
+  get(key: string): any | undefined {
+    const entry = this.map.get(key);
+    if (!entry) return undefined;
+    entry.refs += 1;
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry.builder;
+  }
+
+  set(key: string, builder: any): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    }
+    this.map.set(key, { builder, refs: 1 });
+    while (this.map.size > this.maxSize) {
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.map.delete(oldestKey);
+    }
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+}
 
 let instance: AgentFactory | null = null;
 
@@ -84,6 +147,7 @@ class AgentFactory {
   private defaultPlugins: any[];
   private defaultMcpServers: McpServerConfig[];
   private sessionContexts: Map<string, SessionConfig>;
+  private builderPool?: BuilderLru;
 
   constructor(
     brain: BrainOS,
@@ -108,6 +172,14 @@ class AgentFactory {
 
   getDefaultMcpServers(): McpServerConfig[] {
     return this.defaultMcpServers;
+  }
+
+  getDefaultTools(): any[] {
+    return this.defaultTools;
+  }
+
+  getSkillsDirs(): string[] {
+    return DEFAULT_SKILLS_DIRS.filter(d => fs.existsSync(d));
   }
 
   setSessionContext(sessionId: string, context: SessionConfig): void {
@@ -145,7 +217,48 @@ class AgentFactory {
   }
 
   create(config: AgentConfig): any {
+    return this.buildAgent(config);
+  }
+
+  /**
+   * Like `create`, but reuses a previously-built AgentBuilder when the same
+   * (name, model, baseUrl, systemPrompt, tool set) is requested.
+   *
+   * Reusing a builder keeps the underlying jsbos.Agent (and its HTTP model
+   * connection) warm across calls, so the first `ask()` is not paying cold-
+   * start cost. Caveat: the inner agent retains conversation context. Pass a
+   * `sessionId` on the config if you need isolated sessions, or use
+   * `create()` for one-off agents.
+   */
+  getOrCreate(config: AgentConfig): any {
+    if (!this.builderPool) {
+      this.builderPool = new BuilderLru(POOL_MAX_SIZE);
+    }
+    const key = this.builderPool.keyFor(config);
+    const cached = this.builderPool.get(key);
+    if (cached) {
+      return cached;
+    }
+    const builder = this.buildAgent(config);
+    this.builderPool.set(key, builder);
+    return builder;
+  }
+
+  /** Clear the pool (e.g. after config reload). */
+  clearPool(): void {
+    if (this.builderPool) {
+      this.builderPool.clear();
+    }
+  }
+
+  /** Pool size — useful for diagnostics and tests. */
+  poolSize(): number {
+    return this.builderPool?.size ?? 0;
+  }
+
+  private buildAgent(config: AgentConfig): any {
     const temperature = config.temperature ?? 0.7;
+    const maxTokens = config.maxTokens ?? 16384;
 
     const allTools = [...this.defaultTools, ...(config.tools ?? []), ...(config.extraTools ?? [])];
     const allHooks = [...this.defaultHooks, ...(config.hooks ?? [])];
@@ -155,7 +268,8 @@ class AgentFactory {
 
     let builder = this.brain.agent(config.name)
       .with_systemPrompt(config.systemPrompt)
-      .with_temperature(temperature);
+      .with_temperature(temperature)
+      .with_maxTokens(maxTokens);
 
     for (const tool of allTools) {
       builder = builder.with_tools(tool);
@@ -174,6 +288,9 @@ class AgentFactory {
     }
     if (config.baseUrl) {
       builder = builder.with_baseUrl(config.baseUrl);
+    }
+    if (config.timeoutSecs) {
+      builder = builder.with_timeout(config.timeoutSecs);
     }
 
     for (const dir of skillsDirs) {

@@ -15,7 +15,7 @@ export interface GeneratedSolution {
   principleIndex: number;
   principleName: string;
   aiEnhanced: boolean;
-  aiInsight?: string;
+  aiInsight?: string | undefined;
   references: ExternalReference[];
 }
 

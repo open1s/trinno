@@ -6,6 +6,9 @@ export interface EvaluateIdealityCommand {
   benefitWeight?: number;
   costWeight?: number;
   harmWeight?: number;
+  benefitWeights?: number[];
+  costWeights?: number[];
+  harmWeights?: number[];
 }
 
 export interface IdealityScore {
@@ -17,6 +20,8 @@ export interface IdealityScore {
     harms: number;
   };
   recommendations: string[];
+  confidence: number;
+  dominant: 'benefits' | 'costs' | 'harms' | 'balanced' | 'none';
 }
 
 export interface EvaluateIdealityResult {

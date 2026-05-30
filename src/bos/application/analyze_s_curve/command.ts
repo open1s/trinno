@@ -27,7 +27,7 @@ export interface SCurveResult {
   s1MaxPerformance: number;
   s2MaxPerformance: number;
   milestones: Milestone[];
-  s1TRL?: TRLAssessment;
-  s2TRLRange?: TRLRange;
-  trlReconciliation?: string;
+  s1TRL?: TRLAssessment | undefined;
+  s2TRLRange?: TRLRange | undefined;
+  trlReconciliation?: string | undefined;
 }

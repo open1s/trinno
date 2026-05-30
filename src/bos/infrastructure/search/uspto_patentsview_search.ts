@@ -55,14 +55,17 @@ export class UsptoPatentsViewSearchService implements SearchService {
           }
         }
 
-        return {
+        const result: SearchResult = {
           title: p.patent_title || 'Unknown Patent',
           url: `https://patents.google.com/patent/${p.patent_number}/en`,
           snippet: (p.patent_abstract || '').slice(0, 500),
           sourceType: 'patent' as ReferenceSourceType,
-          publishedDate: p.patent_date || undefined,
-          authors: inventors.length > 0 ? inventors : undefined,
-        } satisfies SearchResult;
+          publishedDate: p.patent_date,
+        };
+        if (inventors.length > 0) {
+          result.authors = inventors;
+        }
+        return result;
       });
     } catch {
       return [];

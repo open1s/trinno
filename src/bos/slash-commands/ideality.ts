@@ -16,9 +16,9 @@ export const idealityCommand: SlashCommand = {
       return;
     }
 
-    const benefits = benefitsMatch ? benefitsMatch[1].split(',').map(s => s.trim()).filter(Boolean) : [];
-    const costs = costsMatch ? costsMatch[1].split(',').map(s => s.trim()).filter(Boolean) : [];
-    const harms = harmsMatch ? harmsMatch[1].split(',').map(s => s.trim()).filter(Boolean) : [];
+    const benefits = benefitsMatch ? benefitsMatch[1]!.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const costs = costsMatch ? costsMatch[1]!.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const harms = harmsMatch ? harmsMatch[1]!.split(',').map(s => s.trim()).filter(Boolean) : [];
 
     emit('token', { tokenType: 'Text', text: `## Ideality Evaluation\n\n` });
 
@@ -30,10 +30,12 @@ export const idealityCommand: SlashCommand = {
         harms,
       });
 
-      const { score, level, breakdown } = result.ideality;
+      const { score, level, breakdown, confidence, dominant } = result.ideality;
 
       emit('token', { tokenType: 'Text', text: `**Ideality Score:** ${score}/100\n` });
-      emit('token', { tokenType: 'Text', text: `**Level:** ${level.toUpperCase()}\n\n` });
+      emit('token', { tokenType: 'Text', text: `**Level:** ${level.toUpperCase()}\n` });
+      emit('token', { tokenType: 'Text', text: `**Dominant factor:** ${dominant}\n` });
+      emit('token', { tokenType: 'Text', text: `**Confidence:** ${Math.round(confidence * 100)}%\n\n` });
       emit('token', { tokenType: 'Text', text: `### Breakdown\n\n` });
       emit('token', { tokenType: 'Text', text: `| Component | Score |\n|-----------|-------|\n` });
       emit('token', { tokenType: 'Text', text: `| Benefits | ${breakdown.benefits} |\n` });
@@ -55,6 +57,19 @@ export const idealityCommand: SlashCommand = {
         for (const rec of result.ideality.recommendations) {
           emit('token', { tokenType: 'Text', text: `- ${rec}\n` });
         }
+      }
+
+      const saved = deps.phaseWriter.write({
+        phase: '03_Analyze',
+        name: 'ideality',
+        suffix: `b${benefits.length}_c${costs.length}_h${harms.length}`,
+        data: {
+          inputs: { benefits, costs, harms },
+          result: result.ideality,
+        },
+      });
+      if (saved) {
+        emit('token', { tokenType: 'Text', text: `\n_Saved to \`${saved.filePath}\`_\n` });
       }
     } catch (err) {
       if (signal.aborted) {

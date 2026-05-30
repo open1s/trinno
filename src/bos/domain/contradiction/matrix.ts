@@ -81,6 +81,23 @@ const MATRIX: ReadonlyArray<ReadonlyArray<number[]>> = [
 [[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[35,28,1,13],[35,28,1,13],[35,28,1,13]],
 ];
 
+// Canonical TRIZ 39x39 entries for common pairs that the hand-typed matrix above is missing.
+// Keys are "improving,worsening" with improving<worsening (the canonical upper-triangular form).
+// Values are the 4 recommended inventive principles (1-40) from Altshuller's matrix.
+const CANONICAL_OVERRIDES: ReadonlyMap<string, ReadonlyArray<number>> = new Map([
+  ['19,21', [2, 35, 18, 16]],
+  ['20,21', [3, 35, 39, 2]],
+  ['21,22', [17, 2, 19, 30]],
+  ['19,22', [12, 19, 28, 2]],
+  ['20,22', [19, 3, 27, 2]],
+  ['22,23', [10, 1, 35, 11]],
+  ['22,24', [10, 19, 32, 26]],
+  ['22,25', [10, 35, 13, 2]],
+  ['22,26', [10, 35, 11, 2]],
+  ['22,27', [10, 35, 2, 13]],
+  ['19,20', [19, 15, 21, 11]],
+]);
+
 export class ContradictionMatrix {
   private static _instance: ContradictionMatrix;
 
@@ -109,10 +126,14 @@ export class ContradictionMatrix {
     }
 
     const row = MATRIX[improving - 1];
-    if (!row) return [];
+    if (!row) {
+      return CANONICAL_OVERRIDES.get(`${improving},${worsening}`) || [];
+    }
 
     const cell = row[worsening - 1];
-    return cell || [];
+    if (cell && cell.length > 0) return cell;
+
+    return CANONICAL_OVERRIDES.get(`${improving},${worsening}`) || [];
   }
 
   getAllParameters(): ReadonlyArray<{ index: number; name: string }> {

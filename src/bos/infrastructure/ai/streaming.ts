@@ -15,6 +15,7 @@ export async function streamAgent(
   callbacks: StreamingCallbacks = {},
 ): Promise<string> {
   const textParts: string[] = [];
+  let streamError: Error | null = null;
 
   await agent.stream(prompt, (token: any) => {
     switch (token.type) {
@@ -35,10 +36,18 @@ export async function streamAgent(
         if (callbacks.onDone) callbacks.onDone();
         break;
       case 'Error':
-        if (callbacks.onError) callbacks.onError(new Error(token.error));
+        streamError = new Error(token.error || 'Stream error');
+        console.error(`[streamAgent] Stream error: ${token.error}`);
+        if (callbacks.onError) callbacks.onError(streamError);
         break;
     }
   });
+
+  // If we collected text before the error, return what we have.
+  // If the stream errored with zero text, throw so callers can retry.
+  if (streamError && textParts.length === 0) {
+    throw streamError;
+  }
 
   return textParts.join('');
 }

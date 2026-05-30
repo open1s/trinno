@@ -50,10 +50,10 @@ export class CrossRefSearchService implements SearchService {
         snippet: item.abstract || '',
         sourceType: 'paper' as ReferenceSourceType,
         publishedDate: pubDate ? String(pubDate) : undefined,
-        authors: item.author?.map((a: any) => {
-        const name = [a.given, a.family].filter(Boolean).join(' ').trim();
-        return name || a.name || 'Unknown';
-      }).filter(n => n !== 'Unknown') || undefined,
+        authors: item.author?.map((a: any): string => {
+          const name = [a.given, a.family].filter(Boolean).join(' ').trim();
+          return name || a.name || 'Unknown';
+        }).filter((n: string) => n !== 'Unknown') || undefined,
       };
     });
   }

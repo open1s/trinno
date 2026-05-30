@@ -73,14 +73,15 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       }
 
       const id = `approval_${++approvalCounter}`;
-      
+  process.stderr.write(`[tool-call] ${toolName} (${id})\n`);
+
       const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
       const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;
       const metadata = getToolMetadata(toolName);
       const bashIntent = toolName === 'bash' ? getBashIntent(args) : null;
 
       if (onEmit) {
-        onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id });
+        onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id, args });
       }
 
       await approvalPublisher.json({ id, toolName, args, metadata, bashIntent, type: 'request' });
@@ -102,10 +103,13 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       return approved ? HookDecision.Continue : HookDecision.Abort;
     }
 
-    const id = `auto_${++approvalCounter}`;
-    ctx.data.toolId = id;
-    if (onEmit) {
-      onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id });
+const id = `auto_${++approvalCounter}`;
+  process.stderr.write(`[tool-call] ${toolName} (${id})\n`);
+  ctx.data.toolId = id;
+  const rawArgs2 = data.tool_args || data.args || data.command || data.cmd || '';
+  const autoArgs = typeof rawArgs2 === 'string' ? tryParseJson(rawArgs2) : rawArgs2;
+  if (onEmit) {
+      onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id, args: autoArgs });
     }
 
     return HookDecision.Continue;
@@ -126,7 +130,18 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       isError = true;
     } else if (result !== undefined && result !== null) {
       if (typeof result === 'object' && 'ok' in result) {
-        resultText = typeof result.ok === 'string' ? result.ok : JSON.stringify(result.ok);
+        const okVal = result.ok;
+        if (typeof okVal === 'string') {
+          resultText = okVal;
+        } else if (okVal && typeof okVal === 'object' && typeof okVal.stdout === 'string') {
+          resultText = okVal.stderr ? `${okVal.stdout}${okVal.stderr}` : okVal.stdout;
+          if (typeof okVal.exitCode === 'number' && okVal.exitCode !== 0) {
+            isError = true;
+            if (okVal.stderr) resultText = `${resultText}\n[exit ${okVal.exitCode}]`;
+          }
+        } else {
+          resultText = JSON.stringify(okVal);
+        }
       } else if (typeof result === 'object' && 'err' in result) {
         resultText = typeof result.err === 'string' ? result.err : JSON.stringify(result.err);
         isError = true;

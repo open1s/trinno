@@ -13,8 +13,9 @@ export interface ChatMessage {
 
 export interface ToolCall {
   name: string;
+  args?: unknown;
   result?: string;
-  status: 'called' | 'result' | 'error';
+  status: 'called' | 'result' | 'error' | 'running' | 'done' | 'waiting';
 }
 
 export interface NotebookContext {
@@ -31,7 +32,7 @@ export interface CellInfo {
 }
 
 export type ExtToWebViewMessage =
-  | { type: 'token'; role: 'assistant'; tokenType: TokenType; text: string }
+  | { type: 'token'; role: 'assistant'; tokenType: TokenType; text: string; args?: unknown; toolId?: string }
   | { type: 'done'; messageId: string }
   | { type: 'error'; messageId: string; error: string }
   | { type: 'welcome'; context: NotebookContext | null; personaName: string }
@@ -48,7 +49,17 @@ export type ExtToWebViewMessage =
   | { type: 'insert-to-input'; attachment: { mode: 'inline' | 'reference'; filePath: string; lineRange: string | null; startLine?: number; endLine?: number; language: string; content: string } }
   | { type: 'agents-loaded'; agents: { name: string; description: string }[] }
   | { type: 'models-loaded'; models: { name: string; description?: string }[] }
-  | { type: 'tool-approval-needed'; id: string; toolName: string; args: Record<string, unknown>; metadata?: { description: string; dangerous: boolean; category: string }; bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' } };
+  | { type: 'tool-approval-needed'; id: string; toolName: string; args: Record<string, unknown>; metadata?: { description: string; dangerous: boolean; category: string }; bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' } }
+  | { type: 'write-start'; filePath: string; fileType: string }
+  | { type: 'write-progress'; filePath: string; content: string; totalChars: number }
+  | { type: 'write-done'; filePath: string; totalChars: number }
+  | { type: 'write-topic-prompt'; docType: 'paper' | 'patent'; originalText: string }
+  | { type: 'file-list'; workspaceRoot: string; files: FileEntry[] };
+
+export interface FileEntry {
+  path: string;
+  isDir: boolean;
+}
 
 export interface SessionInfo {
   id: string;
@@ -75,7 +86,10 @@ export type WebViewToExtMessage =
   | { type: 'setAgent'; agent: string }
   | { type: 'setModel'; model: string }
   | { type: 'openSettings' }
-  | { type: 'tool-approval'; id: string; approved: boolean };
+  | { type: 'tool-approval'; id: string; approved: boolean }
+  | { type: 'write-topic-confirm'; docType: 'paper' | 'patent'; topic: string; originalText: string }
+  | { type: 'write-topic-cancel'; originalText: string }
+  | { type: 'request-file-list' };
 
 export type TokenType = 'Text' | 'ReasoningContent' | 'ToolCall' | 'ToolResult';
 

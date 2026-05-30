@@ -4,7 +4,7 @@ dist/
 out/
 .vscode-test/*
 .bos/
-demo/
+# demo/
 
 # VS Code
 .vscode/*

@@ -9,11 +9,11 @@ function generateId(): string {
 export interface TrizSolutionProps {
   description: string;
   type: SolutionType;
-  contradictionId?: string;
-  problemId?: string;
-  principleIndices?: number[];
-  evaluation?: SolutionEvaluation;
-  notes?: string;
+  contradictionId?: string | undefined;
+  problemId?: string | undefined;
+  principleIndices?: number[] | undefined;
+  evaluation?: SolutionEvaluation | undefined;
+  notes?: string | undefined;
 }
 
 export class TrizSolution {
@@ -21,11 +21,11 @@ export class TrizSolution {
   public readonly createdAt: Date;
   private _description: string;
   private _type: SolutionType;
-  private _contradictionId?: string;
-  private _problemId?: string;
-  private _principleIndices: number[];
-  private _evaluation?: SolutionEvaluation;
-  private _notes?: string;
+  private _contradictionId: string | undefined = undefined;
+  private _problemId: string | undefined = undefined;
+  private _principleIndices: number[] = [];
+  private _evaluation: SolutionEvaluation | undefined = undefined;
+  private _notes: string | undefined = undefined;
   private _selected: boolean;
 
   constructor(

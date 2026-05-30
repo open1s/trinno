@@ -17,8 +17,8 @@ export interface AiSCurveDataResult {
   milestones: Milestone[];
   sources: string[];
   reasoning: string;
-  rawResponse?: string;
-  searchSnippets?: Array<{ title: string; snippet: string; url: string; date: string }>;
+  rawResponse?: string | undefined;
+  searchSnippets?: Array<{ title: string; snippet: string; url: string; date: string }> | undefined;
 }
 
 export class AiSCurveDataExtractor {
@@ -177,8 +177,8 @@ ${getLanguagePrompt(this.locale.language)}`;
 
     if (rawSnippets && rawSnippets.length > 0) {
       const relevantSnippets = rawSnippets.filter(
-        s => s.snippet.toLowerCase().includes(label.toLowerCase().split(' ')[0]) ||
-             s.title.toLowerCase().includes(label.toLowerCase().split(' ')[0]),
+        s => s.snippet.toLowerCase().includes(label.toLowerCase().split(' ')[0] ?? '') ||
+             s.title.toLowerCase().includes(label.toLowerCase().split(' ')[0] ?? ''),
       );
       if (relevantSnippets.length > 0) {
         facts.push(`\nSupporting Search Evidence:`);

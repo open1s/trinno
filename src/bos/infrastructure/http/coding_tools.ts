@@ -41,10 +41,10 @@ export function createCodingTools(workspaceRoot: string) {
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);
         }
-        
+
         const startLine = args.startLine || 1;
         const endLine = args.endLine || (startLine + 999);
-        
+
         if (startLine < 1) return err('startLine must be >= 1');
         if (endLine < startLine) return err('endLine must be >= startLine');
 
@@ -120,7 +120,7 @@ export function createCodingTools(workspaceRoot: string) {
           return err(`File not found: ${args.filePath}`);
         }
         const content = fs.readFileSync(filePath, 'utf-8');
-        
+
         if (args.startLine !== undefined && args.endLine !== undefined) {
           const lines = content.split('\n');
           const start = args.startLine - 1;
@@ -165,7 +165,7 @@ export function createCodingTools(workspaceRoot: string) {
           cwd: workspaceRoot,
           timeout,
           encoding: 'utf-8',
-          maxBuffer: 10 * 1024 * 1024, // 10MB
+          maxBuffer: 10 * 1024 * 1024,
         });
         return ok({ stdout: result, exitCode: 0 });
       } catch (e: any) {
@@ -325,10 +325,9 @@ export function createCodingTools(workspaceRoot: string) {
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);
         }
-        
-        // Ensure patch has newlines at the end
+
         const patchContent = args.patch.endsWith('\n') ? args.patch : args.patch + '\n';
-        
+
         const cmd = `patch -t "${filePath}"`;
         const result = execSync(cmd, {
           cwd: workspaceRoot,
@@ -336,7 +335,7 @@ export function createCodingTools(workspaceRoot: string) {
           encoding: 'utf-8',
           timeout: 10000,
         });
-        
+
         return ok({ filePath: args.filePath, result: result.trim(), action: 'patched' });
       } catch (e: any) {
         let errorMessage = e.message;

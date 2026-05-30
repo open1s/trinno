@@ -132,16 +132,17 @@ export class GooglePatentsSearchService implements SearchService {
         const resultMap = new Map<string, SearchResult>();
         for (const match of patentLinkMatches) {
           if (resultMap.size >= maxResults) break;
-          const patentId = match[1];
+          const patentId = match[1] ?? '';
           const title = this.stripHtml(match[2] || 'Unknown Patent');
           const key = title.slice(0, 50);
           if (!resultMap.has(key) && title.length > 5) {
+            const date = this.extractDateFromPatentId(patentId);
             resultMap.set(key, {
               title,
               url: `https://patents.google.com/patent/${patentId}`,
               snippet: '',
               sourceType: 'patent' as ReferenceSourceType,
-              publishedDate: this.extractDateFromPatentId(patentId),
+              ...(date !== undefined && { publishedDate: date }),
             });
           }
         }

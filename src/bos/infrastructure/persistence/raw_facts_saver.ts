@@ -1,9 +1,5 @@
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { join } from 'path';
 
 export interface MilestoneRawFact {
   year: number;
@@ -17,8 +13,8 @@ export interface SCurveRawFacts {
   technologyName: string;
   performanceMetric: string;
   timestamp: string;
-  rawResponse?: string;
-  searchSnippets?: Array<{ title: string; snippet: string; url: string; date: string }>;
+  rawResponse?: string | undefined;
+  searchSnippets?: Array<{ title: string; snippet: string; url: string; date: string }> | undefined;
   milestones: MilestoneRawFact[];
 }
 
@@ -26,7 +22,7 @@ export class RawFactsSaver {
   private outputDir: string;
 
   constructor(outputDir?: string) {
-    this.outputDir = outputDir || join(__dirname, '..', '..', '..', 'output');
+    this.outputDir = outputDir || join(process.cwd(), 'output');
   }
 
   async saveFacts(facts: SCurveRawFacts): Promise<string> {

@@ -14,9 +14,9 @@ export const suFieldCommand: SlashCommand = {
       return;
     }
 
-    const s1 = parts[0];
-    const s2 = parts[1];
-    const field = parts[2];
+    const s1 = parts[0]!;
+    const s2 = parts[1]!;
+    const field = parts[2]!;
     const mode = parts[3]?.toLowerCase();
 
     emit('token', { tokenType: 'Text', text: `## Substance-Field Analysis\n\n**Substance 1 (Tool):** ${s1}\n**Substance 2 (Object):** ${s2}\n**Field:** ${field}\n---\n\n` });
@@ -27,6 +27,8 @@ export const suFieldCommand: SlashCommand = {
         result = deps.suFieldService.analyzeHarmful(s1, s2, field);
       } else if (mode === 'insufficient') {
         result = deps.suFieldService.analyzeInsufficient(s1, s2, field);
+      } else if (mode === 'excessive') {
+        result = deps.suFieldService.analyzeExcessive(s1, s2, field);
       } else {
         result = deps.suFieldService.analyze({ substance1: s1, substance2: s2, field });
       }
@@ -35,14 +37,36 @@ export const suFieldCommand: SlashCommand = {
 
       emit('token', { tokenType: 'Text', text: `### Recommended Action\n\n${result.recommendedAction}\n\n` });
 
-      if (result.standardSolutions.length > 0) {
-        emit('token', { tokenType: 'Text', text: `### Standard Solutions (76 TRIZ Standards)\n\n` });
-        for (const std of result.standardSolutions.slice(0, 5)) {
-          emit('token', { tokenType: 'Text', text: `- ${std}\n` });
+      if (result.solutions.length > 0) {
+        const grouped = new Map<string, typeof result.solutions>();
+        for (const s of result.solutions) {
+          const key = s.class;
+          if (!grouped.has(key)) grouped.set(key, []);
+          grouped.get(key)!.push(s);
         }
-        if (result.standardSolutions.length > 5) {
-          emit('token', { tokenType: 'Text', text: `\n*...and ${result.standardSolutions.length - 5} more*\n` });
+        emit('token', { tokenType: 'Text', text: `### Standard Solutions (from the 76)\n\n` });
+        for (const [cls, items] of grouped) {
+          emit('token', { tokenType: 'Text', text: `**${cls}**\n` });
+          for (const s of items) {
+            emit('token', { tokenType: 'Text', text: `- **${s.number}** — _${s.title}_\n  ${s.description}\n` });
+          }
+          emit('token', { tokenType: 'Text', text: '\n' });
         }
+      }
+
+      const saved = deps.phaseWriter.write({
+        phase: '03_Analyze',
+        name: `su_field_${s1}_${s2}_${field}`,
+        suffix: mode ?? 'default',
+        data: {
+          substances: { s1, s2 },
+          field,
+          mode: mode ?? 'default',
+          result,
+        },
+      });
+      if (saved) {
+        emit('token', { tokenType: 'Text', text: `\n_Saved to \`${saved.filePath}\`_\n` });
       }
     } catch (err) {
       if (signal.aborted) {

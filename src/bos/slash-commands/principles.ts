@@ -25,15 +25,16 @@ export const principlesCommand: SlashCommand = {
     const numberMatch = trimmed.match(/^(\d+)$/);
 
     if (searchMatch) {
-      const keyword = searchMatch[1].trim();
+      const keyword = searchMatch[1]!.trim();
       emit('token', { tokenType: 'Text', text: `## Principles matching "${keyword}"\n\n` });
 
-      const results = deps.principleEngine.searchPrinciples(keyword);
+      const results = deps.principleEngine.searchPrinciplesScored(keyword, { limit: 10 });
       if (results.length === 0) {
         emit('token', { tokenType: 'Text', text: '_No principles found matching this keyword._\n\n' });
       } else {
-        for (const p of results) {
-          emit('token', { tokenType: 'Text', text: `### #${p.index} ${p.name}\n\n${p.description}\n\n` });
+        for (const { principle: p, relevance, matchedTokens } of results) {
+          const tokenNote = matchedTokens.length > 0 ? ` _(matched: ${matchedTokens.join(', ')}, score ${relevance})_` : '';
+          emit('token', { tokenType: 'Text', text: `### #${p.index} ${p.name}${tokenNote}\n\n${p.description}\n\n` });
           if (p.examples.length > 0) {
             emit('token', { tokenType: 'Text', text: `**Examples:** ${p.examples.join(', ')}\n\n` });
           }
@@ -44,7 +45,7 @@ export const principlesCommand: SlashCommand = {
     }
 
     if (numberMatch) {
-      const num = parseInt(numberMatch[1], 10);
+      const num = parseInt(numberMatch[1]!, 10);
       const principle = deps.principleEngine.getPrinciple(num);
 
       if (!principle) {

@@ -65,8 +65,8 @@ export const contradictionCommand: SlashCommand = {
     const vsMatch = args.match(/^(.+?)\s+vs\s+(.+)$/i);
 
     if (vsMatch) {
-      const improvingStr = vsMatch[1].trim();
-      const worseningStr = vsMatch[2].trim();
+      const improvingStr = vsMatch[1]!.trim();
+      const worseningStr = vsMatch[2]!.trim();
 
       const improving = resolveParameter(deps, improvingStr);
       const worsening = resolveParameter(deps, worseningStr);
@@ -96,10 +96,24 @@ export const contradictionCommand: SlashCommand = {
 
         emit('token', { tokenType: 'Text', text: `### Recommended TRIZ Principles\n\n` });
         for (let i = 0; i < result.principles.length; i++) {
-          const p = result.principles[i];
+          const p = result.principles[i]!;
           emit('token', { tokenType: 'Text', text: `${i + 1}. **Principle #${p.index}: ${p.name}**\n   ${p.description}\n\n` });
         }
         emit('token', { tokenType: 'Text', text: `*${result.principles.length} principles from the contradiction matrix.*` });
+
+        const saved = deps.phaseWriter.write({
+          phase: '03_Analyze',
+          name: `contradiction_${improving}_vs_${worsening}`,
+          suffix: improvingStr.slice(0, 20),
+          data: {
+            improving: { input: improvingStr, index: improving },
+            worsening: { input: worseningStr, index: worsening },
+            principles: result.principles.map((p: any) => ({ index: p.index, name: p.name, description: p.description })),
+          },
+        });
+        if (saved) {
+          emit('token', { tokenType: 'Text', text: `\n_Saved to \`${saved.filePath}\`_\n` });
+        }
       } catch (err) {
         emit('token', { tokenType: 'Text', text: `\n\n Error: ${err instanceof Error ? err.message : String(err)}` });
       }

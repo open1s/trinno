@@ -48,7 +48,6 @@ export class DuckDuckGoSearchService implements SearchService {
             url: data.AbstractURL || data.AbstractSource || '',
             snippet: data.AbstractText.slice(0, 500),
             sourceType,
-            publishedDate: undefined,
           });
         }
 
@@ -61,7 +60,6 @@ export class DuckDuckGoSearchService implements SearchService {
               url: topic.FirstURL || '',
               snippet: topic.Text.slice(0, 500),
               sourceType,
-              publishedDate: undefined,
             });
           }
         }

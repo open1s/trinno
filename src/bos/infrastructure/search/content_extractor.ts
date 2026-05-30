@@ -44,6 +44,6 @@ export class ContentExtractor {
 
   private extractTitle(html: string): string | null {
     const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    return match ? match[1].trim() : null;
+    return match?.[1]?.trim() ?? null;
   }
 }

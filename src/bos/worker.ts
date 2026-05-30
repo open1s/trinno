@@ -23,15 +23,13 @@ import { streamAgent } from './infrastructure/ai/streaming.js';
 import { getAgentFactory, initAgentFactory } from './infrastructure/agent-factory.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
 import {
-  researchCommand,
-  trpCommand,
   contradictionCommand,
   searchCommand,
   sCurveCommand,
   idealityCommand,
   principlesCommand,
   suFieldCommand,
-  compactCommand,
+  initCommand,
 } from './slash-commands/index.js';
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
@@ -47,19 +45,14 @@ let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
 const slashRegistry = createSlashCommandRegistry();
 
-slashRegistry.register(researchCommand);
-slashRegistry.register(trpCommand);
-slashRegistry.register(contradictionCommand);
-slashRegistry.register(searchCommand);
-slashRegistry.register(sCurveCommand);
-slashRegistry.register(idealityCommand);
-slashRegistry.register(principlesCommand);
-slashRegistry.register(suFieldCommand);
-slashRegistry.register(compactCommand);
+slashRegistry.register(contradictionCommand, ['c', 'contra']);
+slashRegistry.register(searchCommand, ['s', 'find']);
+slashRegistry.register(sCurveCommand, ['sc', 'scurve']);
+slashRegistry.register(idealityCommand, ['i', 'ideal']);
+slashRegistry.register(principlesCommand, ['p', 'princ']);
+slashRegistry.register(suFieldCommand, ['sf', 'sufield']);
+slashRegistry.register(initCommand, ['setup', 'new']);
 
-let activeSkillContent: string | null = null;
-let activeSkillName: string | null = null;
-let pendingSkillArgs: string | null = null;
 let pendingSlashOutput: string | null = null;
 
 function loadSkillsFromDir(dirPath: string): void {
@@ -72,23 +65,17 @@ function loadSkillsFromDir(dirPath: string): void {
       if (!fs.existsSync(skillPath)) continue;
       const content = fs.readFileSync(skillPath, 'utf-8');
       const descMatch = content.match(/description:\s*([^\n]+)/);
-      const description = descMatch ? descMatch[1].trim().replace(/^["']|["']$/g, '') : `Apply ${entry.name} skill`;
+      const description = descMatch ? descMatch[1]!.trim().replace(/^["']|["']$/g, '') : `Apply ${entry.name} skill`;
       const cmd: SlashCommand = {
         name: entry.name,
         description,
         usage: `/${entry.name}`,
         async execute(args, _deps, emit, _signal) {
-          activeSkillContent = content;
-          activeSkillName = entry.name;
-          if (args.trim()) {
-            pendingSkillArgs = args;
-          } else {
-            emit('token', {
-              tokenType: 'Text',
-              text: `Skill \`${entry.name}\` activated. Ready for your input.`,
-            });
-            emit('done', {});
-          }
+          emit('token', {
+            tokenType: 'Text',
+            text: `Skill \`${entry.name}\` activated.`,
+          });
+          emit('done', { skillContent: content, skillArgs: args.trim() || undefined });
         },
       };
       slashRegistry.register(cmd);
@@ -105,12 +92,87 @@ function loadSkillsFromHomeDir(): void {
 
 loadSkillsFromHomeDir();
 
+process.on('uncaughtException', (err) => {
+  try { fs.writeSync(2, `[bos-worker] UNCAUGHT: ${err.message}\n${err.stack}\n`); } catch { }
+  try { process.exit(1); } catch { }
+});
+
+process.stdout.on('error', (err) => {
+  try { fs.writeSync(2, `[bos-worker] stdout error: ${err.message}\n`); } catch { }
+});
+process.stderr.on('error', (err) => {
+  try { fs.writeSync(2, `[bos-worker] stderr error: ${err.message}\n`); } catch { }
+});
+
 process.stdout.write(JSON.stringify({ type: 'ready' }) + '\n');
 
 function emit(type: string, data: any): void {
   if (abortController?.signal.aborted && type !== 'done' && type !== 'error') return;
-  process.stdout.write(JSON.stringify({ type, ...data }) + '\n');
+  const line = JSON.stringify({ type, ...data }) + '\n';
+  if (emitQueue.length < EMIT_QUEUE_MAX) {
+    emitQueue.push(line);
+    scheduleDrain();
+  } else {
+    droppedEmits++;
+    if (droppedEmits === 1 || droppedEmits % 100 === 0) {
+      try { fs.writeSync(2, `[bos-worker] emit queue saturated, dropped ${droppedEmits} event(s) (type=${type})\n`); } catch { }
+    }
+  }
 }
+
+const emitQueue: string[] = [];
+const EMIT_QUEUE_HIGH = 500;
+const EMIT_QUEUE_MAX = 100000;
+let droppedEmits = 0;
+let drainScheduled = false;
+let isDraining = false;
+
+function scheduleDrain(): void {
+  if (drainScheduled) return;
+  drainScheduled = true;
+  setImmediate(drainEmitQueue);
+}
+
+function drainEmitQueue(): void {
+  drainScheduled = false;
+  isDraining = true;
+  while (emitQueue.length > 0) {
+    const line = emitQueue.shift()!;
+    const ok = process.stdout.write(line);
+    if (!ok) {
+      process.stdout.once('drain', scheduleDrain);
+      isDraining = false;
+      return;
+    }
+  }
+  isDraining = false;
+}
+
+function drainEmitQueueSync(): void {
+  while (emitQueue.length > 0) {
+    const line = emitQueue.shift()!;
+    try {
+      const ok = process.stdout.write(line);
+      if (!ok) {
+        process.stdout.once('drain', scheduleDrain);
+        return;
+      }
+    } catch {
+      try { fs.writeSync(1, line); } catch { }
+    }
+  }
+}
+
+function flushEmitQueueSync(): void {
+  while (emitQueue.length > 0) {
+    const line = emitQueue.shift()!;
+    try { process.stdout.write(line); } catch { }
+  }
+}
+
+process.on('exit', flushEmitQueueSync);
+process.on('SIGTERM', () => { flushEmitQueueSync(); process.exit(0); });
+process.on('SIGINT', () => { flushEmitQueueSync(); process.exit(0); });
 
 setApprovalEmitter(emit);
 
@@ -139,7 +201,7 @@ async function runJobWithPubSub(
 
   const localEmit = (type: string, data: any) => {
     if (localAbort.signal.aborted && type !== 'done' && type !== 'error') return;
-    statusPub.text(JSON.stringify({ type, ...data })).catch(() => {});
+    statusPub.text(JSON.stringify({ type, ...data })).catch(() => { });
     emit(type, data);
   };
 
@@ -148,7 +210,7 @@ async function runJobWithPubSub(
       localAbort.abort();
       await commandSub.stop();
     }
-  }).catch(() => {});
+  }).catch(() => { });
 
   try {
     await handler(localAbort.signal, localEmit);
@@ -159,6 +221,15 @@ async function runJobWithPubSub(
   } finally {
     await commandSub.stop();
   }
+}
+
+function formatUnknownSlash(text: string): string {
+  const cmdName = text.trim().split(/\s+/)[0] ?? '';
+  const suggestions = slashRegistry.suggest(text, 3);
+  if (suggestions.length > 0) {
+    return `Unknown command: \`${cmdName}\`. Did you mean: ${suggestions.map(s => `\`/${s}\``).join(', ')}? Type \`/help\` to see all commands.`;
+  }
+  return `Unknown command: \`${cmdName}\`. Type \`/help\` to see available commands.`;
 }
 
 async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: (type: string, data: any) => void): Promise<boolean> {
@@ -201,6 +272,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 }
 
 async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[]): Promise<void> {
+  console.error('[bos-worker] handleChat START, sessionId:', sessionId, 'brainOsSession:', brainOsSession ? 'present' : 'absent');
   abortController = new AbortController();
   const signal = abortController.signal;
 
@@ -216,12 +288,13 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     });
   }
 
-  const basePrompt = persona?.prompt || `You are a TRIZ research expert integrated into a Jupyter notebook environment. You help researchers analyze technical problems using TRIZ methodology, search for prior art (patents, papers, technical solutions), and generate academic writing. You have access to the notebook context and can insert new cells autonomously. Be concise, evidence-based, and focus on actionable insights.
-
-Available slash commands:
-${slashRegistry.list().map(c => `- /${c.name}: ${c.description}`).join('\n')}
-
-Type /help to see all commands.`;
+  const slashList = slashRegistry.list().map(c => '- /' + c.name + ': ' + c.description).join('\n');
+  const FALLBACK_PERSONA = 'You are the Trinno Research Assistant — a domain expert in technical innovation, engineering design, and systematic research using TRIZ, PRISMA, SWOT, PEST, and 5W1H. Always respond in character as a senior research collaborator, even for casual greetings. Briefly introduce yourself and your capabilities when greeted, then ask what problem the user is working on.';
+  const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
+    ? persona.prompt.trim()
+    : FALLBACK_PERSONA;
+  const methodologyPrompt = buildMethodologyPrompt(slashList);
+  const basePrompt = `${personaPrompt}\n\n${methodologyPrompt}`;
 
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
@@ -241,21 +314,26 @@ Type /help to see all commands.`;
   const agent = f.create({
     name: 'trinno-chat',
     systemPrompt,
-    model,
-    baseUrl,
+    ...(model ? { model } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     mcpServers: effectiveMcp,
   });
 
+  console.error('[bos-worker] about to call agent.start()');
   const started = await agent.start();
+  console.error('[bos-worker] agent.start() done');
 
   if (sessionId) {
     // Check if the factory has a more recent session for this sessionId
     const factorySession = getAgentFactory().getSessionContext(sessionId);
     const sessionToImport = factorySession?.brainOsSession || brainOsSession;
+    console.error('[bos-worker] sessionToImport:', sessionToImport ? 'present (len=' + sessionToImport.length + ')' : 'absent');
     if (sessionToImport) {
       try {
         started.importSession(sessionToImport);
-      } catch {
+        console.error('[bos-worker] importSession done');
+      } catch (e) {
+        console.error('[bos-worker] importSession ERROR:', e);
         // ignore import errors, start fresh
       }
     }
@@ -276,33 +354,97 @@ Type /help to see all commands.`;
   currentSessionIdForCancel = sessionId || null;
 
   try {
-    await new Promise<void>((resolve, reject) => {
+    console.error('[bos-worker] about to call started.stream(), userMessage length:', userMessage.length);
+    let hasRealContent = false;
+    let streamDone = false;
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    const HEARTBEAT_TIMEOUT_MS = 45000;
+
+    const clearHeartbeatTimer = () => {
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+
+    let doResolve: () => void = () => { };
+
+    const resetHeartbeatTimer = () => {
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      heartbeatTimer = setTimeout(() => {
+        if (streamDone) return;
+        console.error('[bos-worker] stream heartbeat timeout — no real content in 45s, aborting');
+        clearHeartbeatTimer();
+        emit('rate-limited', { retryAfter: 15, error: 'Upstream timeout (heartbeat only stream)' });
+        streamDone = true;
+        doResolve();
+      }, HEARTBEAT_TIMEOUT_MS);
+    };
+
+    resetHeartbeatTimer();
+
+    await new Promise<void>((resolve) => {
+      doResolve = resolve;
       started.stream(userMessage, (token: any) => {
+        if (streamDone) return;
         if (signal.aborted) {
-          started.stop().catch(() => {});
+          started.stop().catch(() => { });
+          streamDone = true;
           resolve();
           return;
         }
 
         switch (token.type) {
           case 'ReasoningContent':
+            if (token.text && token.text.length > 0) {
+              hasRealContent = true;
+              resetHeartbeatTimer();
+            }
             emit('token', { tokenType: 'ReasoningContent', text: token.text });
+            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'Text':
+            if (token.text && token.text.length > 0) {
+              hasRealContent = true;
+              resetHeartbeatTimer();
+            }
             emit('token', { tokenType: 'Text', text: token.text });
+            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'ToolCall':
-            emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id });
+            if (token.name) {
+              hasRealContent = true;
+              resetHeartbeatTimer();
+            }
+            emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'ToolResult':
-            emit('token', { 
-              tokenType: 'ToolResult', 
-              text: token.result || token.text || '', 
+            if (token.result || token.text) {
+              hasRealContent = true;
+              resetHeartbeatTimer();
+            }
+            emit('token', {
+              tokenType: 'ToolResult',
+              text: token.result || token.text || '',
               toolId: token.id,
-              status: 'completed' 
+              status: 'completed'
             });
+            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
+          case 'Heartbeat':
+            resetHeartbeatTimer();
+            break;
+          case 'Stop':
           case 'Done': {
+            clearHeartbeatTimer();
+            streamDone = true;
+            if (!hasRealContent) {
+              console.error('[bos-worker]', token.type, 'with no real content — treating as rate-limit');
+              emit('rate-limited', { retryAfter: 15, error: 'Empty response (possible rate limit)' });
+              resolve();
+              break;
+            }
             let exportedSession: string | undefined;
             if (sessionId) {
               try {
@@ -331,13 +473,14 @@ Type /help to see all commands.`;
             break;
           }
           case 'Error':
+            clearHeartbeatTimer();
+            streamDone = true;
             if (isRateLimited(token.error)) {
               const retryAfter = parseRetryAfter(token.error);
               emit('rate-limited', { retryAfter, error: token.error });
             } else {
               emit('error', { error: token.error });
             }
-            started.stop().catch(() => {});
             resolve();
             break;
         }
@@ -361,20 +504,34 @@ function isRateLimited(errorMsg: string): boolean {
   return /429|rate.?limit|too many requests/i.test(errorMsg);
 }
 
-function parseRetryAfter(errorMsg: string): number {
-  const match = errorMsg.match(/retry.?after\s+(\d+)\s*s/i) || errorMsg.match(/try again in (\d+)\s*s/i) || errorMsg.match(/in (\d+)\s*seconds/i);
-  if (match && match[1]) {
-    const seconds = parseInt(match[1], 10);
-    if (seconds > 0 && seconds <= 300) return seconds;
+export function parseRetryAfter(errorMsg: string): number {
+  const patterns: RegExp[] = [
+    /retry.?after\s*[=:]?\s*(\d+)\s*s/i,
+    /try again in (\d+)\s*s/i,
+    /please retry in (\d+)\s*seconds/i,
+    /in (\d+)\s*seconds/i,
+    /retry-after:\s*(\d+)/i,
+    /"retry_after"\s*:\s*(\d+)/i,
+  ];
+  for (const re of patterns) {
+    const match = errorMsg.match(re);
+    if (match && match[1]) {
+      const seconds = parseInt(match[1], 10);
+      if (seconds > 0 && seconds <= 300) return seconds;
+    }
   }
   return 15;
+}
+
+export function isRateLimitedForTest(msg: string): boolean {
+  return isRateLimited(msg);
 }
 
 function handleCancel(): void {
   abortController?.abort();
   cancelAllPendingApprovals();
   if (currentAgent) {
-    currentAgent.stop().catch(() => {});
+    currentAgent.stop().catch(() => { });
     currentSessionIdForCancel = null;
   }
 }
@@ -387,6 +544,63 @@ function emitMcpStatus(): void {
   } catch (e) {
     emit('mcp-status', { servers: [] });
   }
+}
+
+function buildMethodologyPrompt(slashCommandsList: string): string {
+  return [
+    '## Routing',
+    '- Unknown scope → 5W1H',
+    '- Clinical / biomedical Q → PICO → PRISMA',
+    '- Technical barrier / invention → TRIZ',
+    '- Evidence synthesis → PRISMA',
+    '- Strategic / competitive → SWOT (+ PEST)',
+    '- New market / tech landscape → PEST (+ SWOT)',
+    '',
+    '## PICO',
+    'PICO/PICOS: P-Population, I-Intervention, C-Comparison, O-Outcome, S-Study design. Template: "In [P], does [I] vs [C] affect [O]?" PRISMA consumes PICO upstream.',
+    '',
+    '## Phase Dirs',
+    '- 01_Discover — cached searches (patents.json, papers.json)',
+    '- 02_TRL — s_curve.json, trl_assessment.json',
+    '- 03_Analyze — contradictions.json, su_field_analysis.json, bottlenecks.json',
+    '- 04_Synthesize — solutions.json, principles_applied.json, trends.json, roadmap.json',
+    '- 05_Deliver — paper, report drafts',
+    '- 06_References — downloaded papers + library.json',
+    '- 07_Patent — patent drafts',
+    'Check phase dirs before searching; write results back after analysis.',
+    '',
+    '## Multilingual + PubScholar',
+    '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
+    '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
+    '',
+    '## Writing Papers/Patents',
+    '- Clear trigger (`write paper: <title>`, `/patent <title>`, `写论文: <title>`) → host intercepts, you don\'t see it.',
+    '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Ask: "What topic? Reply `write paper: <title>` to start." Stop.',
+    '- Never output paper plan + write_file together (hook abort).',
+    '',
+    '## File refs (@<path>)',
+    'ALWAYS read_file first. Never invent contents. edit_file for refine/improve/fix; write_file only for full rewrites.',
+    '',
+    '## Proactive Workflow',
+    '- Technical Q → answer + offer: "Search prior art?" or "Run contradiction analysis?"',
+    '- Vague problem → "TRIZ, SWOT, PEST, or 5W1H first?"',
+    '- Slide/figure/table → propose in text, confirm, then edit_file.',
+    '',
+    '## Tools',
+    'TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve.',
+    'Papers: search, papers_download, papers_list_downloaded.',
+    'FS: read_file, write_file, edit_file, list_dir, grep_search, glob_files, ast_grep, ast_edit, apply_patch, bash, exec_tool. bash needs user approval. read/write/edit_file/list_dir are workspace-scoped.',
+    'Full schemas come via function-calling API.',
+    '',
+    '## Slash Commands',
+    slashCommandsList,
+    '',
+    '## Tool-Call Format',
+    'Single JSON object. No XML. No commentary. "not support such call" → don\'t retry, reformulate in plain text.',
+    '',
+    '## After Tool Calls',
+    'Briefly explain what was found + suggest next step. Never end turn right after a tool result. Max 2 retries on a failing tool — then ask user for corrected input.',
+  ].join('\n');
 }
 
 function handleHelp(): void {
@@ -469,8 +683,8 @@ ${conversationText}
     name: 'trinno-compact',
     systemPrompt,
     temperature: 0.3,
-    model,
-    baseUrl,
+    ...(model ? { model } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
   });
 
   const started = await agent.start();
@@ -491,7 +705,6 @@ ${conversationText}
             break;
           case 'Error':
             emit('error', { error: token.error });
-            started.stop().catch(() => {});
             resolve();
             break;
         }
@@ -500,7 +713,101 @@ ${conversationText}
   } catch (err) {
     emit('error', { error: err instanceof Error ? err.message : String(err) });
   } finally {
-    started.stop().catch(() => {});
+    started.stop().catch(() => { });
+  }
+}
+
+async function handlePaper(
+  prompt: string,
+  apiKey: string | undefined,
+  model?: string,
+  baseUrl?: string
+): Promise<void> {
+  console.error('[bos-worker] handlePaper START');
+
+  if (!deps) {
+    const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
+    if (apiKey) brainOptions.apiKey = apiKey;
+    deps = await composeRoot(brainOptions);
+    await initApprovalBus(deps.brain);
+    initAgentFactory(deps.brain, {
+      defaultTools: deps.tools,
+      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
+    });
+  }
+
+  const basePrompt = [
+    '你是一位精通TRIZ方法论的研究专家，擅长撰写高质量的学术论文和技术研究报告。',
+    '',
+    '## 核心工作流程 — 必须严格遵循',
+    '',
+    '**第一步：收集数据** — 使用已注册的TRIZ工具（triz_parameters, triz_principles, triz_s_curve 等）收集必要的研究数据。',
+    '',
+    '**第二步：撰写论文并写入文件** — 收集完数据后，必须调用 write_file 工具将完整论文写入 05_Deliver/paper.md。',
+    '写入内容必须是完整的学术论文（约3000字以上），结构如下：',
+    '  - 摘要与关键词',
+    '  - 引言与背景',
+    '  - 技术矛盾分析（含 TRIZ 39 工程参数映射 + 40 发明原理）',
+    '  - 物场分析与 76 标准解应用',
+    '  - 解决方案设计（详细论证）',
+    '  - S 曲线分析与技术发展趋势',
+    '  - 实施路线图与里程碑',
+    '  - TRL 技术成熟度评估',
+    '  - 结论与展望',
+    '  - 参考文献',
+    '',
+    '**第三步：输出简短确认** — 写入成功后，仅输出简短的完成确认，不要再重复论文内容。',
+    '',
+    '## 重要约束',
+    '- write_file 的 filePath 参数必须是：05_Deliver/paper.md（相对工作区根目录）',
+    '- 不要将工具调用结果作为论文内容输出，那是中间数据',
+    '- 最终论文须用中文撰写，格式为 markdown',
+    '- 不要输出 "我将为您撰写" 之类的前言，直接开始执行',
+    '- 内容须基于真实 TRIZ 数据，不要编造参数编号或原理编号',
+  ].join('\n');
+
+  const f = getAgentFactory();
+  const agent = f.create({
+    name: 'trinno-paper',
+    systemPrompt: basePrompt,
+    temperature: 0.3,
+    ...(model ? { model } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+  });
+
+  const started = await agent.start();
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      started.stream(prompt, (token: any) => {
+        switch (token.type) {
+          case 'ReasoningContent':
+            emit('token', { tokenType: 'ReasoningContent', text: token.text });
+            break;
+          case 'Text':
+            emit('token', { tokenType: 'Text', text: token.text });
+            break;
+          case 'ToolCall':
+            emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+            break;
+          case 'ToolResult':
+            emit('token', { tokenType: 'ToolResult', text: token.result || token.text || '', toolId: token.id, status: 'completed' });
+            break;
+          case 'Done':
+            emit('done', { generated: true });
+            resolve();
+            break;
+          case 'Error':
+            emit('error', { error: token.error });
+            resolve();
+            break;
+        }
+      });
+    });
+  } catch (err) {
+    emit('error', { error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    started.stop().catch(() => { });
   }
 }
 
@@ -515,6 +822,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
       const msg = JSON.parse(line);
       switch (msg.type) {
         case 'chat':
+          console.error('[bos-worker] recv chat, text length:', msg.text?.length, 'sessionId:', msg.sessionId);
           if (msg.workspaceRoot) (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
           currentJobId++;
           const jobId = String(currentJobId);
@@ -523,72 +831,40 @@ process.stdin.on('data', async (chunk: Buffer) => {
             handleHelp();
           } else if (msg.usePubSub) {
             await runJobWithPubSub(jobId, async (signal, localEmit) => {
-              const skillContent = msg.skillContent || undefined;
-              if (await handleSlashCommand(msg.text, signal, localEmit)) {
-                if (pendingSkillArgs) {
-                  const skillArgs = pendingSkillArgs;
-                  const sc = activeSkillContent || skillContent;
-                  pendingSkillArgs = null;
-                  activeSkillContent = null;
-                  activeSkillName = null;
-                  await handleChatWithEmit(skillArgs, msg.context, msg.persona, msg.apiKey, msg.systemSummary, localEmit, signal, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
-                }
-                if (pendingSlashOutput && msg.sessionId && deps?.brain) {
-                  if (msg.brainOsSession) {
-                    const newSession = await syncSessionAfterCommand(
-                      deps.brain,
-                      msg.brainOsSession,
-                      msg.text,
-                      pendingSlashOutput,
-                    );
-                    if (newSession) {
-                      getAgentFactory().setSessionContext(msg.sessionId, {
-                        brainOsSession: newSession,
-                        lastUpdated: Date.now(),
-                      });
-                      pendingSlashOutput = null;
-                    }
-                  }
-                }
-              } else {
-                const sc = pendingSlashOutput && !skillContent ? pendingSlashOutput : skillContent;
-                pendingSlashOutput = null;
-                await handleChatWithEmit(msg.text, msg.context, msg.persona, msg.apiKey, msg.systemSummary, localEmit, signal, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
-              }
+              await handleChatWithEmit(
+                msg.text,
+                msg.context ?? null,
+                msg.persona,
+                msg.apiKey,
+                msg.systemSummary,
+                localEmit,
+                signal,
+                msg.sessionId,
+                msg.brainOsSession,
+                msg.skillContent,
+                msg.model,
+                msg.baseUrl,
+                msg.toolPermissions,
+                msg.mcp?.servers,
+              );
             });
           } else {
-            const skillContent = msg.skillContent || undefined;
-            if (await handleSlashCommand(msg.text, abortController?.signal ?? new AbortController().signal, emit)) {
-              if (pendingSkillArgs) {
-                const skillArgs = pendingSkillArgs;
-                const sc = activeSkillContent || skillContent;
-                pendingSkillArgs = null;
-                activeSkillContent = null;
-                activeSkillName = null;
-                await handleChat(skillArgs, msg.context, msg.persona, msg.apiKey, msg.systemSummary, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
-              }
-              if (pendingSlashOutput && msg.sessionId && deps?.brain) {
-                if (msg.brainOsSession) {
-                  const newSession = await syncSessionAfterCommand(
-                    deps.brain,
-                    msg.brainOsSession,
-                    msg.text,
-                    pendingSlashOutput,
-                  );
-                  if (newSession) {
-                    getAgentFactory().setSessionContext(msg.sessionId, {
-                      brainOsSession: newSession,
-                      lastUpdated: Date.now(),
-                    });
-                    pendingSlashOutput = null;
-                  }
-                }
-              }
-            } else {
-              const sc = pendingSlashOutput && !skillContent ? pendingSlashOutput : skillContent;
-              pendingSlashOutput = null;
-              await handleChat(msg.text, msg.context, msg.persona, msg.apiKey, msg.systemSummary, msg.sessionId, msg.brainOsSession, sc, msg.model, msg.baseUrl, msg.toolPermissions, msg.mcp?.servers);
-            }
+            await handleChatWithEmit(
+              msg.text,
+              msg.context ?? null,
+              msg.persona,
+              msg.apiKey,
+              msg.systemSummary,
+              emit,
+              abortController?.signal ?? new AbortController().signal,
+              msg.sessionId,
+              msg.brainOsSession,
+              msg.skillContent,
+              msg.model,
+              msg.baseUrl,
+              msg.toolPermissions,
+              msg.mcp?.servers,
+            );
           }
           break;
         case 'cancel':
@@ -600,6 +876,147 @@ process.stdin.on('data', async (chunk: Buffer) => {
         case 'compact':
           await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl);
           break;
+        case 'clear-session':
+          if (msg.sessionId) {
+            getAgentFactory().clearSessionContext(msg.sessionId);
+          }
+          break;
+        case 'compact-result':
+          if (msg.sessionId && msg.summary) {
+            const factory = getAgentFactory();
+            const agent = factory.create({
+              name: 'trinno-compact-result',
+              systemPrompt: `## Conversation History Summary\n\n${msg.summary}`,
+              temperature: 0.3,
+            });
+            const started = await agent.start();
+            try {
+              const exported = started.exportSession();
+              if (exported) {
+                factory.setSessionContext(msg.sessionId, {
+                  brainOsSession: exported,
+                  lastUpdated: Date.now(),
+                });
+              }
+            } finally {
+              started.stop().catch(() => {});
+            }
+          }
+          break;
+        case 'slash': {
+          if (msg.workspaceRoot) (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+          currentJobId++;
+          const slashJobId = String(currentJobId);
+          if (msg.usePubSub) {
+            await runJobWithPubSub(slashJobId, async (signal, localEmit) => {
+              const matched = await handleSlashCommand(msg.text, signal, localEmit);
+              if (!matched) {
+                localEmit('error', { error: formatUnknownSlash(msg.text) });
+              }
+            });
+          } else {
+            const matched = await handleSlashCommand(msg.text, abortController?.signal ?? new AbortController().signal, emit);
+            if (!matched) {
+              emit('error', { error: formatUnknownSlash(msg.text) });
+            }
+          }
+          break;
+        }
+        case 'paper': {
+          const paperWorkflowPrompt = [
+            '你是一位精通TRIZ方法论的研究专家，擅长撰写高质量的学术论文和技术研究报告。',
+            '',
+            '## 工作方式',
+            '你拥有完整的工具集（TRIZ分析工具 + 文件读写工具）。每次用户请求写论文时，你应该：',
+            '1. 先使用工具收集必要的研究数据（TRIZ参数、原理、S曲线等）',
+            '2. 撰写完整学术论文',
+            '3. 使用 write_file 工具将论文写入文件',
+            '',
+            '## 关键的写入要求',
+            '当你要保存论文时，必须调用 write_file 工具：',
+            '  filePath = "05_Deliver/paper.md"',
+            '  content = 完整论文内容（3000字以上）',
+            '',
+            '## 论文结构',
+            '# 标题',
+            '## 摘要与关键词',
+            '## 引言与背景',
+            '## 技术矛盾分析（TRIZ 39工程参数 + 40发明原理）',
+            '## 物场分析与 76 标准解',
+            '## 解决方案设计',
+            '## S曲线分析与技术发展趋势',
+            '## 实施路线图',
+            '## TRL技术成熟度评估',
+            '## 结论与展望',
+            '## 参考文献',
+            '',
+            '## 约束',
+            '- 中文撰写，markdown格式',
+            '- 不要编造TRIZ参数编号，使用工具查询真实数据',
+            '- 写入成功后仅输出简短确认，不要再重复论文全文',
+          ].join('\n');
+          const userPersonaPromptForPaper = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
+            ? msg.persona.prompt.trim()
+            : null;
+          const paperPersona = {
+            name: 'trinno-paper',
+            prompt: userPersonaPromptForPaper
+              ? `${userPersonaPromptForPaper}\n\n---\n\n${paperWorkflowPrompt}`
+              : paperWorkflowPrompt,
+          };
+          abortController = new AbortController();
+          await handleChatWithEmit(
+            msg.prompt,
+            null,
+            paperPersona,
+            msg.apiKey,
+            undefined,
+            emit,
+            abortController.signal,
+            undefined,
+            undefined,
+            undefined,
+            msg.model,
+            msg.baseUrl,
+            undefined,
+            undefined,
+          );
+          break;
+        }
+        case 'incremental-write': {
+          const isPatent = String(msg.prompt || '').includes('专利');
+          const docLabel = isPatent ? '专利文档' : '论文';
+          const skillHint = `本任务是增量撰写${docLabel}。请调用 \`load_skill\` 加载 \`incremental_write\` 技能，然后严格按其约定（marker-anchored，每轮一次 edit_file）撰写。`;
+          const userPersonaPrompt = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
+            ? msg.persona.prompt.trim()
+            : null;
+          const incrementalPersona = {
+            name: (msg.persona && typeof msg.persona.name === 'string' && msg.persona.name.trim())
+              ? msg.persona.name.trim()
+              : (isPatent ? 'trinno-incremental-patent' : 'incremental-paper'),
+            prompt: userPersonaPrompt
+              ? `${userPersonaPrompt}\n\n---\n\n${skillHint}`
+              : skillHint,
+          };
+          abortController = new AbortController();
+          await handleChatWithEmit(
+            msg.prompt,
+            null,
+            incrementalPersona,
+            msg.apiKey,
+            undefined,
+            emit,
+            abortController.signal,
+            undefined,
+            undefined,
+            undefined,
+            msg.model,
+            msg.baseUrl,
+            undefined,
+            undefined,
+          );
+          break;
+        }
         case 'mcp-status-request':
           emitMcpStatus();
           break;
@@ -623,10 +1040,29 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     });
   }
 
-  const basePrompt = persona?.prompt || `You are a TRIZ research expert.`;
+  const FALLBACK_PERSONA = 'You are the Trinno Research Assistant — a domain expert in technical innovation, engineering design, and systematic research using TRIZ, PRISMA, SWOT, PEST, and 5W1H. Always respond in character as a senior research collaborator, even for casual greetings. Briefly introduce yourself and your capabilities when greeted, then ask what problem the user is working on.';
+  const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
+    ? persona.prompt.trim()
+    : FALLBACK_PERSONA;
+  const methodologyPrompt = buildMethodologyPrompt('');
+  const basePrompt = `${personaPrompt}\n\n${methodologyPrompt}`;
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
+
+  const toolInstructionPostfix = `
+## How to Work After Calling Tools
+After every tool result:
+1. Briefly explain what was found (or note "no data returned" if the tool returned empty results)
+2. Provide useful analysis, conclusions, or next steps based on your knowledge and the tool results
+3. NEVER end your turn right after a tool result — always follow up with a substantive Text response before Done.
+After each tool result: briefly explain what was found, then suggest the natural next step.`;
+
+  if (persona?.prompt) {
+    systemPrompt += toolInstructionPostfix;
+  } else {
+    systemPrompt += toolInstructionPostfix;
+  }
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
@@ -641,8 +1077,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   const agent = f.create({
     name: 'trinno-chat',
     systemPrompt,
-    model,
-    baseUrl,
+    ...(model ? { model } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     mcpServers: effectiveMcp,
   });
 
@@ -679,7 +1115,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     await new Promise<void>((resolve, reject) => {
       started.stream(userMessage, (token: any) => {
         if (signal.aborted) {
-          started.stop().catch(() => {});
+          started.stop().catch(() => { });
           resolve();
           return;
         }
@@ -692,16 +1128,26 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             localEmit('token', { tokenType: 'Text', text: token.text });
             break;
           case 'ToolCall':
-            localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id });
+            localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
             break;
           case 'ToolResult':
-            localEmit('token', { 
-              tokenType: 'ToolResult', 
-              text: token.result || token.text || '', 
+            localEmit('token', {
+              tokenType: 'ToolResult',
+              text: token.result || token.text || '',
               toolId: token.id,
-              status: 'completed' 
+              status: 'completed'
             });
             break;
+          case 'Usage':
+            localEmit('token', {
+              tokenType: 'Usage',
+              promptTokens: token.promptTokens,
+              completionTokens: token.completionTokens,
+              totalTokens: token.totalTokens,
+              promptTokensDetails: token.promptTokensDetails,
+            });
+            break;
+          case 'Stop':
           case 'Done': {
             let exportedSession2: string | undefined;
             if (sessionId) {
@@ -735,7 +1181,6 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             } else {
               localEmit('error', { error: token.error });
             }
-            started.stop().catch(() => {});
             resolve();
             break;
         }
@@ -783,14 +1228,14 @@ async function syncSessionAfterCommand(
       started.stream(syncMsg, (token: any) => {
         if (token.type === 'Done') {
           let session: string | undefined;
-          try { session = started.exportSession(); } catch {}
+          try { session = started.exportSession(); } catch { }
           resolve(session);
         } else if (token.type === 'Error') {
           resolve(undefined);
         }
       });
     });
-    started.stop().catch(() => {});
+    started.stop().catch(() => { });
     return result;
   } catch {
     return undefined;
@@ -799,7 +1244,7 @@ async function syncSessionAfterCommand(
 
 process.on('SIGTERM', () => {
   cancelAllPendingApprovals();
-  brain?.stop().catch(() => {});
-  deps?.brain.stop().catch(() => {});
+  brain?.stop().catch(() => { });
+  deps?.brain.stop().catch(() => { });
   process.exit(0);
 });
