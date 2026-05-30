@@ -124,15 +124,15 @@ export class ResearchProject {
       onProgress(`${phaseId} phase complete.`);
     } catch (e) {
       onProgress(`Phase error: ${e instanceof Error ? e.message : String(e)}`);
+      // Mark phase as blocked (not done) so downstream phases know data is missing
       const fresh = this.state.phases.find(p => p.id === phaseId);
       if (fresh) {
         for (const t of fresh.tasks || []) {
-          if (t.status === 'pending' || t.status === 'in_progress') {
-            t.status = 'done';
+          if (t.status === 'in_progress') {
+            t.status = 'blocked';
           }
         }
-        fresh.status = 'done';
-        fresh.completion = 100;
+        fresh.status = 'blocked';
       }
       this.save();
     } finally {
@@ -212,17 +212,42 @@ export class ResearchProject {
         allTech = [...tech, ...tp];
         onProgress(`Supplemented search: +${ep.length} patents, +${pp.length} papers, +${tp.length} tech solutions`);
       }
+    } else {
+      // Auto keyword improvement when results are sparse (< 20 total)
+      const totalResults = allPatents.length + allPapers.length + allTech.length;
+      if (totalResults < 20) {
+        onProgress(`Sparse results (${totalResults} total). Auto-refining keywords...`);
+        const resultsSummary = `Patents: ${allPatents.length}, Papers: ${allPapers.length}, Tech: ${allTech.length}`;
+        const improved = await this.analysisTools.suggestBetterKeywords(this.state.problem, keywords, resultsSummary, scb);
+        if (improved && improved !== keywords) {
+          onProgress(`Retrying with improved keywords: ${improved}`);
+          const ep = await this.searchService.searchPatents(improved, 25);
+          const pp = await this.searchService.searchPapers(improved, 25);
+          const tp = await this.searchService.searchTechSolutions(improved, 25);
+          allPatents = [...allPatents, ...ep];
+          allPapers = [...allPapers, ...pp];
+          allTech = [...allTech, ...tp];
+          onProgress(`Auto-refined search: +${ep.length} patents, +${pp.length} papers, +${tp.length} tech solutions`);
+        }
+      }
     }
 
-    const dedupByUrl = <T extends { url?: string }>(items: T[]): T[] => {
-      const seen = new Set<string>();
-      return items.filter(item => {
-        if (!item.url) return true;
-        if (seen.has(item.url)) return false;
-        seen.add(item.url);
-        return true;
-      });
-    };
+    const dedupByUrl = <T extends { url?: string; title?: string }>(items: T[]): T[] => {
+    const seenUrls = new Set<string>();
+    const seenTitles = new Set<string>();
+    return items.filter(item => {
+      // Dedup by URL
+      if (item.url && seenUrls.has(item.url)) return false;
+      if (item.url) seenUrls.add(item.url);
+      // Also dedup by normalized title (lowercased, whitespace-collapsed)
+      if (item.title) {
+        const normTitle = item.title.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (seenTitles.has(normTitle)) return false;
+        seenTitles.add(normTitle);
+      }
+      return true;
+    });
+  };
     allPatents = dedupByUrl(allPatents);
     allPapers = dedupByUrl(allPapers);
     allTech = dedupByUrl(allTech);
@@ -262,12 +287,25 @@ export class ResearchProject {
         allPapers = allPapers.filter(p => keepUrls.has(p.url));
         allTech = allTech.filter(p => keepUrls.has(p.url));
 
-        // Safety: never exclude ALL results
+        // Safety net: if screening excluded everything, restore borderline items
         if (allPatents.length === 0 && allPapers.length === 0 && allTech.length === 0) {
-          onProgress('Warning: Screening excluded all results — keeping originals');
-          allPatents = patents;
-          allPapers = papers;
-          allTech = tech;
+          const borderlineUrls = new Set(
+            screened.filter(s => s.inclusionDecision === 'borderline').map(s => s.url)
+          );
+          // Only restore borderline (not exclude) — preserves the screening signal
+          if (borderlineUrls.size > 0) {
+            allPatents = patents.filter(p => borderlineUrls.has(p.url));
+            allPapers = papers.filter(p => borderlineUrls.has(p.url));
+            allTech = tech.filter(p => borderlineUrls.has(p.url));
+            const restored = allPatents.length + allPapers.length + allTech.length;
+            onProgress(`Warning: Screening excluded all results — restored ${restored} borderline items`);
+          } else {
+            // No borderline either — keep originals as last resort
+            onProgress('Warning: Screening excluded all results with no borderline items — keeping originals');
+            allPatents = patents;
+            allPapers = papers;
+            allTech = tech;
+          }
         }
         const excluded = allBeforeScreening.length - (allPatents.length + allPapers.length + allTech.length);
         onProgress(`Screening: ${allPatents.length} patents, ${allPapers.length} papers, ${allTech.length} tech solutions kept (${excluded} excluded, ${screened.filter(s => s.inclusionDecision === 'borderline').length} borderline)`);
@@ -394,6 +432,10 @@ export class ResearchProject {
       onProgress(`S-Curve Stage: ${maturity.sCurveStage || 'unknown'}`);
     } catch (e) {
       onProgress(`TRL assessment failed: ${e instanceof Error ? e.message : String(e)}`);
+      // If nothing was written, throw so the phase gets marked as blocked, not done
+      if (!fs.existsSync(path.join(trlDir, 'trl_assessment.json'))) {
+        throw e;
+      }
     }
     this.updateTask('02_TRL', '2.1', 'done');
     this.updateTask('02_TRL', '2.2', 'done');
@@ -408,7 +450,8 @@ export class ResearchProject {
 
     if (allResults.length === 0) {
       onProgress('No search results found. Run survey phase first.');
-      return;
+      // Mark phase as blocked so runPhase doesn't leave it in_progress
+      throw new Error('No search results available — run /trp survey first');
     }
 
     const trlPath = path.join(root, '02_TRL', 'trl_assessment.json');
@@ -464,6 +507,10 @@ const trlLevel = (trlData as any).trl?.level as number | undefined;
       const validCount = contradictions.filter((c: any) => c.matrixValidated).length;
       onProgress(`Pass 1 complete: ${contradictions.length} contradictions (${validCount} matrix-validated)`);
 
+      // Save Pass 1 results immediately so they survive Pass 2/3 failures
+      fs.writeFileSync(path.join(root, '03_Analyze', 'contradictions.json'),
+        JSON.stringify(contradictions, null, 2), 'utf-8');
+
       // Pass 2: Bottleneck identification
       onProgress('Pass 2/3: Identifying bottlenecks...');
       const bnResult = await this.analysisTools.identifyBottlenecksWithContext({
@@ -476,6 +523,10 @@ const trlLevel = (trlData as any).trl?.level as number | undefined;
       bottlenecks = bnResult.bottlenecks || [];
       rootCauses = bnResult.rootCauses || [];
       onProgress(`Pass 2 complete: ${bottlenecks.length} bottlenecks, ${rootCauses.length} root causes`);
+
+      // Save Pass 2 results immediately so they survive Pass 3 failures
+      fs.writeFileSync(path.join(root, '03_Analyze', 'bottlenecks.json'),
+        JSON.stringify({ bottlenecks, rootCauses }, null, 2), 'utf-8');
 
       // Pass 3: Deep root cause analysis
       onProgress('Pass 3/3: Analyzing root causes with 5-Why...');
@@ -535,6 +586,10 @@ const trlLevel = (trlData as any).trl?.level as number | undefined;
       onProgress(`Analysis complete: ${contradictions.length} contradictions, ${bottlenecks.length} bottlenecks, ${rootCauses.length} root causes`);
     } catch (e) {
       onProgress(`TRIZ analysis failed: ${e instanceof Error ? e.message : String(e)}`);
+      // If ALL analysis passes produced nothing, mark as blocked — not done
+      if (contradictions.length === 0 && bottlenecks.length === 0 && rootCauses.length === 0) {
+        throw new Error(`Analysis produced no results — TRIZ analysis failed. ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     this.updateTask('03_Analyze', '3.1', 'done');
     this.updateTask('03_Analyze', '3.2', 'done');
@@ -629,6 +684,10 @@ private async execSynthesize(root: string, onProgress: (msg: string) => void, sc
       onProgress(`Generated ${result.solutions?.length || 0} solutions with TRIZ principles`);
     } catch (e) {
       onProgress(`Solution generation failed: ${e instanceof Error ? e.message : String(e)}`);
+      // If nothing was written, throw so phase gets marked as blocked
+      if (!fs.existsSync(path.join(root, '04_Synthesize', 'solutions.json'))) {
+        throw e;
+      }
     }
     this.updateTask('04_Synthesize', '4.1', 'done');
     this.updateTask('04_Synthesize', '4.2', 'done');
@@ -1173,15 +1232,15 @@ ${report.nextSteps.map((s: string) => `- ${s}`).join('\n')}
 
     for (const r of allResults) {
       if (!r.title) continue;
+      const year = String(r.publishedDate || '').slice(0, 4) || new Date().getFullYear().toString();
       const words = r.title.replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 2);
-      const keyBase = (words[0] || 'unknown') + (words[2] || '').charAt(0) + String(new Date().getFullYear());
+      const keyBase = (words[0] || 'unknown') + (words[2] || '').charAt(0) + year;
       let key = keyBase.toLowerCase();
       let n = 1;
       while (seenKeys.has(key)) { key = keyBase.toLowerCase() + n++; }
       seenKeys.add(key);
 
       const author = 'Unknown';
-      const year = String(r.publishedDate || '').slice(0, 4) || new Date().getFullYear().toString();
       const entryType = r.sourceType === 'patent' ? 'patent' : r.sourceType === 'tech_solution' ? 'misc' : 'article';
       const url = r.url ? `\n  url = {${r.url}},` : '';
 

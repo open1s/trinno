@@ -68,8 +68,12 @@ async function doInit(
 ): Promise<void> {
   emit('token', { tokenType: 'Text', text: `## 📁 ${path.basename(getRoot())}\n\n**问题:** ${problem}\n\n` });
 
+    // Derive project name from the problem description (more meaningful than dirname)
+  const projectName = problem.replace(/[^\w\s一-鿿]/g, '').trim().split(/\s+/).slice(0, 6).join(' ')
+    || path.basename(getRoot());
+
   const project = ResearchProject.create(
-    { name: path.basename(getRoot()), problem, rootDir: getRoot() },
+    { name: projectName, problem, rootDir: getRoot() },
     deps.searchService,
     deps.analysisTools,
   );
@@ -117,6 +121,27 @@ async function doAmend(
       }
     }
     emit('token', { tokenType: 'Text', text: `\n✅ ${pd?.titleZh || targetPhase} 重新执行完成。\n` });
+
+    // Cascade: re-run all downstream phases that depend on this phase's output
+    const targetIdx = PHASE_CHAIN.indexOf(targetPhase);
+    if (targetIdx >= 0) {
+      const downstreamPhases = PHASE_CHAIN.slice(targetIdx + 1);
+      if (downstreamPhases.length > 0) {
+        emit('token', { tokenType: 'Text', text: `\n🔄 **级联重新执行下游阶段**: ${downstreamPhases.map(p => ALL_PHASES.find(ap => ap.id === p)?.titleZh || p).join(' → ')}\n\n` });
+        for (const downstreamId of downstreamPhases) {
+          if (signal.aborted) break;
+          const downstreamPd = ALL_PHASES.find(p => p.id === downstreamId);
+          emit('token', { tokenType: 'Text', text: `\n### 📌 由于 ${pd?.titleZh || targetPhase} 已更新，重新执行 ${downstreamPd?.titleZh || downstreamId}...\n\n` });
+          try {
+            await runPhaseTask(project, downstreamId, emit, signal);
+          } catch (derr) {
+            if (signal.aborted) return;
+            emit('token', { tokenType: 'Text', text: `⚠️ ${downstreamPd?.titleZh || downstreamId} 级联失败: ${derr instanceof Error ? derr.message : String(derr)}\n` });
+          }
+        }
+        emit('token', { tokenType: 'Text', text: `\n✅ 级联完成。所有依赖阶段已更新。\n` });
+      }
+    }
   } catch (err) {
     if (signal.aborted) return;
     emit('token', { tokenType: 'Text', text: `\n❌ 错误: ${err instanceof Error ? err.message : String(err)}\n` });
