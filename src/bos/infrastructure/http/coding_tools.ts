@@ -5,18 +5,44 @@ import { execSync } from 'child_process';
 import * as readline from 'readline';
 
 const DANGEROUS_PATTERNS = [
-  /^rm\s+-rf\s+\/$/,
-  /^rm\s+-rf\s+\//,
+  /^rm\s+-rf?\s+\/$/,
+  /^rm\s+-rf?\s+\//,
+  /^rm\s+-[rf]+\s+\//,
+  /^rm\s+-[rf]+\s+\/$/,
   /^dd\s+if=/,
   /^mkfs/,
   /^:(){:|:&};:/,
-  /^>\s*\/dev\/sda/,
+  /^>\s*\/dev\/(sda|sdb|sdc|nvme|mmcblk)/,
   /^chmod\s+-R\s+777\s+\/$/,
+  /^chmod\s+-R?\s+777\s+\//,
+  /^(sudo|doas)\s+/,
+  /^(curl|wget)\s+.+[\|;]\s*(sh|bash|zsh)\b/,
+  /^python[23]?\s+-c\s+['"].*import.*os.*system/,
+  /^eval\s+/,
+  /^source\s+\/dev\/stdin/,
+];
+
+const SECRET_PATTERNS = [
+  /[/\\]\.ssh[/\\]/,
+  /[/\\]\.aws[/\\]/,
+  /[/\\]\.config[/\\]gcloud[/\\]/,
+  /[/\\]\.config[/\\]gh[/\\]/,
+  /[/\\](?:^|[\\/])\.env(?:\.[a-zA-Z]+)?$/,
+  /[/\\]id_rsa$/,
+  /[/\\]id_ed25519$/,
+  /[/\\]known_hosts$/,
+  /[/\\]credentials?$/,
 ];
 
 function isWorkspacePath(filePath: string, workspaceRoot: string): boolean {
   const resolved = path.resolve(workspaceRoot, filePath);
-  return resolved.startsWith(workspaceRoot);
+  const normalizedRoot = path.resolve(workspaceRoot) + path.sep;
+  return resolved === path.resolve(workspaceRoot) || resolved.startsWith(normalizedRoot);
+}
+
+function isSecretPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return SECRET_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
 function isDangerousCommand(cmd: string): boolean {
@@ -37,6 +63,9 @@ export function createCodingTools(workspaceRoot: string) {
         const filePath = path.resolve(workspaceRoot, args.filePath);
         if (!isWorkspacePath(args.filePath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
+        }
+        if (isSecretPath(filePath)) {
+          return err('Access denied: file is protected');
         }
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);
@@ -89,6 +118,9 @@ export function createCodingTools(workspaceRoot: string) {
         if (!isWorkspacePath(args.filePath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
         }
+        if (isSecretPath(filePath)) {
+          return err('Access denied: file is protected');
+        }
         const dir = path.dirname(filePath);
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
@@ -115,6 +147,9 @@ export function createCodingTools(workspaceRoot: string) {
         const filePath = path.resolve(workspaceRoot, args.filePath);
         if (!isWorkspacePath(args.filePath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
+        }
+        if (isSecretPath(filePath)) {
+          return err('Access denied: file is protected');
         }
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);
@@ -321,6 +356,9 @@ export function createCodingTools(workspaceRoot: string) {
         const filePath = path.resolve(workspaceRoot, args.filePath);
         if (!isWorkspacePath(args.filePath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
+        }
+        if (isSecretPath(filePath)) {
+          return err('Access denied: file is protected');
         }
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);

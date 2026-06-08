@@ -92,6 +92,17 @@ function loadSkillsFromHomeDir(): void {
 
 loadSkillsFromHomeDir();
 
+function chdirToWorkspace(): void {
+  const root: string | undefined = (globalThis as any).__TRP_WORKSPACE_ROOT;
+  if (root && typeof root === 'string' && root.length > 0) {
+    try {
+      process.chdir(root);
+    } catch {
+      // ignore chdir errors
+    }
+  }
+}
+
 process.on('uncaughtException', (err) => {
   try { fs.writeSync(2, `[bos-worker] UNCAUGHT: ${err.message}\n${err.stack}\n`); } catch { }
   try { process.exit(1); } catch { }
@@ -823,7 +834,10 @@ process.stdin.on('data', async (chunk: Buffer) => {
       switch (msg.type) {
         case 'chat':
           console.error('[bos-worker] recv chat, text length:', msg.text?.length, 'sessionId:', msg.sessionId);
-          if (msg.workspaceRoot) (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+          if (msg.workspaceRoot) {
+            (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+            chdirToWorkspace();
+          }
           currentJobId++;
           const jobId = String(currentJobId);
 
@@ -904,7 +918,10 @@ process.stdin.on('data', async (chunk: Buffer) => {
           }
           break;
         case 'slash': {
-          if (msg.workspaceRoot) (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+          if (msg.workspaceRoot) {
+            (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+            chdirToWorkspace();
+          }
           currentJobId++;
           const slashJobId = String(currentJobId);
           if (msg.usePubSub) {

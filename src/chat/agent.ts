@@ -25,12 +25,51 @@ let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
 const insertStack: InsertedCell[] = [];
 
+const SENSITIVE_ENV_PATTERNS = [
+  /^AWS_/,
+  /^AZURE_/,
+  /^GOOGLE_/i,
+  /^GCLOUD_/i,
+  /^GITHUB_/i,
+  /^GIT_/i,
+  /^GH_/i,
+  /^NPM_TOKEN/i,
+  /^NPM_SECRET/i,
+  /^NODE_PRE_GYP/i,
+  /^NUGET_/i,
+  /^TWILIO_/i,
+  /^SLACK_/i,
+  /^DIGITALOCEAN_/i,
+  /^DO_/i,
+  /^DBUS_/i,
+  /^DISPLAY/i,
+  /^LANG/i,
+  /^LC_/i,
+  /^TERM/i,
+  /^XDG_/i,
+  /^GIO_/i,
+  /^GTK_/i,
+  /^GNOME_/i,
+  /^KDE_/i,
+];
+
+function sanitizeEnv(): NodeJS.ProcessEnv {
+  const safe: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (SENSITIVE_ENV_PATTERNS.some(pattern => pattern.test(key))) continue;
+    safe[key] = value;
+  }
+  safe.NODE_NO_WARNINGS = '1';
+  return safe;
+}
+
 function spawnWorker(): childProcess.ChildProcess {
   const projectRoot = nodePath.resolve(__dirname, '..', '..');
   return childProcess.spawn('npx', ['tsx', 'src/bos/worker.ts'], {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: projectRoot,
-    env: { ...process.env, NODE_NO_WARNINGS: '1' },
+    env: sanitizeEnv(),
   });
 }
 
