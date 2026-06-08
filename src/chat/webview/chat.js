@@ -19,6 +19,7 @@
   const statusSessionEl = document.getElementById('status-session');
   const statusMessagesEl = document.getElementById('status-messages');
   const statusMcpEl = document.getElementById('status-mcp');
+  const statusSandboxEl = document.getElementById('status-sandbox');
 
   // Initialize Mermaid
   if (typeof mermaid !== 'undefined') {
@@ -42,6 +43,7 @@
   let currentSessionTitle = '';
   let sessions = [];
   let isCompacted = false;
+  let sandboxEnabled = false;
   let sessionMenuVisible = false;
   let attachMenuVisible = false;
   let agentMenuVisible = false;
@@ -120,6 +122,15 @@
       } else {
         statusMessagesEl.textContent = '0 tokens';
       }
+    }
+  }
+
+  function updateSandboxStatus() {
+    if (!statusSandboxEl) return;
+    if (sandboxEnabled) {
+      statusSandboxEl.innerHTML = '<span class="sandbox-badge">Sandbox</span>';
+    } else {
+      statusSandboxEl.innerHTML = '';
     }
   }
 
@@ -1148,6 +1159,10 @@
         }
         if (msg.isCompacted !== undefined) {
           isCompacted = msg.isCompacted;
+        }
+        if (msg.sandboxEnabled !== undefined) {
+          sandboxEnabled = msg.sandboxEnabled;
+          updateSandboxStatus();
         }
         updateStatusBar();
         showWelcome(msg.context);

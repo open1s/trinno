@@ -1655,6 +1655,17 @@ body {
   to { transform: rotate(360deg); }
 }
 
+.sandbox-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  background: var(--vscode-statusBarItem-prominentBackground, #d97706);
+  color: var(--vscode-statusBarItem-prominentForeground, #fff);
+  border-radius: 8px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
 .skill-block {
   background: var(--vscode-editor-background, #f5f5f5);
   border-left: 3px solid var(--vscode-gitDecoration-addedResourceForeground, #4caf50);

@@ -185,6 +185,7 @@ export async function sendMessage(
     baseUrl: effectiveBaseUrl,
     toolPermissions: config.tools.permissions,
     mcpServers: config.mcp.servers,
+    sandboxEnabled: config.sandbox.enabled,
   };
 
   let dataBuffer = '';

@@ -282,7 +282,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   return true;
 }
 
-async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[]): Promise<void> {
+async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   console.error('[bos-worker] handleChat START, sessionId:', sessionId, 'brainOsSession:', brainOsSession ? 'present' : 'absent');
   abortController = new AbortController();
   const signal = abortController.signal;
@@ -291,6 +291,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
+    if (sandboxEnabled) brainOptions.sandboxEnabled = sandboxEnabled;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
     initAgentFactory(deps.brain, {
@@ -860,6 +861,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
                 msg.baseUrl,
                 msg.toolPermissions,
                 msg.mcp?.servers,
+                msg.sandboxEnabled,
               );
             });
           } else {
@@ -878,6 +880,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
               msg.baseUrl,
               msg.toolPermissions,
               msg.mcp?.servers,
+              msg.sandboxEnabled,
             );
           }
           break;
@@ -997,6 +1000,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
             msg.baseUrl,
             undefined,
             undefined,
+            msg.sandboxEnabled,
           );
           break;
         }
@@ -1031,6 +1035,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
             msg.baseUrl,
             undefined,
             undefined,
+            msg.sandboxEnabled,
           );
           break;
         }
@@ -1044,11 +1049,12 @@ process.stdin.on('data', async (chunk: Buffer) => {
   }
 });
 
-async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[]): Promise<void> {
+async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
+    if (sandboxEnabled) brainOptions.sandboxEnabled = sandboxEnabled;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
     initAgentFactory(deps.brain, {

@@ -70,10 +70,12 @@ export async function composeRoot(options: {
   apiKey?: string;
   workspaceRoot?: string;
   toolPermissions?: ToolPermissionConfig;
+  sandboxEnabled?: boolean;
 } = {}): Promise<TrizDeps> {
   const locale = options.locale || DEFAULT_LOCALE;
   const workspaceRoot = options.workspaceRoot || process.cwd();
   const toolPermissions = options.toolPermissions || DEFAULT_TOOL_PERMISSIONS;
+  const sandboxEnabled = options.sandboxEnabled || false;
 
   const brainOptions: any = {};
   if (options.apiKey) brainOptions.apiKey = options.apiKey;
@@ -109,7 +111,7 @@ export async function composeRoot(options: {
     aiSCurveDataExtractor,
   );
 
-  const codingTools = createCodingTools(workspaceRoot);
+  const codingTools = createCodingTools(workspaceRoot, sandboxEnabled);
 
   const analysisService = new ContradictionAnalysisService();
   const contradictionRepo = new InMemoryContradictionRepository();

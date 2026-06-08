@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import * as readline from 'readline';
+import { SandboxManager } from '../sandbox.js';
 
 const DANGEROUS_PATTERNS = [
   /^rm\s+-rf?\s+\/$/,
@@ -50,7 +51,8 @@ function isDangerousCommand(cmd: string): boolean {
   return DANGEROUS_PATTERNS.some(pattern => pattern.test(trimmed));
 }
 
-export function createCodingTools(workspaceRoot: string) {
+export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolean) {
+  const sandbox = new SandboxManager({ enabled: sandboxEnabled ?? false, workspaceRoot });
   const readFile = defineTool(
     'read_file',
     'Read partial or full contents of a file with line numbers. Defaults to reading up to 1000 lines.',
@@ -196,11 +198,14 @@ export function createCodingTools(workspaceRoot: string) {
           return err('Command blocked: potentially dangerous operation');
         }
         const timeout = args.timeout || 30000;
-        const result = execSync(args.command, {
+        const { command: safeCommand, timeout: safeTimeout } = sandbox.wrapCommand(args.command);
+        const env = sandbox.isEnabled() ? sandbox.getRestrictedEnv() : undefined;
+        const result = execSync(safeCommand, {
           cwd: workspaceRoot,
-          timeout,
+          timeout: Math.max(timeout, safeTimeout),
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
+          env: env ? { ...process.env, ...env } : undefined,
         });
         return ok({ stdout: result, exitCode: 0 });
       } catch (e: any) {
@@ -398,11 +403,14 @@ export function createCodingTools(workspaceRoot: string) {
           return err('Command blocked: potentially dangerous operation');
         }
         const timeout = args.timeout || 30000;
-        const result = execSync(fullCommand, {
+        const { command: safeCommand, timeout: safeTimeout } = sandbox.wrapCommand(fullCommand);
+        const env = sandbox.isEnabled() ? sandbox.getRestrictedEnv() : undefined;
+        const result = execSync(safeCommand, {
           cwd: workspaceRoot,
-          timeout,
+          timeout: Math.max(timeout, safeTimeout),
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
+          env: env ? { ...process.env, ...env } : undefined,
         });
         return ok({ stdout: result, exitCode: 0 });
       } catch (e: any) {

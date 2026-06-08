@@ -274,6 +274,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionTitle: currentSession.title,
       sessions: sessionStore.sessions,
       isCompacted: currentSession.isCompacted,
+      sandboxEnabled: getChatConfig().sandbox.enabled,
     } as any);
 
     chatView.webview.postMessage({
@@ -1921,6 +1922,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
       <span id="status-session" class="status-item"></span>
       <span id="status-messages" class="status-item"></span>
       <div id="status-mcp" class="status-item mcp-status-wrapper"></div>
+      <span id="status-sandbox" class="status-item"></span>
     </div>
   </div>
   <script src="${scriptUri}"></script>
