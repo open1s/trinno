@@ -108,28 +108,28 @@
     wrap-ansi "^8.1.0"
     wrap-ansi-cjs "npm:wrap-ansi@^7.0.0"
 
-"@open1s/ezbos@^1.2.3":
-  version "1.2.3"
-  resolved "https://registry.npmjs.org/@open1s/ezbos/-/ezbos-1.2.3.tgz"
-  integrity sha512-kODlY3C5Y6qSAGRMRRr2TkskNVq41Ug6pdEp1pqt9erzeCnkCu8k6GelIB00kwakKsEtUDmzEOhO3dccxX495A==
+"@open1s/ezbos@^1.2.4":
+  version "1.2.4"
+  resolved "https://registry.npmjs.org/@open1s/ezbos/-/ezbos-1.2.4.tgz"
+  integrity sha512-jHHgszlZDkvPEknUo74Q9Q5Gqq73D158r4bYdfIY/2UFW3dHVd0hgM32/G0lXEMTxpjGWbLuiTtMhU2Iu5r4fQ==
   dependencies:
-    "@open1s/jsbos" "^2.2.10"
+    "@open1s/jsbos" "^2.2.11"
 
-"@open1s/jsbos-darwin-arm64@2.2.10":
-  version "2.2.10"
-  resolved "https://registry.npmjs.org/@open1s/jsbos-darwin-arm64/-/jsbos-darwin-arm64-2.2.10.tgz"
-  integrity sha512-Wy/w/Cac04j/goU8zfJYG3sLbhSr2IPAy756Y6CaYTlFJ+ZagF6oBrXKef+A9ShEnHBauboHDtoKRZ8ACJK6EA==
+"@open1s/jsbos-darwin-arm64@2.2.11":
+  version "2.2.11"
+  resolved "https://registry.npmjs.org/@open1s/jsbos-darwin-arm64/-/jsbos-darwin-arm64-2.2.11.tgz"
+  integrity sha512-/PQgi10Yhtx4Azbd6g/PlRxgdUVN81YhBR0L4vVYfPepI2rZSecJ5L0+hZq3pN4PU9Y8qMatl+/ZlMgBWNPjzw==
 
-"@open1s/jsbos@^2.2.10":
-  version "2.2.10"
-  resolved "https://registry.npmjs.org/@open1s/jsbos/-/jsbos-2.2.10.tgz"
-  integrity sha512-2oTJXNV7hzKL7e/JDQBEHXrAPrs1UYhagvm1pBUFcXCNji/bPbCkVXRHv6mFlwQ4u4W8eBTATEkScON36Q2N8w==
+"@open1s/jsbos@^2.2.11":
+  version "2.2.11"
+  resolved "https://registry.npmjs.org/@open1s/jsbos/-/jsbos-2.2.11.tgz"
+  integrity sha512-fmTCJ3NKZXDXJOs5sdcMwkq78Z6vDQ8qBGi7bjDXUfH6Plbq6kgKaCRDwJP77hBzXeoB+txZW1bSQeRNLgrByw==
   optionalDependencies:
-    "@open1s/jsbos-darwin-arm64" "2.2.10"
-    "@open1s/jsbos-linux-arm64-gnu" "2.2.10"
-    "@open1s/jsbos-linux-x64-gnu" "2.2.10"
-    "@open1s/jsbos-win32-arm64-msvc" "2.2.10"
-    "@open1s/jsbos-win32-x64-msvc" "2.2.10"
+    "@open1s/jsbos-darwin-arm64" "2.2.11"
+    "@open1s/jsbos-linux-arm64-gnu" "2.2.11"
+    "@open1s/jsbos-linux-x64-gnu" "2.2.11"
+    "@open1s/jsbos-win32-arm64-msvc" "2.2.11"
+    "@open1s/jsbos-win32-x64-msvc" "2.2.11"
 
 "@pkgjs/parseargs@^0.11.0":
   version "0.11.0"
