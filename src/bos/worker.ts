@@ -1007,7 +1007,39 @@ process.stdin.on('data', async (chunk: Buffer) => {
         case 'incremental-write': {
           const isPatent = String(msg.prompt || '').includes('专利');
           const docLabel = isPatent ? '专利文档' : '论文';
-          const skillHint = `本任务是增量撰写${docLabel}。请调用 \`load_skill\` 加载 \`incremental_write\` 技能，然后严格按其约定（marker-anchored，每轮一次 edit_file）撰写。`;
+          const completeMarker = isPatent ? '<!-- PATENT_COMPLETE -->' : '<!-- PAPER_COMPLETE -->';
+          const sectionOrder = isPatent
+            ? '技术领域 → 背景技术 → 发明内容 → 附图说明 → 具体实施方式 → 权利要求'
+            : '摘要 → 引言 → 技术矛盾分析 → 物场分析 → 解决方案 → S曲线 → 实施路线图 → TRL → 结论 → 参考文献';
+
+          const skillInstructions = `
+## 增量撰写规则（必须严格遵守）
+
+目标文件已初始化为：
+\`\`\`
+# <title>
+
+<!-- LLM_WRITE_HERE -->
+\`\`\`
+
+**每轮必须**：
+1. 读取文件（查看已写内容）
+2. 调用 edit_file 替换 \`<!-- LLM_WRITE_HERE -->\` 为「下一节内容 + 换行 + 新标记」
+3. 最终节用 ${completeMarker} 替换 \`<!-- LLM_WRITE_HERE -->\`
+
+**edit_file 约束**：
+- 必须 exactly match oldString 为 \`<!-- LLM_WRITE_HERE -->\`
+- 只能 append，不允许 overwrite 或 delete 已写内容
+- 每轮只能调用一次 edit_file（一次 append 一节）
+- 禁止 write_file 覆写整个文件
+
+**section 顺序**：${sectionOrder}
+
+**节写法**：每节 100–300 行，标题为 \`## 中文标题\`，内容要详尽（背景技术需描述具体技术问题、物场分析需列出 76 标准解选择理由、具体实施方式需给出至少 2 个实施例）。
+
+**完成标志**：当 \`<!-- LLM_WRITE_HERE -->\` 被替换为 ${completeMarker} 后，本轮结束。
+`;
+
           const userPersonaPrompt = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
             ? msg.persona.prompt.trim()
             : null;
@@ -1016,8 +1048,8 @@ process.stdin.on('data', async (chunk: Buffer) => {
               ? msg.persona.name.trim()
               : (isPatent ? 'trinno-incremental-patent' : 'incremental-paper'),
             prompt: userPersonaPrompt
-              ? `${userPersonaPrompt}\n\n---\n\n${skillHint}`
-              : skillHint,
+              ? `${userPersonaPrompt}\n\n---\n\n${skillInstructions}`
+              : skillInstructions,
           };
           abortController = new AbortController();
           await handleChatWithEmit(

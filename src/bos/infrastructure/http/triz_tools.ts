@@ -348,6 +348,23 @@ export function createTrizTools(
       }
     });
 
+  const currentDatetime = defineTool(
+    'current_datetime',
+    'Get the current date and time. Returns ISO 8601 formatted datetime, Unix timestamp, and human-readable local time in multiple formats.',
+  )
+    .handle(() => {
+      const now = new Date();
+      return ok({
+        iso: now.toISOString(),
+        unix: Math.floor(now.getTime() / 1000),
+        local: now.toLocaleString(),
+        date: now.toLocaleDateString(),
+        time: now.toLocaleTimeString(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        utc: now.toUTCString(),
+      });
+    });
+
   return [
     principles,
     parameters,
@@ -357,5 +374,6 @@ export function createTrizTools(
     ideality,
     sCurve,
     search,
+    currentDatetime,
   ];
 }

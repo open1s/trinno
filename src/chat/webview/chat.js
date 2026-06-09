@@ -1347,7 +1347,7 @@
       el.innerHTML = `<div class="message-content">${formatContent(message.content)}</div>`;
     } else {
       el.innerHTML = `
-        ${message.reasoning ? `<div class="reasoning-section"><div class="reasoning-header"> Thinking <span class="reasoning-hint">[click to expand]</span></div><div class="reasoning-content collapsed">${escapeHtml(message.reasoning)}</div></div>` : ''}
+        ${message.reasoning ? `<div class="reasoning-section"><div class="reasoning-header"> Thinking <span class="reasoning-hint">[click to collapse]</span></div><div class="reasoning-content collapsed">${escapeHtml(message.reasoning)}</div></div>` : ''}
         ${message.toolCalls && message.toolCalls.length > 0 ? renderToolLog(message.toolCalls) : ''}
         <div class="message-content">${formatContent(message.content)}</div>
       `;
@@ -1405,10 +1405,10 @@
     reasoningSection.className = 'reasoning-section';
     reasoningSection.style.display = 'none';
     reasoningSection.innerHTML = `
-      <div class="reasoning-header">
-        Thinking <span class="reasoning-hint">[click to expand]</span>
-      </div>
-      <div class="reasoning-content collapsed"></div>
+        <div class="reasoning-header">
+          Thinking <span class="reasoning-hint">[click to collapse]</span>
+        </div>
+        <div class="reasoning-content collapsed"></div>
     `;
     currentMessageEl.appendChild(reasoningSection);
     currentReasoningContentEl = reasoningSection.querySelector('.reasoning-content');
@@ -1549,7 +1549,7 @@
     if (errorCount > 0) html += `, ${errorCount} failed`;
     html += `</span><span class="tool-toggle">▼</span></div>`;
 
-    html += `<div class="tool-list">`;
+    html += `<div class="tool-list collapsed">`;
     for (const t of messageState.tools) {
       html += renderToolItem(t);
     }

@@ -1550,6 +1550,18 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
     return;
   }
 
+  const patentMatch = text.match(/^\/patent\s+(.+)$/i);
+  if (patentMatch) {
+    const title = patentMatch[1]!.trim();
+    const cmd = {
+      title,
+      phase: '07_Patent',
+      writePath: `07_Patent/${slugifyPatentTitle(title)}.md`,
+    };
+    await runIncrementalWrite('patent', cmd, text);
+    return;
+  }
+
   const unknownSlash = text.match(/^\/([a-zA-Z][\w-]*)(\s+.*)?$/);
   if (unknownSlash) {
     const userMsg = createUserMessage(text);
