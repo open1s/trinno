@@ -43,6 +43,8 @@ let brain: any = null;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
+const FALLBACK_PERSONA = 'You are the Trinno Research Assistant — a domain expert in technical innovation, engineering design, and systematic research using TRIZ, PRISMA, SWOT, PEST, and 5W1H. Always respond in character as a senior research collaborator, even for casual greetings. Briefly introduce yourself and your capabilities when greeted, then ask what problem the user is working on.';
+
 const slashRegistry = createSlashCommandRegistry();
 
 slashRegistry.register(contradictionCommand, ['c', 'contra']);
@@ -301,7 +303,6 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   }
 
   const slashList = slashRegistry.list().map(c => '- /' + c.name + ': ' + c.description).join('\n');
-  const FALLBACK_PERSONA = 'You are the Trinno Research Assistant — a domain expert in technical innovation, engineering design, and systematic research using TRIZ, PRISMA, SWOT, PEST, and 5W1H. Always respond in character as a senior research collaborator, even for casual greetings. Briefly introduce yourself and your capabilities when greeted, then ask what problem the user is working on.';
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
     ? persona.prompt.trim()
     : FALLBACK_PERSONA;
@@ -560,6 +561,18 @@ function emitMcpStatus(): void {
 
 function buildMethodologyPrompt(slashCommandsList: string): string {
   return [
+    '## Phased Research Philosophy',
+    '- Research is incremental. Complete one phase before moving to the next.',
+    '- 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 07_Patent.',
+    '- Each phase writes its output to the corresponding phase directory. Do not skip phases.',
+    '- If context grows large, suggest compaction (/compact) instead of summarizing yourself.',
+    '',
+    '## Context Budget',
+    '- Keep responses focused. Aim for < 300 tokens per text turn.',
+    '- Use tool results to ground analysis; do not repeat full tool output in text.',
+    '- After tool calls: 1-2 sentence explanation + next step suggestion. Never dump raw data.',
+    '- If analysis exceeds 5 tool calls, pause and summarize before continuing.',
+    '',
     '## Routing',
     '- Unknown scope → 5W1H',
     '- Clinical / biomedical Q → PICO → PRISMA',
@@ -585,18 +598,13 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
     '',
-    '## Writing Papers/Patents',
+    '## Writing Papers/Patents (use /patent or /paper, not ad-hoc write_file)',
     '- Clear trigger (`write paper: <title>`, `/patent <title>`, `写论文: <title>`) → host intercepts, you don\'t see it.',
     '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Ask: "What topic? Reply `write paper: <title>` to start." Stop.',
     '- Never output paper plan + write_file together (hook abort).',
     '',
     '## File refs (@<path>)',
     'ALWAYS read_file first. Never invent contents. edit_file for refine/improve/fix; write_file only for full rewrites.',
-    '',
-    '## Proactive Workflow',
-    '- Technical Q → answer + offer: "Search prior art?" or "Run contradiction analysis?"',
-    '- Vague problem → "TRIZ, SWOT, PEST, or 5W1H first?"',
-    '- Slide/figure/table → propose in text, confirm, then edit_file.',
     '',
     '## Tools',
     'TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve.',
@@ -1013,31 +1021,30 @@ process.stdin.on('data', async (chunk: Buffer) => {
             : '摘要 → 引言 → 技术矛盾分析 → 物场分析 → 解决方案 → S曲线 → 实施路线图 → TRL → 结论 → 参考文献';
 
           const skillInstructions = `
-## 增量撰写规则（必须严格遵守）
+## 增量撰写（Marker-Anchored，每轮最多 edit_file 一次）
 
-目标文件已初始化为：
-\`\`\`
+目标文件已预初始化为：
 # <title>
-
 <!-- LLM_WRITE_HERE -->
-\`\`\`
 
-**每轮必须**：
-1. 读取文件（查看已写内容）
-2. 调用 edit_file 替换 \`<!-- LLM_WRITE_HERE -->\` 为「下一节内容 + 换行 + 新标记」
-3. 最终节用 ${completeMarker} 替换 \`<!-- LLM_WRITE_HERE -->\`
+**本轮任务**：调用 edit_file，用下一节内容替换 \`<!-- LLM_WRITE_HERE -->\`。
 
-**edit_file 约束**：
-- 必须 exactly match oldString 为 \`<!-- LLM_WRITE_HERE -->\`
-- 只能 append，不允许 overwrite 或 delete 已写内容
-- 每轮只能调用一次 edit_file（一次 append 一节）
+**约束（违反将导致中止）**：
+- oldString 必须 exactly match \`<!-- LLM_WRITE_HERE -->\`
+- 仅允许 append 下一节；禁止 overwrite / delete 已写内容
+- 每轮最多一次 edit_file（禁止一次调用 multiple edit_file）
 - 禁止 write_file 覆写整个文件
 
-**section 顺序**：${sectionOrder}
+**节顺序**：${sectionOrder}
 
-**节写法**：每节 100–300 行，标题为 \`## 中文标题\`，内容要详尽（背景技术需描述具体技术问题、物场分析需列出 76 标准解选择理由、具体实施方式需给出至少 2 个实施例）。
+**节大小**：每节 ≤ 150 行 markdown（≈ 500 tokens）。不要一次性写太多。
 
-**完成标志**：当 \`<!-- LLM_WRITE_HERE -->\` 被替换为 ${completeMarker} 后，本轮结束。
+**写法**：
+1. 调用 read_file 读文件尾部（最多 50 行），了解已写到哪
+2. 调用 TRIZ 工具（如 triz_contradiction、triz_su_field）收集数据
+3. **同一 turn 内**调用 edit_file append 一节 + 保留标记（或完成标记 ${completeMarker}）
+
+**完成**：当 oldString=\`<!-- LLM_WRITE_HERE -->\` 被替换为 ${completeMarker} 时，输出"撰写完成"即可。
 `;
 
           const userPersonaPrompt = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
@@ -1095,7 +1102,6 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     });
   }
 
-  const FALLBACK_PERSONA = 'You are the Trinno Research Assistant — a domain expert in technical innovation, engineering design, and systematic research using TRIZ, PRISMA, SWOT, PEST, and 5W1H. Always respond in character as a senior research collaborator, even for casual greetings. Briefly introduce yourself and your capabilities when greeted, then ask what problem the user is working on.';
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
     ? persona.prompt.trim()
     : FALLBACK_PERSONA;
@@ -1113,11 +1119,7 @@ After every tool result:
 3. NEVER end your turn right after a tool result — always follow up with a substantive Text response before Done.
 After each tool result: briefly explain what was found, then suggest the natural next step.`;
 
-  if (persona?.prompt) {
-    systemPrompt += toolInstructionPostfix;
-  } else {
-    systemPrompt += toolInstructionPostfix;
-  }
+  systemPrompt += toolInstructionPostfix;
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
