@@ -70,6 +70,7 @@
     { name: 'ideality', description: 'Evaluate system ideality (benefits/costs/harms)' },
     { name: 'principles', description: 'List or search the 40 TRIZ inventive principles' },
     { name: 'su-field', description: 'Substance-Field model analysis' },
+    { name: 'verify', description: 'Verify compilation and run tests (npm run compile + npm run test:pipeline; aliases: /v, /check, /test)' },
     { name: 'patent', description: 'Incrementally write a patent document (LLM appends section by section)' },
     { name: 'download', description: 'Download a paper PDF by DOI / arXiv ID / PMID / URL' },
     { name: 'get', description: 'Search OpenAlex and auto-download the top match (or top 3 with "all")' },

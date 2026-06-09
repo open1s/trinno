@@ -396,6 +396,10 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
 
     resetHeartbeatTimer();
 
+    let responseCharCount = 0;
+    let responseSizeWarningEmitted = false;
+    const RESPONSE_SIZE_THRESHOLD = 3000; // chars, roughly ~750 tokens
+
     await new Promise<void>((resolve) => {
       doResolve = resolve;
       started.stream(userMessage, (token: any) => {
@@ -412,6 +416,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             if (token.text && token.text.length > 0) {
               hasRealContent = true;
               resetHeartbeatTimer();
+              responseCharCount += token.text.length;
             }
             emit('token', { tokenType: 'ReasoningContent', text: token.text });
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
@@ -420,6 +425,15 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             if (token.text && token.text.length > 0) {
               hasRealContent = true;
               resetHeartbeatTimer();
+              responseCharCount += token.text.length;
+              // Warn if approaching size limit
+              if (!responseSizeWarningEmitted && responseCharCount > RESPONSE_SIZE_THRESHOLD) {
+                responseSizeWarningEmitted = true;
+                emit('token', {
+                  tokenType: 'Text',
+                  text: '\n\n⚠️ **Response approaching size limit** (~' + Math.round(responseCharCount / 100) + ' chars). Follow .instructions.md patterns: break into smaller tasks, mark progress with todo list.',
+                });
+              }
             }
             emit('token', { tokenType: 'Text', text: token.text });
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
@@ -428,6 +442,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             if (token.name) {
               hasRealContent = true;
               resetHeartbeatTimer();
+              responseCharCount += (token.name?.length ?? 0) + 20; // rough estimate
             }
             emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
@@ -436,6 +451,8 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             if (token.result || token.text) {
               hasRealContent = true;
               resetHeartbeatTimer();
+              const resultStr = (token.result || token.text || '');
+              responseCharCount += resultStr.length;
             }
             emit('token', {
               tokenType: 'ToolResult',
@@ -559,7 +576,29 @@ function emitMcpStatus(): void {
   }
 }
 
+function loadSoulMd(): string {
+  let soul = '';
+  try {
+    const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+    const projectSoul = path.join(wsRoot, 'SOUL.md');
+    if (fs.existsSync(projectSoul)) {
+      soul += fs.readFileSync(projectSoul, 'utf-8').trim();
+    }
+  } catch { }
+  try {
+    const homeSoul = path.join(os.homedir(), '.bos', 'skills', 'SOUL.md');
+    if (fs.existsSync(homeSoul)) {
+      const homeContent = fs.readFileSync(homeSoul, 'utf-8').trim();
+      if (soul) soul += '\n\n---\n\n';
+      soul += homeContent;
+    }
+  } catch { }
+  return soul;
+}
+
 function buildMethodologyPrompt(slashCommandsList: string): string {
+  const soul = loadSoulMd();
+  const soulSection = soul ? `\n\n## SOUL (Core Guidelines)\n\n${soul}\n` : '';
   return [
     '## Phased Research Philosophy',
     '- Research is incremental. Complete one phase before moving to the next.',
@@ -617,7 +656,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## Tool-Call Format',
     'Single JSON object. No XML. No commentary. "not support such call" → don\'t retry, reformulate in plain text.',
-  ].join('\n');
+  ].join('\n') + soulSection;
 }
 
 function handleHelp(): void {

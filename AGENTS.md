@@ -1,8 +1,15 @@
-# AGENTS.md
+# AGENTS.md — Trinno Agent Commands Reference
 
-## Project
+## Project at a Glance
 
 **trinno-research** ("Trinno Research Assist") — VS Code extension. Adds a Trinno Chat research-assistant sidebar (TRIZ tools, paper downloader, slash commands, slash-tool execution) on top of the Jupyter notebook host. Project name in `package.json` is `trinno-research`; old internal name `vscode-jupyter-typst` is no longer accurate.
+
+**Core Mission**: Help users structure innovation analysis via 7-phase TRIZ workflow + AI research assistant.
+
+### CRITICAL: Read These First
+1. **.instructions.md** — Agent behavior, task decomposition rules, response-size strategies, timeout prevention
+2. **CONTEXT.md** — Domain model, message flow, attachment pipeline
+3. **docs/adr/001-hybrid-attachment-strategy.md** — Why attachments work the way they do
 
 ## Don't edit
 
@@ -19,8 +26,18 @@ npm run test:pipeline # npx mocha dist/test/suite/research-project-pipeline.test
 npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignores src/bos/)
 ```
 
-- `npm run compile` **must succeed before `npm run test`** — tests load from `dist/`.
-- The compile script copies `src/chat/webview/` over `dist/chat/webview/`. If you change webview files, recompile.
+### MUST-DO Checklist for Every Edit
+- ✅ Use **incremental edits** (edit tool or multi_replace_string_in_file) — never rewrite entire files
+- ✅ **Compile after changes**: `npm run compile` must succeed
+- ✅ **Run relevant tests** if logic changed: `npm run test:pipeline` (faster) or `npm run test` (full suite)
+- ✅ **Parallelize independent reads** (file_search + grep_search in one block)
+- ✅ **Serialize dependent edits** (wait for output before next edit)
+- ✅ **Mark progress in todo list**: Update status after each atomic task
+
+### Why These Rules Matter
+- `npm run compile` **must succeed before `npm run test`** — tests load from `dist/` 
+- The compile script copies `src/chat/webview/` over `dist/chat/webview/`. If you change webview files, recompile
+- Incremental edits + small response sizes prevent LLM token timeout on large codebases
 
 ## Package manager
 
@@ -117,3 +134,110 @@ src/
 - `docs/adr/001-hybrid-attachment-strategy.md` — only ADR so far.
 - `CONTEXT.md` — template, not yet filled in.
 - `demo/` — `drone-frame-analysis.md`, `06_References/`, `07_Patent/` — sample output of a Trinno session (good for sanity-checking what the tools should produce).
+
+---
+
+## Task Decomposition Patterns (Anti-Timeout Strategy)
+
+### Pattern A: Multi-File Refactoring
+Instead of: "Refactor the panel architecture"
+Do this in 3 separate responses:
+```
+Response 1: Analyze + Design
+  • Read current state (panel.ts, agent.ts, context.ts)
+  • Output 3-step change plan
+  • Mark todo: "in-progress"
+
+Response 2: Apply Changes (Batch 1)
+  • Edit panel.ts (1-3 focused changes)
+  • Run npm run compile (confirm success)
+  • Mark todo: "—" (not done yet)
+
+Response 3: Apply Changes (Batch 2)
+  • Edit agent.ts + context.ts
+  • Run npm run compile (confirm success)
+  • Verify all tests pass
+  • Mark todo: "completed"
+```
+
+### Pattern B: Feature Implementation
+Instead of: "Add /feature-x slash command"
+Do this in 4-5 responses:
+```
+Response 1: Domain Model
+  • Create domain/ file (pure logic, no I/O)
+  • Run npm run compile
+  • "Next: Integration layer"
+
+Response 2: Integration
+  • Create slash-commands/<name>.ts
+  • Wire into worker.ts registry
+  • Run npm run compile
+  • "Next: UI layer"
+
+Response 3: UI (if needed)
+  • Update webview/chat.js or create new template
+  • Run npm run compile
+  • "Next: Testing"
+
+Response 4: Testing
+  • Write integration test in src/test/suite/
+  • Run npm run test:pipeline
+  • All green → "Next: Documentation"
+
+Response 5: Documentation
+  • Update AGENTS.md / CONTEXT.md
+  • "Next: Mark todo completed"
+```
+
+### Pattern C: Bug Fix (Minimal)
+Instead of: "Debug and fix the crash"
+Do this in 3 responses:
+```
+Response 1: Isolate
+  • Read error logs, stack trace
+  • Identify 2-3 candidate files
+  • Write minimal reproducer test (don't run yet)
+  • "Next: Root cause analysis"
+
+Response 2: Diagnose
+  • Add breakpoint or logging at suspect line
+  • Run reproducer test → observe failure
+  • Form hypothesis: "X is null because Y"
+  • "Next: Implement fix"
+
+Response 3: Fix + Verify
+  • Make ONE focused change
+  • Run reproducer test → green
+  • Run full suite: npm run test
+  • Mark todo: "completed"
+```
+
+### Pattern D: Documentation
+Instead of: "Update all docs"
+Do this sequentially:
+```
+Response 1: File 1 (AGENTS.md edits)
+  → npm run compile (syntax check)
+  → "Next file: CONTEXT.md"
+
+Response 2: File 2 (CONTEXT.md edits)
+  → Verify all links valid
+  → "Next file: docs/adr/..."
+
+Response 3: File 3 (new ADR)
+  → Full content for review
+  → "All docs updated"
+```
+
+## Response Size Budget
+
+**Aim for responses ≤ 4KB of token output per atomic task.**
+
+- ✅ "Analyze state" response: 1-2KB (facts only, no design)
+- ✅ "Edit one file" response: 1-2KB (change + confirmation)
+- ✅ "Run test" response: 1KB (result + next step)
+- ❌ "Do everything" response: >8KB (guaranteed to miss details)
+
+**If you're about to exceed 4KB, stop and say:**
+> "Next: [Task Name]"

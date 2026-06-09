@@ -4,6 +4,25 @@
 
 Trinno is a VS Code extension that adds Typst markup cells to Jupyter notebooks and a Trinno Chat AI assistant sidebar panel.
 
+## Agent Guidelines (CRITICAL)
+
+### Before Modifying Any File
+1. Read `.instructions.md` for task decomposition rules
+2. Read `.agent.md` for operational heuristics
+3. Check `AGENTS.md` for project structure details
+
+### Non-Negotiable Rules
+- **Never rewrite files**: Use incremental edits or multi_replace_string_in_file
+- **Never ignore compilation**: `npm run compile` must succeed before testing
+- **Never touch these**: `node_modules/`, `dist/`, `tride/`, `.git/`
+- **Always verify changes**: After edits, run `npm run compile` + relevant tests
+
+### Task Decomposition (Prevent Timeout)
+For multi-file work:
+1. Analyze state (read files in parallel)
+2. State 3-step plan (no implementation yet)
+3. Execute one file at a time, verifying between each
+
 ## Domain model
 
 ### Core concepts
