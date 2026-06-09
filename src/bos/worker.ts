@@ -570,7 +570,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '## Context Budget',
     '- Keep responses focused. Aim for < 300 tokens per text turn.',
     '- Use tool results to ground analysis; do not repeat full tool output in text.',
-    '- After tool calls: 1-2 sentence explanation + next step suggestion. Never dump raw data.',
+    '- After tool calls: 1-2 sentence explanation + next step suggestion. Never end turn after a tool result. Max 2 retries on a failing tool.',
     '- If analysis exceeds 5 tool calls, pause and summarize before continuing.',
     '',
     '## Routing',
@@ -599,8 +599,8 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
     '',
     '## Writing Papers/Patents (use /patent or /paper, not ad-hoc write_file)',
-    '- Clear trigger (`write paper: <title>`, `/patent <title>`, `写论文: <title>`) → host intercepts, you don\'t see it.',
-    '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Ask: "What topic? Reply `write paper: <title>` to start." Stop.',
+    '- Clear trigger → host intercepts, you don\'t see it.',
+    '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Stop.',
     '- Never output paper plan + write_file together (hook abort).',
     '',
     '## File refs (@<path>)',
@@ -617,9 +617,6 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## Tool-Call Format',
     'Single JSON object. No XML. No commentary. "not support such call" → don\'t retry, reformulate in plain text.',
-    '',
-    '## After Tool Calls',
-    'Briefly explain what was found + suggest next step. Never end turn right after a tool result. Max 2 retries on a failing tool — then ask user for corrected input.',
   ].join('\n');
 }
 
@@ -721,100 +718,6 @@ ${conversationText}
             break;
           case 'Done':
             emit('done', { compacted: true });
-            resolve();
-            break;
-          case 'Error':
-            emit('error', { error: token.error });
-            resolve();
-            break;
-        }
-      });
-    });
-  } catch (err) {
-    emit('error', { error: err instanceof Error ? err.message : String(err) });
-  } finally {
-    started.stop().catch(() => { });
-  }
-}
-
-async function handlePaper(
-  prompt: string,
-  apiKey: string | undefined,
-  model?: string,
-  baseUrl?: string
-): Promise<void> {
-  console.error('[bos-worker] handlePaper START');
-
-  if (!deps) {
-    const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
-    if (apiKey) brainOptions.apiKey = apiKey;
-    deps = await composeRoot(brainOptions);
-    await initApprovalBus(deps.brain);
-    initAgentFactory(deps.brain, {
-      defaultTools: deps.tools,
-      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
-    });
-  }
-
-  const basePrompt = [
-    '你是一位精通TRIZ方法论的研究专家，擅长撰写高质量的学术论文和技术研究报告。',
-    '',
-    '## 核心工作流程 — 必须严格遵循',
-    '',
-    '**第一步：收集数据** — 使用已注册的TRIZ工具（triz_parameters, triz_principles, triz_s_curve 等）收集必要的研究数据。',
-    '',
-    '**第二步：撰写论文并写入文件** — 收集完数据后，必须调用 write_file 工具将完整论文写入 05_Deliver/paper.md。',
-    '写入内容必须是完整的学术论文（约3000字以上），结构如下：',
-    '  - 摘要与关键词',
-    '  - 引言与背景',
-    '  - 技术矛盾分析（含 TRIZ 39 工程参数映射 + 40 发明原理）',
-    '  - 物场分析与 76 标准解应用',
-    '  - 解决方案设计（详细论证）',
-    '  - S 曲线分析与技术发展趋势',
-    '  - 实施路线图与里程碑',
-    '  - TRL 技术成熟度评估',
-    '  - 结论与展望',
-    '  - 参考文献',
-    '',
-    '**第三步：输出简短确认** — 写入成功后，仅输出简短的完成确认，不要再重复论文内容。',
-    '',
-    '## 重要约束',
-    '- write_file 的 filePath 参数必须是：05_Deliver/paper.md（相对工作区根目录）',
-    '- 不要将工具调用结果作为论文内容输出，那是中间数据',
-    '- 最终论文须用中文撰写，格式为 markdown',
-    '- 不要输出 "我将为您撰写" 之类的前言，直接开始执行',
-    '- 内容须基于真实 TRIZ 数据，不要编造参数编号或原理编号',
-  ].join('\n');
-
-  const f = getAgentFactory();
-  const agent = f.create({
-    name: 'trinno-paper',
-    systemPrompt: basePrompt,
-    temperature: 0.3,
-    ...(model ? { model } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-  });
-
-  const started = await agent.start();
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      started.stream(prompt, (token: any) => {
-        switch (token.type) {
-          case 'ReasoningContent':
-            emit('token', { tokenType: 'ReasoningContent', text: token.text });
-            break;
-          case 'Text':
-            emit('token', { tokenType: 'Text', text: token.text });
-            break;
-          case 'ToolCall':
-            emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
-            break;
-          case 'ToolResult':
-            emit('token', { tokenType: 'ToolResult', text: token.result || token.text || '', toolId: token.id, status: 'completed' });
-            break;
-          case 'Done':
-            emit('done', { generated: true });
             resolve();
             break;
           case 'Error':
@@ -952,36 +855,11 @@ process.stdin.on('data', async (chunk: Buffer) => {
         }
         case 'paper': {
           const paperWorkflowPrompt = [
-            '你是一位精通TRIZ方法论的研究专家，擅长撰写高质量的学术论文和技术研究报告。',
-            '',
-            '## 工作方式',
-            '你拥有完整的工具集（TRIZ分析工具 + 文件读写工具）。每次用户请求写论文时，你应该：',
-            '1. 先使用工具收集必要的研究数据（TRIZ参数、原理、S曲线等）',
-            '2. 撰写完整学术论文',
-            '3. 使用 write_file 工具将论文写入文件',
-            '',
-            '## 关键的写入要求',
-            '当你要保存论文时，必须调用 write_file 工具：',
-            '  filePath = "05_Deliver/paper.md"',
-            '  content = 完整论文内容（3000字以上）',
-            '',
-            '## 论文结构',
-            '# 标题',
-            '## 摘要与关键词',
-            '## 引言与背景',
-            '## 技术矛盾分析（TRIZ 39工程参数 + 40发明原理）',
-            '## 物场分析与 76 标准解',
-            '## 解决方案设计',
-            '## S曲线分析与技术发展趋势',
-            '## 实施路线图',
-            '## TRL技术成熟度评估',
-            '## 结论与展望',
-            '## 参考文献',
-            '',
-            '## 约束',
-            '- 中文撰写，markdown格式',
-            '- 不要编造TRIZ参数编号，使用工具查询真实数据',
-            '- 写入成功后仅输出简短确认，不要再重复论文全文',
+            '你是精通TRIZ的论文撰写专家。任务：收集数据 → 撰写 → write_file。',
+            '1. 调用TRIZ工具（triz_contradiction, triz_principles, triz_s_curve等）收集研究数据',
+            '2. write_file到05_Deliver/paper.md（3000+字中文markdown，结构：摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献）',
+            '3. 仅输出简短确认，不要重复论文内容',
+            '约束：不编造参数编号，不输出"我将为您撰写"之类前言。',
           ].join('\n');
           const userPersonaPromptForPaper = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
             ? msg.persona.prompt.trim()
@@ -1110,16 +988,6 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
-
-  const toolInstructionPostfix = `
-## How to Work After Calling Tools
-After every tool result:
-1. Briefly explain what was found (or note "no data returned" if the tool returned empty results)
-2. Provide useful analysis, conclusions, or next steps based on your knowledge and the tool results
-3. NEVER end your turn right after a tool result — always follow up with a substantive Text response before Done.
-After each tool result: briefly explain what was found, then suggest the natural next step.`;
-
-  systemPrompt += toolInstructionPostfix;
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
