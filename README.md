@@ -162,15 +162,14 @@ Trinno guides you through a structured 7-phase TRIZ innovation analysis — from
 | `chat.history.maxMessages` | `100` |
 | `trinno.chat.trpWorkspace` | auto-detect |
 
-### Advanced: `~/.bos/`
+### Advanced: `~/.bos/conf/`
 
-Trinno reads three directories from `~/.bos/` for advanced configuration:
+Trinno uses two TOML config files and a skills directory under `~/.bos/`:
 
 ```
 ~/.bos/
 ├── skills/          # user-installed skills (SKILL.md per sub-directory)
-├── conf/            # configuration files
-└── mcp/             # MCP server definitions
+└── conf/            # TOML configuration files
 ```
 
 #### Skills (`~/.bos/skills/`)
@@ -181,8 +180,6 @@ Each skill lives in its own sub-directory with a `SKILL.md` file:
 ~/.bos/skills/
 ├── incremental_write/
 │   └── SKILL.md
-└── my-custom-skill/
-    └── SKILL.md
 ```
 
 The `SKILL.md` file must contain a YAML frontmatter block with a `description` field:
@@ -204,23 +201,48 @@ Skills appear as slash commands (e.g., `/incremental_write`, `/my-custom-skill`)
 
 Place a `SOUL.md` file at `~/.bos/skills/SOUL.md` to inject core behavioral guidelines into every conversation. This is merged into the system prompt automatically. You can also place a project-level `SOUL.md` in your workspace root — it takes precedence over the global one.
 
-#### MCP Servers (`~/.bos/mcp/`)
+#### BrainOS Core Config (`~/.bos/conf/config.toml`)
 
-Define MCP server connections:
+BrainOS reads LLM providers, proxy, agent, and logging settings:
 
+```toml
+[global_model]
+model = "nvidia/minimaxai/minimax-m2.7"
+base_url = "http://127.0.0.1:11436/v1"
+api_key = "<stored in secrets>"
+
+[llm.nvidia|openai|google|openrouter]
+# per-provider model/base_url/api_key overrides
+
+[proxy]
+http_proxy = "http://127.0.0.1:9981"
+https_proxy = "http://127.0.0.1:9981"
+
+[agent]
+max_iterations = 100
+timeout_seconds = 30
+
+[logging]
+level = "debug"
 ```
-~/.bos/mcp/
-└── my-server.json
-```
 
-Each JSON file defines an MCP server:
+#### MCP Servers (`~/.bos/conf/app.toml`)
 
-```json
-{
-  "name": "my-server",
-  "command": "npx",
-  "args": ["-y", "@anthropic/mcp-server-example"]
-}
+Trinno-specific MCP server definitions. VS Code `chat.mcp.servers` takes precedence over this file.
+
+```toml
+[[mcp.servers]]
+name = "devel"
+type = "stdio"
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest", "--slim", "--headless"]
+
+# stdio servers spawn locally via command + args
+# http servers use url instead of command/args
+# [[mcp.servers]]
+# name = "hello"
+# type = "http"
+# url = "http://127.0.0.1:8000/mcp"
 ```
 
 MCP status is shown in the bottom status bar. Connected servers' tools are available to the LLM as regular function calls.
