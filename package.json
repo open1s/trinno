@@ -2,13 +2,27 @@
   "name": "trinno-research",
   "displayName": "Trinno Research Assist",
   "description": "Research assistant with AI-powered chat for Jupyter notebooks",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "Open1s",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/open1s/trinno-research.git"
+    "url": "https://github.com/open1s/trinno.git"
   },
+  "homepage": "https://github.com/open1s/trinno#readme",
+  "bugs": {
+    "url": "https://github.com/open1s/trinno/issues"
+  },
+  "keywords": [
+    "triz",
+    "research",
+    "jupyter",
+    "ai-assistant",
+    "paper-download",
+    "patent",
+    "innovation",
+    "notebook"
+  ],
   "engines": {
     "vscode": "^1.120.0"
   },
