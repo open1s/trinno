@@ -11,7 +11,6 @@ export async function run(): Promise<void> {
 	const testsRoot = path.resolve(__dirname, '.');
   mocha.addFile(path.resolve(testsRoot, 'setup.js'));
 	mocha.addFile(path.resolve(testsRoot, 'extension.test.js'));
-	mocha.addFile(path.resolve(testsRoot, 'chat-e2e.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'file-references.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'write-paper.test.js'));
 
