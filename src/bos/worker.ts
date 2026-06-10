@@ -318,12 +318,14 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   const ws = (globalThis as any).__TRP_WORKSPACE_ROOT;
   if (ws) {
     try {
-      const byQuery = searchMemories(ws, text, { limit: 8 });
+      // Strip skill/agent wrappers for cleaner search query
+      const cleanText = text.replace(/<\/?trinno_skill>/g, '').replace(/<\/?user_input>/g, '').trim();
+      const byQuery = searchMemories(ws, cleanText, { limit: 6 });
       const memoriesText = byQuery.length > 0
         ? byQuery.map((m: any) => `- [${m.type}] ${m.content}`).join('\n')
-        : listMemories(ws, { limit: 5, type: 'summary' }).map((m: any) => `- [summary] ${m.content}`).join('\n');
+        : listMemories(ws, { limit: 4, type: 'summary' }).map((m: any) => `- [summary] ${m.content}`).join('\n');
       if (memoriesText) {
-        systemPrompt += `\n\n## Relevant Memories\n${memoriesText}`;
+        systemPrompt += `\n\n## Relevant Memories\n${memoriesText}\n\nUse \`memory_search\` for deeper queries, \`memory_store\` to persist important findings.`;
       }
     } catch (e) {
       // memory store unavailable, proceed without it
