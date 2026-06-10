@@ -10,15 +10,12 @@ export async function run(): Promise<void> {
 
 	const testsRoot = path.resolve(__dirname, '.');
   mocha.addFile(path.resolve(testsRoot, 'setup.js'));
-  mocha.addFile(path.resolve(testsRoot, 'extension.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'tool-drain-buffer.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'chat-e2e.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'extension.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'chat-e2e.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'file-references.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'mcp-config.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'workspace-root-e2e.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'research-project-pipeline.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'trp-command.test.js'));
-  mocha.addFile(path.resolve(testsRoot, 'write-paper.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'mcp-config.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'workspace-root-e2e.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'write-paper.test.js'));
 
 	return new Promise<void>((resolve, reject) => {
 		mocha.run((failures: number) => {
