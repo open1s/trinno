@@ -1082,14 +1082,14 @@ function handleRateLimited(retryAfter: number, _error: string): void {
     rateLimitTimer = null;
     rateLimitRetryCallback = null;
     if (rateLimitRetryCount >= MAX_RATE_LIMIT_RETRIES) {
-      isGenerating = false;
-      if (chatView && currentStreamingId) {
+      const mid = currentStreamingId;
+      finalizeCurrentMessage(); // sends 'done' → webview resets button
+      if (chatView && mid) {
         chatView.webview.postMessage({
           type: 'error',
-          messageId: currentStreamingId,
+          messageId: mid,
           error: `已达到最大重试次数 (${MAX_RATE_LIMIT_RETRIES})。请稍后再试或检查 API 配额。`,
         } as any);
-        currentStreamingId = null;
       }
       return;
     }

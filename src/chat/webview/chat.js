@@ -1887,7 +1887,7 @@ window.__denyTool = function(id) {
   function finalizeMessage() {
     isGenerating = false;
     sendBtn.disabled = false;
-    sendBtn.textContent = '➤';
+    sendBtn.textContent = '■';
     sendBtn.classList.remove('stop-btn');
     sendBtn.onclick = sendMessage;
 
@@ -1977,6 +1977,7 @@ window.__denyTool = function(id) {
       sendBtn.disabled = false;
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('stop-btn');
+      sendBtn.onclick = sendMessage;
       const existing = document.getElementById(`retry-btn-${mid}`);
       if (existing) existing.remove();
       const existingStop = document.getElementById(`retry-stop-${mid}`);
@@ -1996,7 +1997,15 @@ window.__denyTool = function(id) {
     }
 
     if (isNonRetryableError(errorText)) {
-      stopAutoRetry(messageId, errorText);
+      finalizeMessage();
+      appendErrorBanner(messageId, errorText);
+      return;
+    }
+
+    // Panel exhausted its retries → reset UI, show error but don't re-retry
+    if (errorText && errorText.includes('已达到最大重试次数')) {
+      finalizeMessage();
+      appendErrorBanner(messageId, errorText);
       return;
     }
     autoRetryCountdown = 15;
@@ -2059,7 +2068,7 @@ window.__denyTool = function(id) {
 
     if (errorText && (errorText.includes('Hook abort') || errorText.includes('PERMISSION_DENIED') || errorText.includes('blocked by permission policy'))) {
       sendBtn.disabled = false;
-      sendBtn.textContent = 'Send';
+      sendBtn.textContent = '➤';
       sendBtn.classList.remove('stop-btn');
       if (currentContentEl) {
         const errorEl = document.createElement('div');
@@ -2107,6 +2116,16 @@ window.__denyTool = function(id) {
     sendBtn.disabled = true;
     sendBtn.classList.add('stop-btn');
     startCountdown();
+  }
+
+  function appendErrorBanner(messageId, errorText) {
+    const msgEl = document.getElementById(messageId);
+    if (!msgEl) return;
+    const capMsg = document.createElement('div');
+    capMsg.className = 'error-banner';
+    capMsg.innerHTML = `<span>${escapeHtml(errorText)}</span>`;
+    const contentDiv = msgEl.querySelector('.message-content');
+    if (contentDiv) contentDiv.appendChild(capMsg);
   }
 
   function clearWelcome() {
