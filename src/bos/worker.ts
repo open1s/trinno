@@ -585,6 +585,9 @@ function loadSoulMd(): string {
       soul += fs.readFileSync(projectSoul, 'utf-8').trim();
     }
   } catch { }
+  
+  if (soul) return soul;
+
   try {
     const homeSoul = path.join(os.homedir(), '.bos', 'skills', 'SOUL.md');
     if (fs.existsSync(homeSoul)) {
