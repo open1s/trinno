@@ -22,6 +22,7 @@ import { composeRoot } from './infrastructure/config/di.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
 import { getAgentFactory, initAgentFactory } from './infrastructure/agent-factory.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
+import { searchMemories, listMemories, addMemory } from '../chat/memory.js';
 import {
   contradictionCommand,
   searchCommand,
@@ -312,6 +313,22 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
+
+  // Inject relevant memories from the memory store
+  const ws = (globalThis as any).__TRP_WORKSPACE_ROOT;
+  if (ws) {
+    try {
+      const byQuery = searchMemories(ws, text, { limit: 8 });
+      const memoriesText = byQuery.length > 0
+        ? byQuery.map((m: any) => `- [${m.type}] ${m.content}`).join('\n')
+        : listMemories(ws, { limit: 5, type: 'summary' }).map((m: any) => `- [summary] ${m.content}`).join('\n');
+      if (memoriesText) {
+        systemPrompt += `\n\n## Relevant Memories\n${memoriesText}`;
+      }
+    } catch (e) {
+      // memory store unavailable, proceed without it
+    }
+  }
 
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
@@ -750,6 +767,7 @@ ${conversationText}
   const started = await agent.start();
 
   try {
+    let compactText = '';
     await new Promise<void>((resolve, reject) => {
       started.stream(summaryPrompt, (token: any) => {
         switch (token.type) {
@@ -757,9 +775,24 @@ ${conversationText}
             emit('token', { tokenType: 'ReasoningContent', text: token.text });
             break;
           case 'Text':
+            compactText += token.text;
             emit('token', { tokenType: 'Text', text: token.text });
             break;
           case 'Done':
+            // Store compact summary in long-term memory
+            const ws2 = (globalThis as any).__TRP_WORKSPACE_ROOT;
+            if (ws2 && compactText.trim().length > 50) {
+              try {
+                addMemory(ws2, {
+                  type: 'summary',
+                  content: compactText.trim().slice(0, 500),
+                  tags: ['compact', 'session-summary'],
+                  source: 'compact',
+                });
+              } catch (e) {
+                // best-effort
+              }
+            }
             emit('done', { compacted: true });
             resolve();
             break;

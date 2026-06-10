@@ -14,6 +14,7 @@ import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { createTrizTools } from '../http/triz_tools.js';
 import { createCodingTools } from '../http/coding_tools.js';
 import { createPapersTools } from '../http/papers_tools.js';
+import { createMemoryTools } from '../http/memory_tools.js';
 import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
 import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
 import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
@@ -120,13 +121,14 @@ export async function composeRoot(options: {
   const rawFactsSaver = new RawFactsSaver();
   const phaseWriter = new PhaseWriter(workspaceRoot);
   const papersTools = createPapersTools(phaseWriter);
+  const memoryTools = createMemoryTools(workspaceRoot);
   const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
   const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
   const idealityHandler = new EvaluateIdealityHandler(locale);
   const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver);
 
   const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
-  const allTools = [...trizTools, ...codingTools, ...papersTools];
+  const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools];
   const tools = wrapAllTools(allTools, toolPermissions);
 
   initAgentFactory(brain, {
