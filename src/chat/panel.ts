@@ -9,7 +9,7 @@ import type { IncrementalTurnResult } from './agent';
 import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry} from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
-import { bootstrapFile, readFileTail, readFullFile, buildContinuePrompt, buildBootstrapPrompt, isComplete, detectDoneInText, hasAnchor } from './incremental_writer';
+import { bootstrapFile, readFileTail, readFullFile, buildContinuePrompt, buildBootstrapPrompt, isComplete, detectDoneInText, hasAnchor, LLM_ANCHOR, completeMarkerFor } from './incremental_writer';
 import { extractNotebookContext, insertCellAt, extractEditorSelection, extractNotebookCellSelection, extractWholeFile, extractWholeNotebook } from './context';
 import { resolveCommandFileReference } from './fileReferences';
 import type {
@@ -342,6 +342,21 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('trinno-chat.newSession', async () => {
       await createNewSession();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('trinno-chat.sendSelection', async () => {
+      const config = getChatConfig();
+      const text = extractEditorSelection(config.context.maxCharsPerAttachment);
+      if (!text) {
+        vscode.window.showInformationMessage('Select text in an editor first, then use this command.');
+        return;
+      }
+      if (chatView) {
+        chatView.webview.postMessage({ type: 'insert-to-input', attachment: text } as any);
+        await vscode.commands.executeCommand('trinno-chat.open');
+      }
     })
   );
 
@@ -1310,10 +1325,8 @@ async function runIncrementalWrite(type: 'paper' | 'patent', cmd: { title: strin
     });
 
     lastLlmText = llmText.llmText;
-    const charsShown = llmText.usedWriteFile
-      ? (await readFullFile(absFilePath).catch(() => '')).length
-      : (llmText.appendedText || '').length;
-    announceTurn(turn, MAX_TURNS, `完成 ${charsShown} 字符`);
+    const contentLength = llmText.llmText.length;
+    announceTurn(turn, MAX_TURNS, `完成 ${contentLength} 字符`);
 
     if (llmText.usedWriteFile) {
       finished = true;
@@ -1321,26 +1334,50 @@ async function runIncrementalWrite(type: 'paper' | 'patent', cmd: { title: strin
       break;
     }
 
-    if (!llmText.usedEditFile) {
+    if (llmText.usedEditFile) {
+      const fileContent = await readFullFile(absFilePath).catch(() => '');
+      if (isComplete(fileContent, type) || !hasAnchor(fileContent)) {
+        finished = true;
+        stopReason = isComplete(fileContent, type) ? 'file-complete-marker' : 'anchor-replaced';
+        break;
+      }
+      continue;
+    }
+
+    const sectionText = llmText.llmText.trim();
+    if (!sectionText) {
       finished = true;
-      stopReason = 'llm-did-not-use-edit-file';
+      stopReason = 'no-content';
       chatView?.webview.postMessage({
         type: 'user-message',
-        message: createAssistantMessageForText(
-          `⚠️ LLM 本轮未调用 edit_file，无法继续增量。已中止。`
-        ),
+        message: createAssistantMessageForText(`⚠️ LLM 未输出内容，无法继续。已中止。`),
       } as any);
       break;
     }
 
-    const fileContent = await readFullFile(absFilePath).catch(() => '');
-    if (isComplete(fileContent, type) || detectDoneInText(llmText.llmText) || !hasAnchor(fileContent)) {
+    const currentFile = await readFullFile(absFilePath).catch(() => '');
+    const anchorIdx = currentFile.indexOf(LLM_ANCHOR);
+    if (anchorIdx !== -1) {
+      const isLast = detectDoneInText(sectionText);
+      const replacement = isLast
+        ? sectionText
+        : sectionText + '\n\n' + LLM_ANCHOR;
+      await fs.promises.writeFile(
+        absFilePath,
+        currentFile.slice(0, anchorIdx) + replacement + currentFile.slice(anchorIdx + LLM_ANCHOR.length),
+        'utf8',
+      );
+      if (isLast) {
+        finished = true;
+        stopReason = 'text-complete-signal';
+        break;
+      }
+    }
+
+    const fileAfter = await readFullFile(absFilePath).catch(() => '');
+    if (isComplete(fileAfter, type) || !hasAnchor(fileAfter)) {
       finished = true;
-      stopReason = isComplete(fileContent, type)
-        ? 'file-complete-marker'
-        : detectDoneInText(llmText.llmText)
-          ? 'text-complete-signal'
-          : 'anchor-replaced';
+      stopReason = isComplete(fileAfter, type) ? 'file-complete-marker' : 'anchor-replaced';
       break;
     }
   }

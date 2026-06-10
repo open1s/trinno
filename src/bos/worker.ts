@@ -599,7 +599,7 @@ function loadSoulMd(): string {
   return soul;
 }
 
-function buildMethodologyPrompt(slashCommandsList: string): string {
+function buildMethodologyPrompt(slashCommandsList: string, isIncrementalWrite?: boolean): string {
   const soul = loadSoulMd();
   const soulSection = soul ? `\n\n## SOUL (Core Guidelines)\n\n${soul}\n` : '';
   return [
@@ -640,10 +640,11 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
     '',
-    '## Writing Papers/Patents (use /patent or /paper, not ad-hoc write_file)',
-    '- Clear trigger → host intercepts, you don\'t see it.',
-    '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Stop.',
-    '- Never output paper plan + write_file together (hook abort).',
+    ...(!isIncrementalWrite ? [
+      '## Writing Papers/Patents (use /patent or /paper, not ad-hoc write_file)',
+      '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Stop.',
+      '- Never output paper plan + write_file together (hook abort).',
+    ] : []),
     '',
     '## File refs (@<path>)',
     'ALWAYS read_file first. Never invent contents. edit_file for refine/improve/fix; write_file only for full rewrites.',
@@ -941,30 +942,28 @@ process.stdin.on('data', async (chunk: Buffer) => {
             : '摘要 → 引言 → 技术矛盾分析 → 物场分析 → 解决方案 → S曲线 → 实施路线图 → TRL → 结论 → 参考文献';
 
           const skillInstructions = `
-## 增量撰写（Marker-Anchored，每轮最多 edit_file 一次）
+## 增量撰写（LLM 直接输出文本，系统自动写入文件）
 
 目标文件已预初始化为：
 # <title>
 <!-- LLM_WRITE_HERE -->
 
-**本轮任务**：调用 edit_file，用下一节内容替换 \`<!-- LLM_WRITE_HERE -->\`。
+**本轮任务**：输出下一节内容作为普通文本。系统会自动将你的文本写入文件，替换标记。
 
-**约束（违反将导致中止）**：
-- oldString 必须 exactly match \`<!-- LLM_WRITE_HERE -->\`
-- 仅允许 append 下一节；禁止 overwrite / delete 已写内容
-- 每轮最多一次 edit_file（禁止一次调用 multiple edit_file）
-- 禁止 write_file 覆写整个文件
+**约束**：
+- 你的文本输出就是下一节内容，系统会自动写入文件
+- 禁止调用 edit_file 或 write_file（系统处理文件操作）
+- 可以在本轮调用 read_file 看进度，调用 TRIZ 工具收集数据
+- 每节 ≤ 150 行 markdown（≈ 500 tokens）
 
 **节顺序**：${sectionOrder}
 
-**节大小**：每节 ≤ 150 行 markdown（≈ 500 tokens）。不要一次性写太多。
+**写法（单轮内可组合）**：
+1. read_file 读文件尾部
+2. TRIZ 工具收集数据：triz_search, triz_principles, triz_contradiction, triz_su_field, triz_ideality, triz_s_curve
+3. **输出文本**作为下一节 markdown 内容
 
-**写法**：
-1. 调用 read_file 读文件尾部（最多 50 行），了解已写到哪
-2. 调用可用的 TRIZ 工具收集数据：triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve
-3. **同一 turn 内**调用 edit_file append 一节 + 保留标记（或完成标记 ${completeMarker}）
-
-**完成**：当 oldString=\`<!-- LLM_WRITE_HERE -->\` 被替换为 ${completeMarker} 时，输出"撰写完成"即可。
+**完成**：最后一节末尾包含「${docLabel}撰写完成」或「${completeMarker}」，系统会自动结束。
 `;
 
           const userPersonaPrompt = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
@@ -995,6 +994,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
             undefined,
             undefined,
             msg.sandboxEnabled,
+            true,
           );
           break;
         }
@@ -1008,7 +1008,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
   }
 });
 
-async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean, isIncrementalWrite?: boolean): Promise<void> {
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -1025,7 +1025,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
     ? persona.prompt.trim()
     : FALLBACK_PERSONA;
-  const methodologyPrompt = buildMethodologyPrompt('');
+  const methodologyPrompt = buildMethodologyPrompt('', isIncrementalWrite);
   const basePrompt = persona && persona.prompt
     ? `${methodologyPrompt}\n\n---\n\n${personaPrompt}`
     : `${personaPrompt}\n\n${methodologyPrompt}`;
