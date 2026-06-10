@@ -25,7 +25,7 @@ suite('MCP Config Loading', () => {
 		const server = servers[0];
 
 		assert.ok(server, 'First server should exist');
-		assert.strictEqual(server.name, 'filesystem');
+		assert.strictEqual(server.name, 'devel');
 		assert.strictEqual(server.type, 'stdio');
 		assert.strictEqual(server.command, 'npx');
 		assert.ok(Array.isArray(server.args), 'args should be an array');
@@ -44,8 +44,9 @@ suite('MCP Config Loading', () => {
 
 		assert.deepStrictEqual(server.args, [
 			'-y',
-			'@modelcontextprotocol/server-filesystem',
-			'/Users/gaosg'
+			'chrome-devtools-mcp@latest',
+			'--slim',
+			'--headless'
 		]);
 	});
 });
