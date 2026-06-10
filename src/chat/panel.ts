@@ -6,7 +6,7 @@ import { getChatConfig } from './settings';
 import type { CompactMessage} from './agent';
 import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, sendIncrementalSectionRequest, sendSetWorkspaceRoot, sendClearSession, sendCompactResult } from './agent';
 import type { IncrementalTurnResult } from './agent';
-import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry} from './messages';
+import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus} from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
 import { bootstrapFile, readFileTail, readFullFile, buildContinuePrompt, buildBootstrapPrompt, isComplete, detectDoneInText, hasAnchor, LLM_ANCHOR, completeMarkerFor } from './incremental_writer';
@@ -35,6 +35,10 @@ let currentSession: Session | null = null;
 let currentStreamingId: string | null = null;
 let currentStreamingMsg: ChatMessage | null = null;
 let isGenerating = false;
+let messageQueue: QueuedMessage[] = [];
+let autoDrainLock = false;
+let currentQueueId: string | null = null;
+const MAX_QUEUE_SIZE = 20;
 
 const CHAT_VIEW_TYPE = 'trinno.chatView';
 
@@ -303,6 +307,12 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       summaryMsg.status = 'complete';
       chatView.webview.postMessage({ type: 'history-message', message: summaryMsg } as any);
     }
+
+    // Push full queue snapshot on connect/reconnect
+    chatView.webview.postMessage({
+      type: 'queue-state',
+      queue: messageQueue,
+    } as any);
   }
 }
 
@@ -455,6 +465,7 @@ async function switchSession(sessionId: string): Promise<void> {
   if (isGenerating) {
     cancelGeneration();
     finalizeCurrentMessage();
+    clearQueue();
     // Give worker time to process cancellation
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -502,6 +513,11 @@ async function switchSession(sessionId: string): Promise<void> {
         sessionTitle: session.title,
         sessions: sessionStore.sessions,
         isCompacted: session.isCompacted,
+      } as any);
+      // Send full queue snapshot
+      chatView.webview.postMessage({
+        type: 'queue-state',
+        queue: messageQueue,
       } as any);
     }
   } catch (err) {
@@ -564,6 +580,163 @@ async function renameSessionById(sessionId: string, title: string): Promise<void
     chatView.webview.postMessage({
       type: 'session-list-updated',
       sessions: sessionStore.sessions,
+    } as any);
+  }
+}
+
+function pushQueueState(): void {
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'queue-state',
+      queue: messageQueue,
+    } as any);
+  }
+}
+
+function addToQueue(text: string): QueuedMessage | null {
+  if (messageQueue.length >= MAX_QUEUE_SIZE) return null;
+  const item: QueuedMessage = {
+    queueId: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    text,
+    timestamp: Date.now(),
+    status: 'queued',
+  };
+  messageQueue.push(item);
+  if (chatView) {
+    chatView.webview.postMessage({ type: 'queue-add', message: item } as any);
+  }
+  return item;
+}
+
+function removeFromQueue(queueId: string): void {
+  const idx = messageQueue.findIndex(q => q.queueId === queueId);
+  if (idx < 0) return;
+  
+  const item = messageQueue[idx]!;
+  
+  if (item.status === 'in-flight') {
+    // Cancel in-flight, no re-queue
+    cancelGeneration();
+    messageQueue.splice(idx, 1);
+    if (chatView) {
+      chatView.webview.postMessage({ type: 'queue-remove', queueId } as any);
+    }
+    finalizeCurrentMessage();
+    // Auto-drain to next if any
+    setImmediate(() => processQueue());
+    return;
+  }
+  
+  // Pending item — just remove
+  messageQueue.splice(idx, 1);
+  if (chatView) {
+    chatView.webview.postMessage({ type: 'queue-remove', queueId } as any);
+  }
+}
+
+function forceExecuteQueueItem(queueId: string): void {
+  const idx = messageQueue.findIndex(q => q.queueId === queueId);
+  if (idx < 0 || messageQueue[idx]!.status === 'in-flight') return;
+  
+  // Halt current in-flight
+  const inFlightIdx = messageQueue.findIndex(q => q.status === 'in-flight');
+  if (inFlightIdx >= 0) {
+    cancelGeneration();
+    finalizeCurrentMessage();
+    // Re-queue in-flight at front
+    messageQueue[inFlightIdx]!.status = 'queued';
+    if (chatView) {
+      chatView.webview.postMessage({
+        type: 'queue-status-change',
+        queueId: messageQueue[inFlightIdx]!.queueId,
+        status: 'queued',
+      } as any);
+    }
+  }
+  
+  // Move forced item to front of pending queue
+  const item = messageQueue[idx]!;
+  messageQueue.splice(idx, 1);
+  // Insert after any re-queued in-flight items (at index 1 if original was index 0, else at start)
+  const insertAt = inFlightIdx === 0 ? 1 : 0;
+  messageQueue.splice(insertAt, 0, item);
+  
+  // Start processing
+  processQueue();
+}
+
+function processQueue(): void {
+  if (autoDrainLock) return;
+  if (isGenerating) return;
+  
+  const nextIdx = messageQueue.findIndex(q => q.status === 'queued');
+  if (nextIdx < 0) return;
+  
+  const item = messageQueue[nextIdx]!;
+  item.status = 'in-flight';
+  currentQueueId = item.queueId;
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'queue-status-change',
+      queueId: item.queueId,
+      status: 'in-flight',
+    } as any);
+  }
+  
+  handleUserMessage(item.text);
+}
+
+function markQueueCompleted(queueId: string): void {
+  const item = messageQueue.find(q => q.queueId === queueId);
+  if (item) {
+    item.status = 'completed';
+    if (chatView) {
+      chatView.webview.postMessage({
+        type: 'queue-status-change',
+        queueId,
+        status: 'completed',
+      } as any);
+    }
+  }
+}
+
+function markQueueError(queueId: string, error: string): void {
+  const item = messageQueue.find(q => q.queueId === queueId);
+  if (item) {
+    item.status = 'error';
+    item.error = error;
+    if (chatView) {
+      chatView.webview.postMessage({
+        type: 'queue-status-change',
+        queueId,
+        status: 'error',
+        error,
+      } as any);
+    }
+  }
+}
+
+function markQueueRateLimited(queueId: string): void {
+  const item = messageQueue.find(q => q.queueId === queueId);
+  if (item) {
+    item.status = 'rate-limited';
+    if (chatView) {
+      chatView.webview.postMessage({
+        type: 'queue-status-change',
+        queueId,
+        status: 'rate-limited',
+      } as any);
+    }
+  }
+}
+
+function clearQueue(): void {
+  messageQueue = [];
+  autoDrainLock = false;
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'queue-state',
+      queue: [],
     } as any);
   }
 }
@@ -642,6 +815,10 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
       return;
     }
     void sendFileList(workspaceRoot);
+  } else if (msg.type === 'queue-remove' && msg.queueId) {
+    removeFromQueue(msg.queueId);
+  } else if (msg.type === 'queue-force-execute' && msg.queueId) {
+    forceExecuteQueueItem(msg.queueId);
   }
 }
 
@@ -1048,16 +1225,26 @@ export function _getRateLimitRetryStateForTest(): { count: number; max: number }
 
 function handleRateLimited(retryAfter: number, _error: string): void {
   void _error;
-  if (!chatView || !currentStreamingId) return;
-
+  if (!currentStreamingId) return;
+  
   const messageId = currentStreamingId;
   const seconds = Math.max(1, Math.round(retryAfter));
-
-  chatView.webview.postMessage({
-    type: 'rate-limited',
-    messageId,
-    retryAfter: seconds,
-  } as any);
+  
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'rate-limited',
+      messageId,
+      retryAfter: seconds,
+    } as any);
+    // Also notify queue panel about rate-limit pause
+    if (currentQueueId) {
+      chatView.webview.postMessage({
+        type: 'queue-status-change',
+        queueId: currentQueueId,
+        status: 'rate-limited',
+      } as any);
+    }
+  }
 
   if (rateLimitTimer) clearInterval(rateLimitTimer);
 
@@ -1074,6 +1261,27 @@ function handleRateLimited(retryAfter: number, _error: string): void {
     if (remaining <= 0) {
       if (rateLimitTimer) clearInterval(rateLimitTimer);
       rateLimitTimer = null;
+      // Auto-resume queue if this was a queued message
+      if (currentQueueId) {
+        const qItem = messageQueue.find(q => q.queueId === currentQueueId);
+        if (qItem) {
+          // Re-queue the rate-limited item, remove from in-flight
+          finalizeCurrentMessage();
+          const idx = messageQueue.indexOf(qItem);
+          if (idx >= 0) {
+            qItem.status = 'queued';
+          }
+          if (chatView) {
+            chatView.webview.postMessage({
+              type: 'queue-status-change',
+              queueId: qItem.queueId,
+              status: 'queued',
+            } as any);
+          }
+          currentQueueId = null;
+          setImmediate(() => processQueue());
+        }
+      }
     }
   }, 1000);
 
@@ -1083,13 +1291,19 @@ function handleRateLimited(retryAfter: number, _error: string): void {
     rateLimitRetryCallback = null;
     if (rateLimitRetryCount >= MAX_RATE_LIMIT_RETRIES) {
       const mid = currentStreamingId;
-      finalizeCurrentMessage(); // sends 'done' → webview resets button
+      finalizeCurrentMessage();
+      if (currentQueueId) markQueueError(currentQueueId, `已达到最大重试次数 (${MAX_RATE_LIMIT_RETRIES})。`);
+      const savedQueueId2 = currentQueueId;
+      currentQueueId = null;
       if (chatView && mid) {
         chatView.webview.postMessage({
           type: 'error',
           messageId: mid,
           error: `已达到最大重试次数 (${MAX_RATE_LIMIT_RETRIES})。请稍后再试或检查 API 配额。`,
         } as any);
+      }
+      if (savedQueueId2) {
+        setImmediate(() => processQueue());
       }
       return;
     }
@@ -1632,6 +1846,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
       () => {
         if (chatView) chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         finalizeCurrentMessage();
+        processQueue();
       },
       (err) => {
         if (currentStreamingMsg) {
@@ -1639,6 +1854,10 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
           currentStreamingMsg.error = err;
         }
         finalizeCurrentMessage();
+        if (currentQueueId) markQueueError(currentQueueId, err);
+        const savedQueueId2 = currentQueueId;
+        currentQueueId = null;
+        setImmediate(() => processQueue());
         if (chatView) {
           chatView.webview.postMessage({
             type: 'error',
@@ -1671,9 +1890,15 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
   }
 
   if (isGenerating) {
-    console.log('[trinno-chat] panel: isGenerating=true, cancelling');
-    cancelGeneration();
-    finalizeCurrentMessage();
+    console.log('[trinno-chat] panel: isGenerating=true, queuing');
+    const item = addToQueue(text);
+    if (!item) {
+      chatView?.webview.postMessage({
+        type: 'user-message',
+        message: createAssistantMessageForText(`Queue is full (max ${MAX_QUEUE_SIZE} messages). Please wait for current message to complete or remove a queued message.`),
+      } as any);
+    }
+    return;
   }
 
   console.log('[trinno-chat] panel: handleUserMessage, text length:', text.length, 'sessionId:', currentSession?.id);
@@ -1741,9 +1966,12 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
     (doneData) => {
       console.log('[trinno-chat] panel: onDone callback, doneData:', JSON.stringify(doneData));
       if (doneData?.rateLimited) {
+        if (currentQueueId) markQueueRateLimited(currentQueueId);
         handleRateLimited(doneData.retryAfter ?? 60, doneData.error ?? '');
         return;
       }
+      if (currentQueueId) markQueueCompleted(currentQueueId);
+      currentQueueId = null;
       if (chatView) {
         chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         let inputTokens = doneData?.inputTokens ?? 0;
@@ -1766,6 +1994,8 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         currentSession.brainOsSession = doneData.brainOsSession;
       }
       finalizeCurrentMessage();
+      // Auto-drain next queued message
+      processQueue();
     },
     (err) => {
       console.log('[trinno-chat] panel: onError callback:', JSON.stringify(err));
@@ -1847,7 +2077,14 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         currentStreamingMsg.status = 'error';
         currentStreamingMsg.error = err;
       }
+      if (currentQueueId) markQueueError(currentQueueId, err);
+      const savedQueueId = currentQueueId;
+      currentQueueId = null;
       finalizeCurrentMessage();
+      // Skip errored item, auto-drain to next
+      if (savedQueueId) {
+        setImmediate(() => processQueue());
+      }
       if (chatView) {
         chatView.webview.postMessage({
           type: 'error',

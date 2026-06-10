@@ -1981,3 +1981,108 @@ body {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Queue Panel */
+.queue-panel {
+  padding: 6px 12px 4px;
+  border-top: 1px solid var(--header-border);
+  background: var(--bg);
+  flex-shrink: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.queue-pending-header {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #888);
+  padding: 2px 0 4px;
+  font-weight: 500;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+
+.queue-item-pending {
+  padding-right: 4px;
+}
+
+.queue-item-active {
+  background: var(--vscode-list-activeSelectionBackground, #0060c0);
+  color: var(--vscode-list-activeSelectionForeground, #fff);
+}
+
+.queue-item-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+.queue-item-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground, #888);
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.queue-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.queue-item-force,
+.queue-item-remove,
+.queue-item-stop {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 12px;
+  border-radius: 3px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.queue-item-force {
+  color: var(--success-color, #73c991);
+}
+
+.queue-item-remove,
+.queue-item-stop {
+  color: var(--fg);
+}
+
+.queue-item-force:hover,
+.queue-item-remove:hover,
+.queue-item-stop:hover {
+  opacity: 1;
+}
+
+.queue-item-pending .queue-item-remove:hover {
+  color: var(--error-color, #f85149);
+}
+
+.queue-item-active .queue-item-stop {
+  color: rgba(255,255,255,0.7);
+}
+
+.queue-item-active .queue-item-stop:hover {
+  color: #fff;
+  opacity: 1;
+}

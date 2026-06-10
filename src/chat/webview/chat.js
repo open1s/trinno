@@ -57,6 +57,8 @@
   let selectedAgent = 'Research Assistant';
   let selectedModel = 'Auto';
   let tokenUsage = { input: 0, output: 0, total: 0 };
+  let messageQueue = [];
+  let queuePanelEl = null;
   const vscode = acquireVsCodeApi();
 
   let slashCommands = [
@@ -1116,7 +1118,21 @@
     const text = inputEl.value.trim();
     const attText = getAttachmentText();
     const fullText = attText ? (text ? attText + '\n\n' + text : attText) : text;
-    if (!fullText || isGenerating) return;
+    if (!fullText) return;
+
+    // If already generating, queue the message instead of blocking
+    if (isGenerating) {
+      if (messageQueue.length >= 20) {
+        return; // Queue full, silently drop
+      }
+      vscode.postMessage({ type: 'userMessage', text: fullText });
+      lastUserMessageText = fullText;
+      inputEl.value = '';
+      clearAttachments();
+      autoResize();
+      return;
+    }
+
     sendBtn.disabled = true;
     sendBtn.textContent = '■';
     sendBtn.classList.add('stop-btn');
@@ -1126,6 +1142,147 @@
     clearAttachments();
     autoResize();
     vscode.postMessage({ type: 'userMessage', text: fullText });
+  }
+
+  function ensureQueuePanel() {
+    if (queuePanelEl) return queuePanelEl;
+    queuePanelEl = document.createElement('div');
+    queuePanelEl.className = 'queue-panel';
+    queuePanelEl.style.display = 'none';
+    const inputArea = document.querySelector('.input-area');
+    if (inputArea) {
+      inputArea.parentElement.insertBefore(queuePanelEl, inputArea);
+    }
+    return queuePanelEl;
+  }
+
+  function renderQueuePanel() {
+    const panel = ensureQueuePanel();
+    if (messageQueue.length === 0) {
+      panel.style.display = 'none';
+      panel.innerHTML = '';
+      return;
+    }
+
+    panel.style.display = 'block';
+    const inFlightItem = messageQueue.find(q => q.status === 'in-flight');
+    const pendingItems = messageQueue.filter(q => q.status === 'queued');
+    const rateLimitedItem = messageQueue.find(q => q.status === 'rate-limited');
+
+    let html = '';
+    
+    // Show in-flight or rate-limited
+    if (inFlightItem || rateLimitedItem) {
+      const activeItem = inFlightItem || rateLimitedItem;
+      const preview = truncateText(activeItem.text, 60);
+      html += `<div class="queue-item queue-item-active" data-queue-id="${activeItem.queueId}">
+        <span class="queue-item-spinner"></span>
+        <span class="queue-item-text">${escapeHtml(preview)}</span>
+        <button class="queue-item-stop" title="Stop">✕</button>
+      </div>`;
+    }
+
+    // Show pending items
+    if (pendingItems.length > 0) {
+      html += `<div class="queue-pending-header">${pendingItems.length} queued message${pendingItems.length > 1 ? 's' : ''}</div>`;
+      for (const item of pendingItems) {
+        const preview = truncateText(item.text, 60);
+        html += `<div class="queue-item queue-item-pending" data-queue-id="${item.queueId}">
+          <span class="queue-item-dot"></span>
+          <span class="queue-item-text">${escapeHtml(preview)}</span>
+          <button class="queue-item-force" title="Force execute (halt current)">▶</button>
+          <button class="queue-item-remove" title="Remove from queue">✕</button>
+        </div>`;
+      }
+    }
+
+    panel.innerHTML = html;
+
+    // Attach click handlers via delegation on the panel
+    panel.querySelectorAll('.queue-item-remove').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const queueId = btn.closest('[data-queue-id]')?.dataset?.queueId;
+        if (queueId) vscode.postMessage({ type: 'queue-remove', queueId });
+      };
+    });
+    panel.querySelectorAll('.queue-item-stop').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const queueId = btn.closest('[data-queue-id]')?.dataset?.queueId;
+        if (queueId) vscode.postMessage({ type: 'queue-remove', queueId });
+      };
+    });
+    panel.querySelectorAll('.queue-item-force').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const queueId = btn.closest('[data-queue-id]')?.dataset?.queueId;
+        if (queueId) vscode.postMessage({ type: 'queue-force-execute', queueId });
+      };
+    });
+  }
+
+  function truncateText(text, maxLen) {
+    if (text.length <= maxLen) return text;
+    return text.substring(0, maxLen) + '…';
+  }
+
+  function handleQueueState(msg) {
+    messageQueue = msg.queue || [];
+    renderQueuePanel();
+    // Update send button: if generation + anything in queue, keep it active
+    if (isGenerating && messageQueue.length > 0) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '➤';
+      sendBtn.classList.remove('stop-btn');
+      sendBtn.onclick = sendMessage;
+    }
+  }
+
+  function handleQueueAdd(msg) {
+    messageQueue.push(msg.message);
+    renderQueuePanel();
+    if (isGenerating) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '➤';
+      sendBtn.classList.remove('stop-btn');
+      sendBtn.onclick = sendMessage;
+    }
+  }
+
+  function handleQueueRemove(queueId) {
+    // Optimistic: remove locally immediately
+    messageQueue = messageQueue.filter(q => q.queueId !== queueId);
+    renderQueuePanel();
+    if (messageQueue.length === 0 && !isGenerating) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '➤';
+      sendBtn.classList.remove('stop-btn');
+      sendBtn.onclick = sendMessage;
+    }
+  }
+
+  function handleQueueStatusChange(msg) {
+    const item = messageQueue.find(q => q.queueId === msg.queueId);
+    if (item) {
+      item.status = msg.status;
+      if (msg.error) item.error = msg.error;
+      // Clean up completed/error items from queue after a brief moment for UI
+      if (msg.status === 'completed' || msg.status === 'error') {
+        setTimeout(() => {
+          messageQueue = messageQueue.filter(q => q.queueId !== msg.queueId);
+          renderQueuePanel();
+          // Reset send button when queue is empty and not generating
+          if (messageQueue.length === 0 && !isGenerating) {
+            sendBtn.disabled = false;
+            sendBtn.textContent = '➤';
+            sendBtn.classList.remove('stop-btn');
+            sendBtn.onclick = sendMessage;
+          }
+        }, 500);
+      }
+    }
+    renderQueuePanel();
   }
 
   function cancelGeneration() {
@@ -1300,6 +1457,22 @@
       case 'paper-progress':
         showPaperProgress(msg.source, msg.status, msg.text);
         break;
+
+      case 'queue-state':
+        handleQueueState(msg);
+        break;
+
+      case 'queue-add':
+        handleQueueAdd(msg);
+        break;
+
+      case 'queue-remove':
+        handleQueueRemove(msg.queueId);
+        break;
+
+      case 'queue-status-change':
+        handleQueueStatusChange(msg);
+        break;
     }
   }
 
@@ -1413,10 +1586,13 @@
     }
     clearWelcome();
     isGenerating = true;
-    sendBtn.disabled = true;
-    sendBtn.textContent = '■';
-    sendBtn.classList.add('stop-btn');
-    sendBtn.onclick = cancelGeneration;
+    // Don't change button if there are queued messages
+    if (messageQueue.length === 0) {
+      sendBtn.disabled = true;
+      sendBtn.textContent = '■';
+      sendBtn.classList.add('stop-btn');
+      sendBtn.onclick = cancelGeneration;
+    }
 
     messageState.content = '';
     messageState.reasoning = '';
@@ -1886,10 +2062,13 @@ window.__denyTool = function(id) {
 
   function finalizeMessage() {
     isGenerating = false;
-    sendBtn.disabled = false;
-    sendBtn.textContent = '■';
-    sendBtn.classList.remove('stop-btn');
-    sendBtn.onclick = sendMessage;
+    // Only reset button if no queued messages
+    if (messageQueue.length === 0) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '➤';
+      sendBtn.classList.remove('stop-btn');
+      sendBtn.onclick = sendMessage;
+    }
 
     for (const tool of messageState.tools) {
       if (tool.status === 'running') {
@@ -1974,9 +2153,12 @@ window.__denyTool = function(id) {
         autoRetryTimer = null;
       }
       isRetrying = false;
-      sendBtn.disabled = false;
-      sendBtn.textContent = 'Send';
-      sendBtn.classList.remove('stop-btn');
+      if (messageQueue.length === 0) {
+        sendBtn.disabled = false;
+        sendBtn.textContent = '➤';
+        sendBtn.classList.remove('stop-btn');
+        sendBtn.onclick = sendMessage;
+      }
       sendBtn.onclick = sendMessage;
       const existing = document.getElementById(`retry-btn-${mid}`);
       if (existing) existing.remove();

@@ -54,11 +54,25 @@ export type ExtToWebViewMessage =
   | { type: 'write-progress'; filePath: string; content: string; totalChars: number }
   | { type: 'write-done'; filePath: string; totalChars: number }
   | { type: 'write-topic-prompt'; docType: 'paper' | 'patent'; originalText: string }
-  | { type: 'file-list'; workspaceRoot: string; files: FileEntry[] };
+  | { type: 'file-list'; workspaceRoot: string; files: FileEntry[] }
+  | { type: 'queue-state'; queue: QueuedMessage[] }
+  | { type: 'queue-add'; message: QueuedMessage }
+  | { type: 'queue-remove'; queueId: string }
+  | { type: 'queue-status-change'; queueId: string; status: QueueItemStatus; error?: string };
 
 export interface FileEntry {
   path: string;
   isDir: boolean;
+}
+
+export type QueueItemStatus = 'queued' | 'in-flight' | 'completed' | 'error' | 'rate-limited';
+
+export interface QueuedMessage {
+  queueId: string;
+  text: string;
+  timestamp: number;
+  status: QueueItemStatus;
+  error?: string;
 }
 
 export interface SessionInfo {
@@ -89,7 +103,9 @@ export type WebViewToExtMessage =
   | { type: 'tool-approval'; id: string; approved: boolean }
   | { type: 'write-topic-confirm'; docType: 'paper' | 'patent'; topic: string; originalText: string }
   | { type: 'write-topic-cancel'; originalText: string }
-  | { type: 'request-file-list' };
+  | { type: 'request-file-list' }
+  | { type: 'queue-remove'; queueId: string }
+  | { type: 'queue-force-execute'; queueId: string };
 
 export type TokenType = 'Text' | 'ReasoningContent' | 'ToolCall' | 'ToolResult';
 
