@@ -1296,7 +1296,33 @@
       case 'rate-limited-tick':
         updateRateLimitedTick(msg.messageId, msg.remaining);
         break;
+
+      case 'paper-progress':
+        showPaperProgress(msg.source, msg.status, msg.text);
+        break;
     }
+  }
+
+  function showPaperProgress(source, status, text) {
+    let progressEl = document.getElementById('paper-progress');
+    if (!progressEl) {
+      progressEl = document.createElement('div');
+      progressEl.id = 'paper-progress';
+      progressEl.className = 'paper-progress-container';
+      const spinner = document.createElement('span');
+      spinner.className = 'paper-progress-spinner';
+      progressEl.appendChild(spinner);
+      const label = document.createElement('span');
+      label.className = 'paper-progress-label';
+      progressEl.appendChild(label);
+      messagesContainer.appendChild(progressEl);
+    }
+    const label = progressEl.querySelector('.paper-progress-label');
+    if (label) label.textContent = text;
+    if (status === 'success' || status === 'fail') {
+      setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 3000);
+    }
+    scrollToBottom();
   }
 
   function showWelcome(context) {

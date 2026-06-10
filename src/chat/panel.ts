@@ -797,7 +797,8 @@ async function handleDownloadCommand(identifier: string): Promise<void> {
 
   let result;
   try {
-    result = await downloadPaper({ outputDir: '', identifier: trimmed }, onProgress);
+    const wsRoot = getDefaultWorkspaceRoot();
+    result = await downloadPaper({ outputDir: wsRoot ? path.join(wsRoot, '06_References') : '', identifier: trimmed }, onProgress);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     chatView.webview.postMessage({
@@ -864,7 +865,9 @@ async function handlePapersCommand(args: string): Promise<void> {
     message: createUserMessage(echoText),
   } as any);
 
-  const items = listDownloadedPapers('');
+  const wsRoot = getDefaultWorkspaceRoot();
+  const dir = wsRoot ? path.join(wsRoot, '06_References') : '';
+  const items = listDownloadedPapers(dir);
   if (items.length === 0) {
     chatView.webview.postMessage({
       type: 'history-message',

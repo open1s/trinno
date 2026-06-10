@@ -1949,3 +1949,35 @@ body {
   color: var(--vscode-descriptionForeground, #999);
   text-align: center;
 }
+
+.paper-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: var(--vscode-textBlockQuote-background, rgba(127,127,127,0.1));
+  border-radius: 6px;
+  font-size: 12px;
+  animation: fadeIn 0.2s ease;
+}
+
+.paper-progress-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--vscode-descriptionForeground, #999);
+  border-top-color: var(--vscode-textLink-foreground, #007acc);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.paper-progress-label {
+  color: var(--vscode-descriptionForeground, #999);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
