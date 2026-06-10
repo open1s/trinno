@@ -287,7 +287,7 @@
     "compile": "tsc -p ./ && rm -rf dist/chat/webview && cp -r src/chat/webview dist/chat/webview",
     "watch": "tsc -watch -p ./",
     "test": "node ./dist/test/runTest.js",
-    "test:pipeline": "npx --yes mocha --ui bdd --timeout 30000 dist/test/suite/research-project-pipeline.test.js",
+    "test:pipeline": "npx --yes mocha --ui bdd --timeout 30000 \"dist/test/suite/publication-trends-year-extraction.test.js\"",
     "lint": "eslint src/chat/*.ts"
   },
   "devDependencies": {
