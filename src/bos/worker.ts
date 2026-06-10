@@ -961,7 +961,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
 
 **写法**：
 1. 调用 read_file 读文件尾部（最多 50 行），了解已写到哪
-2. 调用 TRIZ 工具（如 triz_contradiction、triz_su_field）收集数据
+2. 调用可用的 TRIZ 工具收集数据：triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve
 3. **同一 turn 内**调用 edit_file append 一节 + 保留标记（或完成标记 ${completeMarker}）
 
 **完成**：当 oldString=\`<!-- LLM_WRITE_HERE -->\` 被替换为 ${completeMarker} 时，输出"撰写完成"即可。
@@ -1026,7 +1026,9 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     ? persona.prompt.trim()
     : FALLBACK_PERSONA;
   const methodologyPrompt = buildMethodologyPrompt('');
-  const basePrompt = `${personaPrompt}\n\n${methodologyPrompt}`;
+  const basePrompt = persona && persona.prompt
+    ? `${methodologyPrompt}\n\n---\n\n${personaPrompt}`
+    : `${personaPrompt}\n\n${methodologyPrompt}`;
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
