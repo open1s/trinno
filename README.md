@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research"><img alt="VS Code Marketplace" src="https://img.shields.io/badge/VS%20Code-Install-blue?logo=visualstudiocode"></a>
-  <a href="https://github.com/open1s/trinno-research/actions"><img alt="CI" src="https://github.com/open1s/trinno-research/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://open-vsx.org/extension/Open1s/trinno-research"><img alt="Open Vsx" src="https://img.shields.io/badge/VS%20Code-Install-blue?logo=visualstudiocode"></a>
+  <a href="https://github.com/open1s/trinno/actions"><img alt="CI" src="https://github.com/open1s/trinno/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
