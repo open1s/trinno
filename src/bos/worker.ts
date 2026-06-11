@@ -38,6 +38,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
+interface TodoEntry {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  priority: 'high' | 'medium' | 'low';
+}
+
+function readExistingTodos(workspaceRoot: string): TodoEntry[] | null {
+  try {
+    const filePath = path.join(workspaceRoot, '.bos', 'memory', 'todo-store.json');
+    const data = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(data);
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.todos)) return parsed.todos as TodoEntry[];
+  } catch { /* ignore */ }
+  return null;
+}
+
 let abortController: AbortController | null = null;
 let deps: Awaited<ReturnType<typeof composeRoot>> | null = null;
 let brain: any = null;
@@ -382,6 +398,17 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     userMessage = `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n<user_input>\n${text}\n</user_input>`;
   }
 
+  if (skillContent) {
+    const wr2 = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+    const existingTodos2 = readExistingTodos(wr2);
+    if (existingTodos2 && existingTodos2.length > 0) {
+      const todoSummary2 = existingTodos2
+        .map(t => `- [${t.status}] ${t.content} (${t.priority})`)
+        .join('\n');
+      userMessage = userMessage + `\n\n<system_context>\nExisting todos from disk (resume from first incomplete):\n${todoSummary2}\n</system_context>`;
+    }
+  }
+
   currentAgent = started;
   currentSessionIdForCancel = sessionId || null;
 
@@ -618,7 +645,7 @@ function loadSoulMd(): string {
   return soul;
 }
 
-function buildMethodologyPrompt(slashCommandsList: string, isIncrementalWrite?: boolean): string {
+function buildMethodologyPrompt(slashCommandsList: string): string {
   const soul = loadSoulMd();
   const soulSection = soul ? `\n\n## SOUL (Core Guidelines)\n\n${soul}\n` : '';
   return [
@@ -628,11 +655,18 @@ function buildMethodologyPrompt(slashCommandsList: string, isIncrementalWrite?: 
     '- Each phase writes its output to the corresponding phase directory. Do not skip phases.',
     '- If context grows large, suggest compaction (/compact) instead of summarizing yourself.',
     '',
+    '## Core Rule: Actions Produce Results via Tools, Never via Text',
+    '- Your job is to produce concrete results in files and data, not in conversation text.',
+    '- To create/modify a file → use write_file or edit_file immediately. Never output file content as text expecting the user to save it.',
+    '- To refine/fix/update any file → read_file first, then edit_file. Your text response is only a 1-line confirmation.',
+    '- To search/gather data → use triz_search, triz_contradiction, triz_principles, etc. Summarize briefly, then act.',
+    '- Text responses are ONLY for: brief status (1-2 lines), asking clarifying questions, or reporting completion.',
+    '- If user says "refine X", "fix X", "update X", "add X to file" → use edit_file. Do not output the file content as text.',
+    '',
     '## Context Budget',
-    '- Keep responses focused. Aim for < 300 tokens per text turn.',
-    '- Use tool results to ground analysis; do not repeat full tool output in text.',
-    '- After tool calls: 1-2 sentence explanation + next step suggestion. Never end turn after a tool result. Max 2 retries on a failing tool.',
+    '- After tool calls: 1-2 sentence explanation + next step. Never end turn after a tool result. Max 2 retries on a failing tool.',
     '- If analysis exceeds 5 tool calls, pause and summarize before continuing.',
+    '- If context grows large, suggest compaction (/compact) instead of summarizing yourself.',
     '',
     '## Routing',
     '- Unknown scope → 5W1H',
@@ -659,19 +693,21 @@ function buildMethodologyPrompt(slashCommandsList: string, isIncrementalWrite?: 
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
     '',
-    ...(!isIncrementalWrite ? [
-      '## Writing Papers/Patents (use /patent or /paper, not ad-hoc write_file)',
-      '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic, do NOT call write_file. Stop.',
-      '- Never output paper plan + write_file together (hook abort).',
-    ] : []),
+    '## Writing Papers/Patents (use /patent or /write paper, LLM self-directs with skills)',
+    '- When writing is requested, the panel injects a skill (paper-writer or patent-writer) that you should load with load_skill.',
+    '- Use todowrite to plan sections, then read_file/write_file/edit_file to write the paper incrementally.',
+    '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic. Stop and ask for topic.',
+    '- Write incrementally: plan sections as todos, write one section at a time, verify each before marking completed.',
     '',
-    '## File refs (@<path>)',
-    'ALWAYS read_file first. Never invent contents. edit_file for refine/improve/fix; write_file only for full rewrites.',
+    '## File Operations',
+    'read_file first, never guess. edit_file for any change (refine/fix/improve/append). write_file only for creating a brand new file from scratch.',
+    'Every file modification MUST use a tool — text output is never a substitute for writing to disk.',
     '',
     '## Tools',
     'TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve.',
     'Papers: search, papers_download, papers_list_downloaded.',
     'FS: read_file, write_file, edit_file, list_dir, grep_search, glob_files, ast_grep, ast_edit, apply_patch, bash, exec_tool. bash needs user approval. read/write/edit_file/list_dir are workspace-scoped.',
+    'Planning: todowrite for tracking multi-step writing tasks only (papers/patents). todoread to check saved state. Do NOT call todowrite for simple single-file edits, quick fixes, or chat questions — just do the work directly with read_file/edit_file.',
     'Full schemas come via function-calling API.',
     '',
     '## Slash Commands',
@@ -968,71 +1004,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
           );
           break;
         }
-        case 'incremental-write': {
-          const isPatent = String(msg.prompt || '').includes('专利');
-          const docLabel = isPatent ? '专利文档' : '论文';
-          const completeMarker = isPatent ? '<!-- PATENT_COMPLETE -->' : '<!-- PAPER_COMPLETE -->';
-          const sectionOrder = isPatent
-            ? '技术领域 → 背景技术 → 发明内容 → 附图说明 → 具体实施方式 → 权利要求'
-            : '摘要 → 引言 → 技术矛盾分析 → 物场分析 → 解决方案 → S曲线 → 实施路线图 → TRL → 结论 → 参考文献';
-
-          const skillInstructions = `
-## 增量撰写（LLM 直接输出文本，系统自动写入文件）
-
-目标文件已预初始化为：
-# <title>
-<!-- LLM_WRITE_HERE -->
-
-**本轮任务**：输出下一节内容作为普通文本。系统会自动将你的文本写入文件，替换标记。
-
-**约束**：
-- 你的文本输出就是下一节内容，系统会自动写入文件
-- 禁止调用 edit_file 或 write_file（系统处理文件操作）
-- 可以在本轮调用 read_file 看进度，调用 TRIZ 工具收集数据
-- 每节 ≤ 150 行 markdown（≈ 500 tokens）
-
-**节顺序**：${sectionOrder}
-
-**写法（单轮内可组合）**：
-1. read_file 读文件尾部
-2. TRIZ 工具收集数据：triz_search, triz_principles, triz_contradiction, triz_su_field, triz_ideality, triz_s_curve
-3. **输出文本**作为下一节 markdown 内容
-
-**完成**：最后一节末尾包含「${docLabel}撰写完成」或「${completeMarker}」，系统会自动结束。
-`;
-
-          const userPersonaPrompt = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
-            ? msg.persona.prompt.trim()
-            : null;
-          const incrementalPersona = {
-            name: (msg.persona && typeof msg.persona.name === 'string' && msg.persona.name.trim())
-              ? msg.persona.name.trim()
-              : (isPatent ? 'trinno-incremental-patent' : 'incremental-paper'),
-            prompt: userPersonaPrompt
-              ? `${userPersonaPrompt}\n\n---\n\n${skillInstructions}`
-              : skillInstructions,
-          };
-          abortController = new AbortController();
-          await handleChatWithEmit(
-            msg.prompt,
-            null,
-            incrementalPersona,
-            msg.apiKey,
-            undefined,
-            emit,
-            abortController.signal,
-            undefined,
-            undefined,
-            undefined,
-            msg.model,
-            msg.baseUrl,
-            undefined,
-            undefined,
-            msg.sandboxEnabled,
-            true,
-          );
-          break;
-        }
+        
         case 'mcp-status-request':
           emitMcpStatus();
           break;
@@ -1043,7 +1015,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
   }
 });
 
-async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean, isIncrementalWrite?: boolean): Promise<void> {
+async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -1060,7 +1032,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
     ? persona.prompt.trim()
     : FALLBACK_PERSONA;
-  const methodologyPrompt = buildMethodologyPrompt('', isIncrementalWrite);
+  const methodologyPrompt = buildMethodologyPrompt('');
   const basePrompt = persona && persona.prompt
     ? `${methodologyPrompt}\n\n---\n\n${personaPrompt}`
     : `${personaPrompt}\n\n${methodologyPrompt}`;
@@ -1110,6 +1082,15 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   let userMessage = text;
   if (skillContent) {
     userMessage = `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n<user_input>\n${text}\n</user_input>`;
+
+    const wr = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+    const existingTodos = readExistingTodos(wr);
+    if (existingTodos && existingTodos.length > 0) {
+      const todoSummary = existingTodos
+        .map(t => `- [${t.status}] ${t.content} (${t.priority})`)
+        .join('\n');
+      userMessage = userMessage + `\n\n<system_context>\nExisting todos from disk (resume from first incomplete):\n${todoSummary}\n</system_context>`;
+    }
   }
 
   currentAgent = started;

@@ -1,5 +1,8 @@
 # AGENTS.md — Trinno Agent Commands Reference
 
+## SOUL
+- Always load ~/.bos/skills/SOUL.md
+
 ## Project at a Glance
 
 **trinno-research** ("Trinno Research Assist") — VS Code extension. Adds a Trinno Chat research-assistant sidebar (TRIZ tools, paper downloader, slash commands, slash-tool execution) on top of the Jupyter notebook host. Project name in `package.json` is `trinno-research`; old internal name `vscode-jupyter-typst` is no longer accurate.

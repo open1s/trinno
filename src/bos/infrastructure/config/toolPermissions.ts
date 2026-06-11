@@ -34,6 +34,8 @@ export const DEFAULT_TOOL_PERMISSIONS: ToolPermissionConfig = {
   triz_search: 'allow',
   papers_download: 'allow',
   papers_list_downloaded: 'allow',
+  todowrite: 'allow',
+  todoread: 'allow',
 };
 
 export function getToolName(tool: any): string {
@@ -108,6 +110,8 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
   triz_search: { description: 'Search prior art (papers/patents/all, cache-first for papers/patents)', dangerous: false, category: 'triz' },
   papers_download: { description: 'Download a paper by DOI/arXiv/PMID/URL', dangerous: false, category: 'other' },
   papers_list_downloaded: { description: 'List downloaded papers', dangerous: false, category: 'other' },
+  todowrite: { description: 'Create and manage a structured task list, persisted to disk', dangerous: false, category: 'other' },
+  todoread: { description: 'Read the current todo list from disk', dangerous: false, category: 'other' },
 };
 
 export function getToolMetadata(toolName: string): ToolMetadata | null {

@@ -4,12 +4,10 @@ import * as path from 'path';
 import * as os from 'os';
 import { getChatConfig } from './settings';
 import type { CompactMessage} from './agent';
-import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, sendIncrementalSectionRequest, sendSetWorkspaceRoot, sendClearSession, sendCompactResult } from './agent';
-import type { IncrementalTurnResult } from './agent';
+import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult } from './agent';
 import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus} from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
-import { bootstrapFile, readFileTail, readFullFile, buildContinuePrompt, buildBootstrapPrompt, isComplete, detectDoneInText, hasAnchor, LLM_ANCHOR, completeMarkerFor } from './incremental_writer';
 import { extractNotebookContext, insertCellAt, extractEditorSelection, extractNotebookCellSelection, extractWholeFile, extractWholeNotebook } from './context';
 import { resolveCommandFileReference } from './fileReferences';
 import type {
@@ -802,7 +800,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
       phase,
       writePath: `${phase}/${slugifyPatentTitle(topic)}.md`,
     };
-    await runIncrementalWrite(msg.docType, cmd, msg.originalText);
+    await runSkillWrite(msg.docType, cmd, msg.originalText);
   } else if (msg.type === 'write-topic-cancel') {
     chatView?.webview.postMessage({
       type: 'user-message',
@@ -1431,9 +1429,11 @@ async function sendFileList(workspaceRoot: string): Promise<void> {
   } as ExtToWebViewMessage);
 }
 
-async function runIncrementalWrite(type: 'paper' | 'patent', cmd: { title: string; phase: string; writePath: string }, originalText: string): Promise<void> {
-  chatView?.webview.postMessage({ type: 'user-message', message: createUserMessage(originalText) } as any);
+async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; phase: string; writePath: string }, originalText: string): Promise<void> {
+  const docLabel = type === 'patent' ? '专利' : '论文';
+  const skillName = type === 'patent' ? 'patent-writer' : 'paper-writer';
   const workspaceRoot = getDefaultWorkspaceRoot();
+
   if (!workspaceRoot) {
     chatView?.webview.postMessage({
       type: 'user-message',
@@ -1442,19 +1442,13 @@ async function runIncrementalWrite(type: 'paper' | 'patent', cmd: { title: strin
     return;
   }
 
-  const absFilePath = path.join(workspaceRoot, cmd.writePath);
-  const docLabel = type === 'patent' ? '专利' : '论文';
-
-  const plan = {
-    type,
-    title: cmd.title,
-    phase: cmd.phase,
-    writePath: cmd.writePath,
-    filePath: absFilePath,
-  };
-
+  const targetPath = path.join(workspaceRoot, cmd.writePath);
   try {
-    await bootstrapFile(plan, workspaceRoot);
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    const existing = await fs.promises.readFile(targetPath, 'utf8').catch(() => '');
+    if (!existing) {
+      await fs.promises.writeFile(targetPath, `# ${cmd.title}\n\n开始撰写...\n`, 'utf8');
+    }
   } catch (bootErr) {
     chatView?.webview.postMessage({
       type: 'user-message',
@@ -1469,158 +1463,65 @@ async function runIncrementalWrite(type: 'paper' | 'patent', cmd: { title: strin
     await sendSetWorkspaceRoot(workspaceRoot);
   } catch { /* best-effort priming */ }
 
-  const MAX_TURNS = 20;
-  let turn = 0;
-  let finished = false;
-  let stopReason = 'unknown';
-  let lastLlmText = '';
+  const userMsg = createUserMessage(originalText);
+  chatView?.webview.postMessage({ type: 'user-message', message: userMsg } as any);
 
-  const announceTurn = (idx: number, total: number, action: string) => {
-    chatView?.webview.postMessage({
-      type: 'user-message',
-      message: createAssistantMessageForText(
-        `[${docLabel}增量写作] 第 ${idx}/${total} 轮：${action}`
-      ),
-    } as any);
-  };
-
+  const docAssistantMsg = createAssistantMessage();
   isGenerating = true;
-  announceTurn(0, MAX_TURNS, `开始撰写《${cmd.title}》 → ${cmd.writePath}`);
+  currentStreamingId = docAssistantMsg.id;
+  currentStreamingMsg = docAssistantMsg;
+  chatView?.webview.postMessage({ type: 'streaming-start', messageId: docAssistantMsg.id } as any);
 
-  while (!finished && turn < MAX_TURNS) {
-    turn += 1;
-    const fileTail = await readFileTail(absFilePath, 800).catch(() => '');
-    const isFirst = turn === 1;
-    const prompt = isFirst
-      ? buildBootstrapPrompt(plan)
-      : buildContinuePrompt(plan, fileTail);
+  const skillPrompt = `请加载并遵循 ${skillName} 技能来撰写${docLabel}。"${cmd.title}"，目标文件: \`${cmd.writePath}\`，工作区根目录: ${workspaceRoot}。`;
 
-    const turnStreamingId = `incr_${type}_${turn}_${Date.now()}`;
-    currentStreamingId = turnStreamingId;
-    const turnMsg = createAssistantMessage();
-    currentStreamingMsg = turnMsg;
-    chatView?.webview.postMessage({ type: 'streaming-start', messageId: turnStreamingId } as any);
-
-    const llmText = await new Promise<IncrementalTurnResult>((resolveTurn, rejectTurn) => {
-      sendIncrementalSectionRequest(
-        prompt,
-        (tokenMsg) => {
-          if (tokenMsg.type === 'token') {
-            if (tokenMsg.tokenType === 'ReasoningContent') {
-              currentStreamingMsg!.reasoning += tokenMsg.text;
-            } else if (tokenMsg.tokenType === 'Text') {
-              currentStreamingMsg!.content += tokenMsg.text;
-            }
-          }
-          if (chatView) chatView.webview.postMessage(tokenMsg);
-        },
-        (result) => {
-          if (chatView) chatView.webview.postMessage({ type: 'done', messageId: turnStreamingId } as any);
-          finalizeCurrentMessage();
-          resolveTurn(result);
-        },
-        (err) => {
-          if (chatView) chatView.webview.postMessage({ type: 'error', messageId: turnStreamingId, error: err } as any);
-          finalizeCurrentMessage();
-          rejectTurn(new Error(err));
-        },
-        selectedModelConfig || globalModelConfig,
-        (id, toolName, args, metadata, bashIntent) => {
-          if (chatView) chatView.webview.postMessage({
-            type: 'tool-approval-needed',
-            id,
-            toolName,
-            args,
-            ...(metadata ? { metadata } : {}),
-            ...(bashIntent ? { bashIntent } : {}),
-          } as any);
-        },
-      );
-    });
-
-    lastLlmText = llmText.llmText;
-    const contentLength = llmText.llmText.length;
-    announceTurn(turn, MAX_TURNS, `完成 ${contentLength} 字符`);
-
-    if (llmText.usedWriteFile) {
-      finished = true;
-      stopReason = 'llm-used-write-file';
-      break;
-    }
-
-    if (llmText.usedEditFile) {
-      const fileContent = await readFullFile(absFilePath).catch(() => '');
-      if (isComplete(fileContent, type) || !hasAnchor(fileContent)) {
-        finished = true;
-        stopReason = isComplete(fileContent, type) ? 'file-complete-marker' : 'anchor-replaced';
-        break;
+  await sendMessage(
+    docAssistantMsg.id,
+    skillPrompt,
+    (tokenMsg) => {
+      if (tokenMsg.type === 'token') {
+        if (tokenMsg.tokenType === 'ReasoningContent') {
+          currentStreamingMsg!.reasoning += tokenMsg.text;
+        } else if (tokenMsg.tokenType === 'Text') {
+          currentStreamingMsg!.content += tokenMsg.text;
+        }
       }
-      continue;
-    }
-
-    const sectionText = llmText.llmText.trim();
-    if (!sectionText) {
-      finished = true;
-      stopReason = 'no-content';
-      chatView?.webview.postMessage({
-        type: 'user-message',
-        message: createAssistantMessageForText(`⚠️ LLM 未输出内容，无法继续。已中止。`),
+      if (chatView) chatView.webview.postMessage(tokenMsg);
+    },
+    () => {
+      finalizeCurrentMessage();
+      isGenerating = false;
+      currentStreamingId = null;
+      currentStreamingMsg = null;
+      if (chatView) chatView.webview.postMessage({ type: 'done', messageId: docAssistantMsg.id } as any);
+      // Process next queued message if any
+      if (!isGenerating) { processQueue(); }
+    },
+    (err) => {
+      finalizeCurrentMessage();
+      isGenerating = false;
+      currentStreamingId = null;
+      currentStreamingMsg = null;
+      if (chatView) chatView.webview.postMessage({ type: 'error', messageId: docAssistantMsg.id, error: err } as any);
+      if (!isGenerating) { processQueue(); }
+    },
+    (id, toolName, args, metadata, bashIntent) => {
+      if (chatView) chatView.webview.postMessage({
+        type: 'tool-approval-needed',
+        id,
+        toolName,
+        args,
+        ...(metadata ? { metadata } : {}),
+        ...(bashIntent ? { bashIntent } : {}),
       } as any);
-      break;
-    }
-
-    const currentFile = await readFullFile(absFilePath).catch(() => '');
-    const anchorIdx = currentFile.indexOf(LLM_ANCHOR);
-    if (anchorIdx !== -1) {
-      const isLast = detectDoneInText(sectionText);
-      const replacement = isLast
-        ? sectionText
-        : sectionText + '\n\n' + LLM_ANCHOR;
-      await fs.promises.writeFile(
-        absFilePath,
-        currentFile.slice(0, anchorIdx) + replacement + currentFile.slice(anchorIdx + LLM_ANCHOR.length),
-        'utf8',
-      );
-      if (isLast) {
-        finished = true;
-        stopReason = 'text-complete-signal';
-        break;
-      }
-    }
-
-    const fileAfter = await readFullFile(absFilePath).catch(() => '');
-    if (isComplete(fileAfter, type) || !hasAnchor(fileAfter)) {
-      finished = true;
-      stopReason = isComplete(fileAfter, type) ? 'file-complete-marker' : 'anchor-replaced';
-      break;
-    }
-  }
-
-  if (!finished && turn >= MAX_TURNS) {
-    stopReason = 'max-turns';
-    chatView?.webview.postMessage({
-      type: 'user-message',
-      message: createAssistantMessageForText(
-        `已达 ${MAX_TURNS} 轮上限，自动停止。请检查文件或继续发送 "继续" 增量写作。`
-      ),
-    } as any);
-  }
-
-  isGenerating = false;
-  currentStreamingId = null;
-  currentStreamingMsg = null;
-
-  try {
-    const finalContent = await readFullFile(absFilePath);
-    chatView?.webview.postMessage({
-      type: 'user-message',
-      message: createAssistantMessageForText(
-        `${docLabel}撰写完成（${finalContent.length} 字符，${turn} 轮，结束原因: ${stopReason}）。文件: \`${cmd.writePath}\`\n\n${lastLlmText || ''}`.trim()
-      ),
-    } as any);
-  } catch {
-    // best-effort final summary
-  }
+    },
+    undefined,
+    undefined,
+    currentSession?.brainOsSession,
+    undefined,
+    undefined,
+    selectedModelConfig || globalModelConfig,
+    workspaceRoot,
+  );
 }
 
 async function handleUserMessage(text: string): Promise<void> {
@@ -1812,7 +1713,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
       phase: '07_Patent',
       writePath: `07_Patent/${slugifyPatentTitle(title)}.md`,
     };
-    await runIncrementalWrite('patent', cmd, text);
+    await runSkillWrite('patent', cmd, text);
     return;
   }
 
@@ -1885,7 +1786,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
   }
   const writeAny = writeIntent?.kind === 'match' ? writeIntent : null;
   if (writeAny) {
-    await runIncrementalWrite(writeAny.type, writeAny.cmd, text);
+    await runSkillWrite(writeAny.type, writeAny.cmd, text);
     return;
   }
 
