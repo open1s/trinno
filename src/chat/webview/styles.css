@@ -570,6 +570,82 @@ body {
   font-style: italic;
 }
 
+.todo-section {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.todo-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--thinking-bg);
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.todo-summary:hover {
+  background: var(--vscode-list-hoverBackground, #e8e8e8);
+}
+
+.todo-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+}
+
+.todo-toggle {
+  transition: transform 0.2s;
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.todo-list {
+  max-height: 600px;
+  overflow-y: auto;
+  transition: max-height 0.2s;
+}
+
+.todo-list.collapsed {
+  max-height: 0;
+  overflow: hidden;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.todo-icon {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.todo-text {
+  color: var(--fg);
+  opacity: 0.8;
+}
+
+.todo-spinner-inline {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+
 .tool-spinner-inline {
   display: inline-block;
   width: 10px;
@@ -1764,6 +1840,10 @@ body {
 
 .mcp-dropdown-item-dot.disconnected {
   background: var(--error-color, #f85149);
+}
+
+.mcp-dropdown-item-dot.starting {
+  background: var(--warning-color, #d29922);
 }
 
 .mcp-dropdown-item-name {

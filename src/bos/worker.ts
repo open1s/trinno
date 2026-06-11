@@ -34,6 +34,7 @@ import {
 } from './slash-commands/index.js';
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
+import { getTypstLspClient, closeTypstLspClient } from './infrastructure/lsp/typst_lsp.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -57,7 +58,7 @@ function readExistingTodos(workspaceRoot: string): TodoEntry[] | null {
 const HIDDEN_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'load_skill',
   'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
-  'todoread', 'todowrite',
+  'todoread',
 ]);
 
 function shouldEmitTool(name: string, context: 'call' | 'result'): boolean {
@@ -294,13 +295,16 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   if (!match) return false;
 
   if (!deps) {
-    deps = await composeRoot({ workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() });
+    const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+    deps = await composeRoot({ workspaceRoot: wsRoot });
     // Init factory with tools so the chat agent path also benefits (fixes race condition)
     await initApprovalBus(deps.brain);
     initAgentFactory(deps.brain, {
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
+    // Start Typst LSP eagerly so first lint call is fast
+    getTypstLspClient(wsRoot).catch(() => {});
   }
 
   const { command, args } = match;
@@ -344,6 +348,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
+    getTypstLspClient(brainOptions.workspaceRoot).catch(() => {});
   }
 
   const slashList = slashRegistry.list().map(c => '- /' + c.name + ': ' + c.description).join('\n');
@@ -356,6 +361,13 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   let systemPrompt = systemSummary
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
+
+  // Inject Typst LSP diagnostics for all .typ files in workspace
+  const typstWsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+  const typstDiags2 = await collectTypstDiagnostics(typstWsRoot);
+  if (typstDiags2) {
+    systemPrompt += typstDiags2;
+  }
 
   // Inject relevant memories from the memory store
   const ws = (globalThis as any).__TRP_WORKSPACE_ROOT;
@@ -383,6 +395,11 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   emit('mcp-status', {
     servers: (effectiveMcp || []).map((s: any) => ({ name: s.name, type: s.type, connected: true })),
   });
+
+  try {
+    const lsp = await getTypstLspClient((globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd());
+    emit('lsp-status', { name: 'tinymist', status: lsp.isInitialized ? 'connected' : 'starting', trackedFile: _trackedTypFile || null });
+  } catch { emit('lsp-status', { name: 'tinymist', status: 'disconnected', trackedFile: null }); }
 
   console.info('[bos-worker] Creating fresh agent (sessionId:', sessionId, ')');
   const f = getAgentFactory();
@@ -518,17 +535,26 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
               responseCharCount += (token.name?.length ?? 0) + 20;
             }
             if (token.id && token.name) toolCallNames.set(token.id, token.name);
+            if (token.name === 'write_file' && token.args?.filePath && String(token.args.filePath).endsWith('.typ')) {
+              trackTypFile(String(token.args.filePath));
+            } else if (token.name === 'edit_file' && token.args?.filePath && String(token.args.filePath).endsWith('.typ')) {
+              trackTypFile(String(token.args.filePath));
+            }
             if (shouldEmitToolCall(token.name)) {
               emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
             }
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'ToolResult':
+            fs.writeSync(2, `[bos-worker] ToolResult token, name=${token.name}, id=${token.id}, hasResult=${!!token.result}\n`);
             if (token.result || token.text) {
               hasRealContent = true;
               resetHeartbeatTimer();
               const resultStr = (token.result || token.text || '');
               responseCharCount += resultStr.length;
+            }
+            if (toolCallNames.get(token.id ?? '') === 'todowrite') {
+              emitTodoUpdate();
             }
             if (shouldEmitToolResult(token.id, token.name)) {
               emit('token', {
@@ -652,6 +678,22 @@ function emitMcpStatus(): void {
   } catch (e) {
     emit('mcp-status', { servers: [] });
   }
+}
+
+function emitLspStatus(): void {
+  const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+  getTypstLspClient(wsRoot).then(lsp => {
+    emit('lsp-status', { name: 'tinymist', status: lsp.isInitialized ? 'connected' : 'starting', trackedFile: _trackedTypFile || null });
+  }).catch(() => {
+    emit('lsp-status', { name: 'tinymist', status: 'disconnected', trackedFile: null });
+  });
+}
+
+function emitTodoUpdate(): void {
+  const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+  const todos = readExistingTodos(wsRoot);
+  emit('todo-update', { todos: todos || [] });
+  drainEmitQueueSync();
 }
 
 function loadSoulMd(): string {
@@ -807,6 +849,7 @@ async function handleCompact(
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
+    getTypstLspClient(brainOptions.workspaceRoot).catch(() => {});
   }
 
   const conversationText = messages.map(m => {
@@ -1062,12 +1105,64 @@ process.stdin.on('data', async (chunk: Buffer) => {
         case 'mcp-status-request':
           emitMcpStatus();
           break;
+        case 'lsp-status-request':
+          emitLspStatus();
+          break;
+        case 'todo-status-request':
+          emitTodoUpdate();
+          break;
       }
     } catch (err) {
       process.stderr.write(`[bos-worker] parse error: ${err}\n`);
     }
   }
 });
+
+let _trackedTypFile: string | null = null;
+
+export function trackTypFile(filePath: string): void {
+  if (filePath.endsWith('.typ')) {
+    _trackedTypFile = filePath;
+  }
+}
+
+async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
+  try {
+    const lsp = await getTypstLspClient(workspaceRoot);
+    if (!lsp.isInitialized) return '';
+
+    const fs_ = await import('fs');
+    const path_ = await import('path');
+
+    const filesToCheck: string[] = [];
+
+    // 1. Last tracked .typ file (from write_file/edit_file)
+    if (_trackedTypFile && fs_.existsSync(_trackedTypFile) && _trackedTypFile.endsWith('.typ')) {
+      filesToCheck.push(_trackedTypFile);
+    }
+
+    const parts: string[] = [];
+    for (const f of filesToCheck) {
+      const uri = `file://${f.replace(/\\/g, '/')}`;
+      const content = fs_.readFileSync(f, 'utf-8');
+      const diags = await lsp.requestDiagnostics(uri, content, 5000);
+      if (diags.length > 0) {
+        const rel = path_.relative(workspaceRoot, f);
+        const issues = diags.map(d =>
+          `  line ${d.range.start.line + 1}:${d.range.start.character + 1} [${d.severity === 1 ? 'error' : d.severity === 2 ? 'warn' : 'info'}] ${d.message}`
+        ).join('\n');
+        parts.push(`### ${rel} (${diags.length} issues)\n${issues}`);
+      }
+    }
+
+    if (parts.length > 0) {
+      return `\n\n## Current Typst Lint Issues\n\nThe following issues were detected in the Typst file you are working on. Fix these before proceeding:\n\n${parts.join('\n\n')}\n\nUse \`typst_lint\` to recheck.`;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   if (!deps) {
@@ -1081,6 +1176,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
+    getTypstLspClient(brainOptions.workspaceRoot).catch(() => {});
   }
 
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
@@ -1094,6 +1190,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
     : basePrompt;
 
+  // Inject Typst LSP diagnostics for all .typ files in workspace
+  const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+  const typstDiags = await collectTypstDiagnostics(wsRoot);
+  if (typstDiags) {
+    systemPrompt += typstDiags;
+  }
+
   let effectiveMcp = mcpServers;
   if (!effectiveMcp || effectiveMcp.length === 0) {
     effectiveMcp = getAgentFactory().getDefaultMcpServers();
@@ -1102,6 +1205,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   localEmit('mcp-status', {
     servers: (effectiveMcp || []).map((s: any) => ({ name: s.name, type: s.type, connected: true })),
   });
+
+  let lspStatus = 'disconnected';
+  try {
+    const lsp = await getTypstLspClient(wsRoot);
+    lspStatus = lsp.isInitialized ? 'connected' : 'starting';
+  } catch { /* LSP not available */ }
+  localEmit('lsp-status', { name: 'tinymist', status: lspStatus, trackedFile: _trackedTypFile || null });
 
   const f = getAgentFactory();
   const agent = f.create({
@@ -1168,11 +1278,19 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             break;
           case 'ToolCall':
             if (token.id && token.name) toolCallNames.set(token.id, token.name);
+            if (token.name === 'write_file' && token.args?.filePath && String(token.args.filePath).endsWith('.typ')) {
+              trackTypFile(String(token.args.filePath));
+            } else if (token.name === 'edit_file' && token.args?.filePath && String(token.args.filePath).endsWith('.typ')) {
+              trackTypFile(String(token.args.filePath));
+            }
             if (shouldEmitToolCall(token.name)) {
               localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
             }
             break;
           case 'ToolResult':
+            if (toolCallNames.get(token.id ?? '') === 'todowrite') {
+              emitTodoUpdate();
+            }
             if (shouldEmitToolResult(token.id, token.name)) {
               localEmit('token', {
                 tokenType: 'ToolResult',
@@ -1288,6 +1406,7 @@ async function syncSessionAfterCommand(
 
 process.on('SIGTERM', () => {
   cancelAllPendingApprovals();
+  closeTypstLspClient().catch(() => {});
   brain?.stop().catch(() => { });
   deps?.brain.stop().catch(() => { });
   process.exit(0);

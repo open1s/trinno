@@ -36,6 +36,8 @@ export const DEFAULT_TOOL_PERMISSIONS: ToolPermissionConfig = {
   papers_list_downloaded: 'allow',
   todowrite: 'allow',
   todoread: 'allow',
+  typst_lint: 'allow',
+  typst_lsp_status: 'allow',
 };
 
 export function getToolName(tool: any): string {

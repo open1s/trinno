@@ -1,4 +1,6 @@
 import { defineHook, HookEvent, HookDecision } from '@open1s/ezbos';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ToolPermissionConfig, getToolMetadata, getBashIntent } from './toolPermissions.js';
 
 let approvalCounter = 0;
@@ -13,7 +15,7 @@ const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeou
 const HIDDEN_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'load_skill',
   'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
-  'todoread', 'todowrite',
+  'todoread',
 ]);
 
 let onEmit: ((type: string, data: any) => void) | null = null;
@@ -171,6 +173,19 @@ const id = `auto_${++approvalCounter}`;
         toolId,
         status: isError ? 'error' : 'completed',
       });
+    }
+
+    if (toolName === 'todowrite' && onEmit) {
+      try {
+        const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+        const todoPath = path.join(wsRoot, '.bos', 'memory', 'todo-store.json');
+        const todoContent = fs.readFileSync(todoPath, 'utf-8');
+        const parsed = JSON.parse(todoContent);
+        const todos = parsed && typeof parsed === 'object' && Array.isArray(parsed.todos) ? parsed.todos : [];
+        onEmit('todo-update', { todos });
+      } catch {
+        onEmit('todo-update', { todos: [] });
+      }
     }
 
     return '';

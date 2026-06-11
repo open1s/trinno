@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { getChatConfig } from './settings';
 import type { CompactMessage} from './agent';
-import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult } from './agent';
+import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, setLspStatusCallback, setTodoUpdateCallback } from './agent';
 import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus} from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
@@ -294,6 +294,8 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
     } else {
       requestMcpStatus();
     }
+    requestLspStatus();
+    requestTodoStatus();
 
     if (currentSession.messages.length > 0) {
       for (const msg of currentSession.messages) {
@@ -432,6 +434,18 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
       chatView.webview.postMessage({ type: 'mcp-status', servers } as any);
     }
   }).catch(() => {});
+
+  setLspStatusCallback((status) => {
+    if (chatView) {
+      chatView.webview.postMessage({ type: 'lsp-status', ...status } as any);
+    }
+  });
+
+  setTodoUpdateCallback((todos) => {
+    if (chatView) {
+      chatView.webview.postMessage({ type: 'todo-update', todos } as any);
+    }
+  });
 }
 
 async function createNewSession(title?: string): Promise<void> {
@@ -2113,6 +2127,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
       <span id="status-messages" class="status-item"></span>
       <div id="status-mcp" class="status-item mcp-status-wrapper"></div>
       <span id="status-sandbox" class="status-item"></span>
+      <span id="status-todos" class="status-item todo-status-wrapper"></span>
     </div>
   </div>
   <script src="${scriptUri}"></script>

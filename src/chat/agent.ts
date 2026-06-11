@@ -15,12 +15,16 @@ type TokenCallback = (msg: ExtToWebViewMessage) => void;
 type DoneCallback = (data?: any) => void;
 type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
 type McpStatusCallback = (servers: { name: string; type: string; connected: boolean }[]) => void;
+type LspStatusCallback = (status: { name: string; status: string; trackedFile: string | null }) => void;
+type TodoUpdateCallback = (todos: Array<{ content: string; status: string; priority: string }>) => void;
 type RateLimitedCallback = (retryAfter: number, error: string) => void;
 
 let workerProcess: childProcess.ChildProcess | null = null;
 let workerReady = false;
 let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined } | null = null;
 let mcpStatusCallback: McpStatusCallback | null = null;
+let lspStatusCallback: LspStatusCallback | null = null;
+let todoUpdateCallback: TodoUpdateCallback | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
 const insertStack: InsertedCell[] = [];
@@ -119,6 +123,12 @@ async function ensureWorker(): Promise<void> {
           if (msg.type === 'mcp-status' && mcpStatusCallback) {
             mcpStatusCallback(msg.servers || []);
           }
+          if (msg.type === 'lsp-status' && lspStatusCallback) {
+            lspStatusCallback(msg);
+          }
+          if (msg.type === 'todo-update' && todoUpdateCallback) {
+            todoUpdateCallback(msg.todos || []);
+          }
         } catch { /* ignore non-JSON */ }
       }
     };
@@ -128,6 +138,14 @@ async function ensureWorker(): Promise<void> {
 
 export function setMcpStatusCallback(cb: McpStatusCallback): void {
   mcpStatusCallback = cb;
+}
+
+export function setLspStatusCallback(cb: LspStatusCallback): void {
+  lspStatusCallback = cb;
+}
+
+export function setTodoUpdateCallback(cb: TodoUpdateCallback): void {
+  todoUpdateCallback = cb;
 }
 
 export async function sendMessage(
@@ -658,6 +676,20 @@ export async function requestMcpStatus(): Promise<void> {
   await ensureWorker();
   if (workerProcess?.stdin) {
     workerProcess.stdin.write(JSON.stringify({ type: 'mcp-status-request' }) + '\n');
+  }
+}
+
+export async function requestLspStatus(): Promise<void> {
+  await ensureWorker();
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'lsp-status-request' }) + '\n');
+  }
+}
+
+export async function requestTodoStatus(): Promise<void> {
+  await ensureWorker();
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'todo-status-request' }) + '\n');
   }
 }
 

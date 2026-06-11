@@ -20,6 +20,7 @@
   const statusMessagesEl = document.getElementById('status-messages');
   const statusMcpEl = document.getElementById('status-mcp');
   const statusSandboxEl = document.getElementById('status-sandbox');
+  let lspStatus = null;
 
   // Initialize Mermaid
   if (typeof mermaid !== 'undefined') {
@@ -57,6 +58,7 @@
   let selectedAgent = 'Research Assistant';
   let selectedModel = 'Auto';
   let tokenUsage = { input: 0, output: 0, total: 0 };
+  let todoData = [];
   let messageQueue = [];
   let queuePanelEl = null;
   const vscode = acquireVsCodeApi();
@@ -138,31 +140,146 @@
 
   function updateMcpStatus() {
     if (!statusMcpEl) return;
-    if (mcpServers.length === 0) {
-      statusMcpEl.innerHTML = '';
+
+    const connected = mcpServers.filter(s => s.connected);
+    const hasMcp = mcpServers.length > 0;
+    const hasLsp = lspStatus && lspStatus.status !== 'disconnected';
+
+    const parts = [];
+    if (hasMcp) {
+      parts.push(`<span class="mcp-label" data-type="mcp">&#9654; MCP (${connected.length})</span>`);
+    }
+    if (hasLsp) {
+      const dotClass = lspStatus.status === 'connected' ? 'connected' : 'starting';
+      const tracked = lspStatus.trackedFile ? ` ${lspStatus.trackedFile.split('/').pop()}` : '';
+      const lspCount = lspStatus.status !== 'disconnected' ? 1 : 0;
+      parts.push(`<span class="mcp-label" data-type="lsp">&#9654; LSP (${lspCount})${tracked} <span class="mcp-dropdown-item-dot ${dotClass}"></span></span>`);
+    }
+
+    statusMcpEl.innerHTML = parts.join('');
+    statusMcpEl.style.display = 'flex';
+    statusMcpEl.style.gap = '12px';
+
+    if (parts.length === 0) {
       if (mcpDropdownEl) mcpDropdownEl.classList.remove('visible');
       return;
     }
-    const connected = mcpServers.filter(s => s.connected);
-    const label = connected.length > 0
-      ? `&#9654; MCP (${connected.length})`
-      : `&#9654; MCP (0)`;
-    statusMcpEl.innerHTML = `<span class="mcp-label">${label}</span>`;
 
     statusMcpEl.onclick = (e) => {
       e.stopPropagation();
-      mcpDropdownVisible = !mcpDropdownVisible;
-      if (mcpDropdownVisible) {
-        renderMcpDropdown();
-        mcpDropdownEl.classList.add('visible');
+      const label = e.target.closest('.mcp-label');
+      const type = label ? label.getAttribute('data-type') : 'mcp';
+      if (type === 'lsp') {
+        renderLspDropdown();
       } else {
-        mcpDropdownEl.classList.remove('visible');
+        mcpDropdownVisible = !mcpDropdownVisible;
+        if (mcpDropdownVisible) {
+          renderMcpDropdown();
+          mcpDropdownEl.classList.add('visible');
+        } else {
+          mcpDropdownEl.classList.remove('visible');
+        }
       }
     };
 
     if (mcpDropdownVisible) {
       renderMcpDropdown();
     }
+  }
+
+  function renderTodoBadges() {
+    let targetEl = currentMessageEl || messagesContainer.querySelector('.message.assistant:last-of-type');
+    if (!targetEl) {
+      targetEl = document.createElement('div');
+      targetEl.className = 'message assistant';
+      messagesContainer.appendChild(targetEl);
+    }
+
+    let todoSection = targetEl.querySelector('.todo-section');
+    if (!todoSection) {
+      todoSection = document.createElement('div');
+      todoSection.className = 'todo-section';
+      const refEl = targetEl.querySelector('.message-content') || targetEl.querySelector('.reasoning-section');
+      if (refEl) {
+        targetEl.insertBefore(todoSection, refEl);
+      } else {
+        targetEl.appendChild(todoSection);
+      }
+    }
+
+    if (!todoData || todoData.length === 0) {
+      todoSection.innerHTML = '';
+      return;
+    }
+
+    const done = todoData.filter(t => t.status === 'completed').length;
+    const running = todoData.filter(t => t.status === 'in_progress').length;
+    const total = todoData.length;
+
+    let html = `<div class="todo-summary" onclick="this.parentElement.querySelector('.todo-list').classList.toggle('collapsed')">`;
+    html += `<span class="todo-count">`;
+    if (running > 0) html += `<span class="todo-spinner-inline"></span> `;
+    html += `${done}/${total} tasks`;
+    html += `</span><span class="todo-toggle">▼</span></div>`;
+    html += `<div class="todo-list collapsed">`;
+    for (const t of todoData) {
+      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : t.status === 'cancelled' ? '❌' : '⬜';
+      html += `<div class="todo-item"><span class="todo-icon">${icon}</span><span class="todo-text">${escapeHtml(t.content)}</span></div>`;
+    }
+    html += `</div>`;
+
+    todoSection.innerHTML = html;
+  }
+
+  function updateTodoList(todos) {
+    const el = document.getElementById('status-todos');
+    if (!el) return;
+    if (!todos || todos.length === 0) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    const active = todos.filter(t => t.status === 'in_progress' || t.status === 'pending');
+    const done = todos.filter(t => t.status === 'completed');
+    const total = todos.length;
+    if (active.length === 0 && done.length === total && total > 0) {
+      el.innerHTML = `<span class="todo-label">&#9654; TODOs (${total}/${total}) ✅</span>`;
+    } else if (active.length > 0) {
+      el.innerHTML = `<span class="todo-label">&#9654; TODOs (${done.length}/${total})</span>`;
+    } else {
+      el.innerHTML = `<span class="todo-label">&#9654; TODOs (0/${total})</span>`;
+    }
+    el.onclick = () => {
+      renderTodoDropdown(todos);
+    };
+  }
+
+  function renderTodoDropdown(todos) {
+    if (!mcpDropdownEl) return;
+    const items = todos.map(t => {
+      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : t.status === 'cancelled' ? '❌' : '⬜';
+      return `<div class="mcp-dropdown-item">
+        <span>${icon}</span>
+        <span class="mcp-dropdown-item-name" style="margin-left:6px">${t.content}</span>
+        <span style="opacity:0.6;font-size:11px">${t.status}</span>
+      </div>`;
+    }).join('');
+    mcpDropdownEl.innerHTML = `
+      <div class="mcp-dropdown-header">TODOs</div>
+      <div class="mcp-dropdown-list">${items || '<div class="mcp-dropdown-empty">No tasks</div>'}</div>`;
+    mcpDropdownEl.classList.add('visible');
+    setTimeout(() => {
+      const hide = () => {
+        mcpDropdownEl.classList.remove('visible');
+        document.removeEventListener('click', hide);
+      };
+      document.addEventListener('click', hide);
+    }, 0);
+  }
+
+  function updateLspStatus(msg) {
+    lspStatus = msg;
+    updateMcpStatus();
   }
 
   function renderMcpDropdown() {
@@ -182,6 +299,37 @@
     mcpDropdownEl.innerHTML = `
       <div class="mcp-dropdown-header">MCP Servers</div>
       <div class="mcp-dropdown-list">${items}</div>`;
+  }
+
+  function renderLspDropdown() {
+    if (!mcpDropdownEl || !lspStatus) return;
+    const status = lspStatus.status || 'disconnected';
+    const dotClass = status === 'connected' ? 'connected' : (status === 'starting' ? 'starting' : 'disconnected');
+    const name = lspStatus.name || 'tinymist';
+    const tracked = lspStatus.trackedFile || '';
+    const rows = [
+      `<div class="mcp-dropdown-item">
+        <span class="mcp-dropdown-item-dot ${dotClass}"></span>
+        <span class="mcp-dropdown-item-name">${name}</span>
+        <span style="opacity:0.6;font-size:11px">${status}</span>
+      </div>`];
+    if (tracked) {
+      rows.push(`<div class="mcp-dropdown-item">
+        <span class="mcp-dropdown-item-name">File</span>
+        <span style="opacity:0.6;font-size:11px">${tracked}</span>
+      </div>`);
+    }
+    mcpDropdownEl.innerHTML = `
+      <div class="mcp-dropdown-header">LSP Server</div>
+      <div class="mcp-dropdown-list">${rows.join('')}</div>`;
+    mcpDropdownEl.classList.add('visible');
+    setTimeout(() => {
+      const hide = () => {
+        mcpDropdownEl.classList.remove('visible');
+        document.removeEventListener('click', hide);
+      };
+      document.addEventListener('click', hide);
+    }, 0);
   }
 
   function hideMcpDropdown() {
@@ -1420,6 +1568,16 @@
       case 'mcp-status':
         mcpServers = msg.servers || [];
         updateMcpStatus();
+        break;
+
+      case 'lsp-status':
+        updateLspStatus(msg);
+        break;
+
+      case 'todo-update':
+        todoData = msg.todos || [];
+        updateTodoList(todoData);
+        renderTodoBadges();
         break;
 
       case 'tool-approval-needed':
