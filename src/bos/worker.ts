@@ -54,6 +54,33 @@ function readExistingTodos(workspaceRoot: string): TodoEntry[] | null {
   return null;
 }
 
+const HIDDEN_TOOLS = new Set([
+  'read_file', 'write_file', 'edit_file', 'load_skill',
+  'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
+  'todoread', 'todowrite',
+]);
+
+function shouldEmitTool(name: string, context: 'call' | 'result'): boolean {
+  const trimmedName = name.trim();
+  const isHidden = HIDDEN_TOOLS.has(trimmedName);
+  if (isHidden) {
+    console.error(`[debug-tools] hiding ${context}: ${trimmedName}`);
+  }
+  return !isHidden;
+}
+
+function shouldEmitToolCall(name: string): boolean {
+  return shouldEmitTool(name, 'call');
+}
+
+function shouldEmitToolResult(toolId: string, name?: string): boolean {
+  if (name) return shouldEmitTool(name, 'result');
+  const tracked = toolCallNames.get(toolId);
+  return shouldEmitTool(tracked ?? '', 'result');
+}
+
+const toolCallNames = new Map<string, string>();
+
 let abortController: AbortController | null = null;
 let deps: Awaited<ReturnType<typeof composeRoot>> | null = null;
 let brain: any = null;
@@ -488,9 +515,12 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             if (token.name) {
               hasRealContent = true;
               resetHeartbeatTimer();
-              responseCharCount += (token.name?.length ?? 0) + 20; // rough estimate
+              responseCharCount += (token.name?.length ?? 0) + 20;
             }
-            emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+            if (token.id && token.name) toolCallNames.set(token.id, token.name);
+            if (shouldEmitToolCall(token.name)) {
+              emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+            }
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'ToolResult':
@@ -500,12 +530,14 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
               const resultStr = (token.result || token.text || '');
               responseCharCount += resultStr.length;
             }
-            emit('token', {
-              tokenType: 'ToolResult',
-              text: token.result || token.text || '',
-              toolId: token.id,
-              status: 'completed'
-            });
+            if (shouldEmitToolResult(token.id, token.name)) {
+              emit('token', {
+                tokenType: 'ToolResult',
+                text: token.result || token.text || '',
+                toolId: token.id,
+                status: 'completed'
+              });
+            }
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'Heartbeat':
@@ -1135,15 +1167,20 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             localEmit('token', { tokenType: 'Text', text: token.text });
             break;
           case 'ToolCall':
-            localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+            if (token.id && token.name) toolCallNames.set(token.id, token.name);
+            if (shouldEmitToolCall(token.name)) {
+              localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+            }
             break;
           case 'ToolResult':
-            localEmit('token', {
-              tokenType: 'ToolResult',
-              text: token.result || token.text || '',
-              toolId: token.id,
-              status: 'completed'
-            });
+            if (shouldEmitToolResult(token.id, token.name)) {
+              localEmit('token', {
+                tokenType: 'ToolResult',
+                text: token.result || token.text || '',
+                toolId: token.id,
+                status: 'completed'
+              });
+            }
             break;
           case 'Usage':
             localEmit('token', {

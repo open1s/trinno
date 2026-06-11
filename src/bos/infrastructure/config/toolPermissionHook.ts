@@ -10,7 +10,17 @@ export const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
 const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeout: NodeJS.Timeout; id: string; toolName: string }>();
 
+const HIDDEN_TOOLS = new Set([
+  'read_file', 'write_file', 'edit_file', 'load_skill',
+  'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
+  'todoread', 'todowrite',
+]);
+
 let onEmit: ((type: string, data: any) => void) | null = null;
+
+function shouldEmitTool(name: string, context: 'call' | 'result'): boolean {
+  return !HIDDEN_TOOLS.has(name.trim());
+}
 
 export function setApprovalEmitter(emitFn: (type: string, data: any) => void): void {
   onEmit = emitFn;
@@ -108,7 +118,7 @@ const id = `auto_${++approvalCounter}`;
   ctx.data.toolId = id;
   const rawArgs2 = data.tool_args || data.args || data.command || data.cmd || '';
   const autoArgs = typeof rawArgs2 === 'string' ? tryParseJson(rawArgs2) : rawArgs2;
-  if (onEmit) {
+  if (onEmit && shouldEmitTool(toolName, 'call')) {
       onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id, args: autoArgs });
     }
 
@@ -150,7 +160,7 @@ const id = `auto_${++approvalCounter}`;
       }
     }
 
-    if (onEmit) {
+    if (onEmit && shouldEmitTool(toolName, 'result')) {
       onEmit('token', {
         tokenType: 'ToolResult',
         text: resultText,
