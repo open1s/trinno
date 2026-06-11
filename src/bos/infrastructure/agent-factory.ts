@@ -293,13 +293,9 @@ class AgentFactory {
       builder = builder.with_timeout(config.timeoutSecs);
     }
 
-    console.error(`[agent-factory] skillsDirs: ${JSON.stringify(skillsDirs)}`);
     for (const dir of skillsDirs) {
       if (fs.existsSync(dir)) {
-        console.error(`[agent-factory] registering skills_dir: ${dir}`);
         builder = builder.with_skills_dir(dir);
-      } else {
-        console.error(`[agent-factory] skills_dir does not exist: ${dir}`);
       }
     }
 

@@ -1447,7 +1447,7 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
     await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
     const existing = await fs.promises.readFile(targetPath, 'utf8').catch(() => '');
     if (!existing) {
-      await fs.promises.writeFile(targetPath, `# ${cmd.title}\n\n开始撰写...\n`, 'utf8');
+      await fs.promises.writeFile(targetPath, `= ${cmd.title}\n\n开始撰写...\n`, 'utf8');
     }
   } catch (bootErr) {
     chatView?.webview.postMessage({
