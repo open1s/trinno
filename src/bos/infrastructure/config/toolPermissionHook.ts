@@ -72,6 +72,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
     }
 
     if (perm === 'ask') {
+      process.stderr.write(`[approval] beforeHook: perm=ask, busInitialized=${busInitialized}, publisher=${!!approvalPublisher}, subscriber=${!!approvalSubscriber}\n`);
       if (!busInitialized || !approvalPublisher || !approvalSubscriber) {
         const rejectMsg = `Tool "${toolName}" blocked: approval bus not available`;
         if (onEmit) {
@@ -101,14 +102,17 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       });
       emit('tool-approval-needed', { id, toolName, args, metadata, bashIntent });
 
+      process.stderr.write(`[approval] waiting for approval: id=${id}, toolName=${toolName}, pendingApprovals.size=${pendingApprovals.size}\n`);
       const approved = await new Promise<boolean>((resolve) => {
         const timeout = setTimeout(() => {
+          process.stderr.write(`[approval] timeout for id=${id}\n`);
           const entry = pendingApprovals.get(id);
           pendingApprovals.delete(id);
           entry?.resolve(false);
         }, APPROVAL_TIMEOUT_MS);
         pendingApprovals.set(id, { resolve, timeout, id, toolName });
       });
+      process.stderr.write(`[approval] got approval result: id=${id}, approved=${approved}\n`);
 
       return approved ? HookDecision.Continue : HookDecision.Abort;
     }
@@ -195,14 +199,22 @@ export function cancelAllPendingApprovals(): void {
 }
 
 export async function sendApprovalResponse(id: string, approved: boolean): Promise<void> {
+  process.stderr.write(`[approval] sendApprovalResponse called: id=${id}, approved=${approved}\n`);
   const entry = pendingApprovals.get(id);
   if (entry) {
+    process.stderr.write(`[approval] found pending entry, resolving with ${approved}\n`);
     clearTimeout(entry.timeout);
     pendingApprovals.delete(id);
     entry.resolve(approved);
+  } else {
+    process.stderr.write(`[approval] NO pending entry found for id=${id}, pendingApprovals.size=${pendingApprovals.size}\n`);
   }
   if (approvalPublisher) {
+    process.stderr.write(`[approval] publishing response to bus\n`);
     await approvalPublisher.json({ id, approved, type: 'response' });
+    process.stderr.write(`[approval] published\n`);
+  } else {
+    process.stderr.write(`[approval] NO approvalPublisher available\n`);
   }
 }
 
