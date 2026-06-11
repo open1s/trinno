@@ -206,7 +206,7 @@ const staticSlashCommands = [
   { name: 'help', description: 'Show all available commands' },
 ];
 
-const allSlashCommands = [...staticSlashCommands, ...loadedSkills.map(s => ({ name: s.name, description: s.description }))];
+const allSlashCommands = [...staticSlashCommands, ...loadSkillSlashs.map(s => ({ name: s.name, description: s.description }))];
 
 class ChatViewProvider implements vscode.WebviewViewProvider {
   constructor(private readonly context: vscode.ExtensionContext) {
@@ -798,7 +798,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
     const cmd = {
       title: topic,
       phase,
-      writePath: `${phase}/${slugifyPatentTitle(topic)}.md`,
+      writePath: `${phase}/${slugifyPatentTitle(topic)}.typ`,
     };
     await runSkillWrite(msg.docType, cmd, msg.originalText);
   } else if (msg.type === 'write-topic-cancel') {
@@ -1711,7 +1711,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
     const cmd = {
       title,
       phase: '07_Patent',
-      writePath: `07_Patent/${slugifyPatentTitle(title)}.md`,
+      writePath: `07_Patent/${slugifyPatentTitle(title)}.typ`,
     };
     await runSkillWrite('patent', cmd, text);
     return;

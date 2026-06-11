@@ -22,7 +22,7 @@ export function parseWriteCommand(text: string): WriteCommand | null {
     const cleaned = stripPhase(body);
     if (!cleaned) return null;
     const phase = phaseMatch(body)?.[1] ?? '05_Deliver';
-    return { title: cleaned, phase, writePath: `${phase}/${slugifyPatentTitle(cleaned)}.md` };
+    return { title: cleaned, phase, writePath: `${phase}/${slugifyPatentTitle(cleaned)}.typ` };
   };
 
   // Form 1: "write paper: <title>" / "write a paper: <title>" / "write the paper: <title>" (explicit colon)
@@ -82,7 +82,7 @@ export function parseWritePatent(text: string): WriteCommand | null {
   if (slashMatch) {
     const body = (slashMatch[1] ?? '').trim();
     if (!body) return null;
-    return { title: body, phase: '07_Patent', writePath: `07_Patent/${slugifyPatentTitle(body)}.md` };
+    return { title: body, phase: '07_Patent', writePath: `07_Patent/${slugifyPatentTitle(body)}.typ` };
   }
 
   const pattern = /^(?:撰写|写|起草)?\s*专利(?:\s*(?:申请书|申请|书))?(?:\s*[:：]|\s+)([\s\S]+)$|^(?:write\s+(?:a\s+)?patent(?:\s+application)?|patent(?:\s+application)?)\s*[:：]?\s*([\s\S]+)$/i;
@@ -90,7 +90,7 @@ export function parseWritePatent(text: string): WriteCommand | null {
   if (!m) return null;
   const body = (m[1] ?? m[2] ?? '').trim();
   if (!body) return null;
-  return { title: body, phase: '07_Patent', writePath: `07_Patent/${slugifyPatentTitle(body)}.md` };
+  return { title: body, phase: '07_Patent', writePath: `07_Patent/${slugifyPatentTitle(body)}.typ` };
 }
 
 export function parseWriteAny(text: string): { type: 'paper' | 'patent'; cmd: WriteCommand } | null {
