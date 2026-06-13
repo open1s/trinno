@@ -142,12 +142,17 @@
     if (!statusMcpEl) return;
 
     const connected = mcpServers.filter(s => s.connected);
+    const failed = mcpServers.filter(s => !s.connected);
     const hasMcp = mcpServers.length > 0;
     const hasLsp = lspStatus && lspStatus.status !== 'disconnected';
 
     const parts = [];
     if (hasMcp) {
-      parts.push(`<span class="mcp-label" data-type="mcp">&#9654; MCP (${connected.length})</span>`);
+      let label = `&#9654; MCP (${connected.length}/${mcpServers.length})`;
+      if (failed.length > 0) {
+        label += ` <span style="color:#e74c3c">&#9679;</span>`;
+      }
+      parts.push(`<span class="mcp-label" data-type="mcp">${label}</span>`);
     }
     if (hasLsp) {
       const dotClass = lspStatus.status === 'connected' ? 'connected' : 'starting';

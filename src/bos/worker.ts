@@ -697,32 +697,31 @@ function emitTodoUpdate(): void {
 }
 
 function loadSoulMd(): string {
-  let soul = '';
+  let soul = undefined;
   try {
     const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
     const projectSoul = path.join(wsRoot, 'SOUL.md');
     if (fs.existsSync(projectSoul)) {
-      soul += fs.readFileSync(projectSoul, 'utf-8').trim();
+      soul = fs.readFileSync(projectSoul, 'utf-8').trim();
     }
   } catch { }
   
   if (soul) return soul;
 
+  let homeContent = undefined;
   try {
     const homeSoul = path.join(os.homedir(), '.bos', 'skills', 'SOUL.md');
     if (fs.existsSync(homeSoul)) {
-      const homeContent = fs.readFileSync(homeSoul, 'utf-8').trim();
-      if (soul) soul += '\n\n---\n\n';
-      soul += homeContent;
+      homeContent = fs.readFileSync(homeSoul, 'utf-8').trim();
     }
   } catch { }
-  return soul;
+  return homeContent?? '';
 }
 
 function buildMethodologyPrompt(slashCommandsList: string): string {
   const soul = loadSoulMd();
-  const soulSection = soul ? `\n\n## SOUL (Core Guidelines)\n\n${soul}\n` : '';
-  return [
+  const soulSection = soul ? `\n\n## SOUL (Core Guidelines)\n\n${soul}\n\n` : '';
+  return soulSection + [
     '## Phased Research Philosophy',
     '- Research is incremental. Complete one phase before moving to the next.',
     '- 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 07_Patent.',
@@ -789,7 +788,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
     '',
-    '## Writing Papers/Patents (use /patent or /write paper, LLM self-directs with skills)',
+    '## Writing Papers/Patents (use /patent or /write paper, LLM self-directs with skills, plan use todos, write incrementally, verify each step)',
     '- When writing is requested, the panel injects a skill (paper-writer or patent-writer) that you should load with load_skill.',
     '- Use todowrite to plan sections, then read_file/write_file/edit_file to write the paper incrementally.',
     '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic. Stop and ask for topic.',
@@ -806,12 +805,9 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     'Planning: todowrite for tracking multi-step writing tasks only (papers/patents). todoread to check saved state. Do NOT call todowrite for simple single-file edits, quick fixes, or chat questions — just do the work directly with read_file/edit_file.',
     'Full schemas come via function-calling API.',
     '',
-    '## Slash Commands',
-    slashCommandsList,
-    '',
     '## Tool-Call Format',
     'Single JSON object. No XML. No commentary. "not support such call" → don\'t retry, reformulate in plain text.',
-  ].join('\n') + soulSection;
+  ].join('\n');
 }
 
 function handleHelp(): void {
@@ -1202,16 +1198,22 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     effectiveMcp = getAgentFactory().getDefaultMcpServers();
   }
 
-  localEmit('mcp-status', {
-    servers: (effectiveMcp || []).map((s: any) => ({ name: s.name, type: s.type, connected: true })),
-  });
+  function emitMcpStatus(servers: Array<{ name: string; type: string; connected: boolean }>) {
+    localEmit('mcp-status', { servers });
+  }
 
-  let lspStatus = 'disconnected';
-  try {
-    const lsp = await getTypstLspClient(wsRoot);
-    lspStatus = lsp.isInitialized ? 'connected' : 'starting';
-  } catch { /* LSP not available */ }
-  localEmit('lsp-status', { name: 'tinymist', status: lspStatus, trackedFile: _trackedTypFile || null });
+  function ezbosType(mcpType: string): string {
+    return mcpType === 'stdio' ? 'process' : mcpType;
+  }
+  const mcpStatusMap = new Map<string, boolean>();
+  for (const s of effectiveMcp || []) {
+    const comm = s.type === 'http' ? s.url : s.command;
+    mcpStatusMap.set(`${s.name}::${ezbosType(s.type)}::${comm}`, false);
+  }
+  function mcpKey(namespace: string, type: string, comm: string): string {
+    return `${namespace}::${type}::${comm}`;
+  }
+  emitMcpStatus(effectiveMcp.map(s => ({ name: s.name, type: s.type, connected: false })));
 
   const f = getAgentFactory();
   const agent = f.create({
@@ -1220,9 +1222,39 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     ...(model ? { model } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     mcpServers: effectiveMcp,
+    onMcpStatus: (namespace, type, comm, status) => {
+      mcpStatusMap.set(mcpKey(namespace, type, comm), status === 'connected');
+      const servers = effectiveMcp.map(s => {
+        const c = s.type === 'http' ? s.url : s.command;
+        return {
+          name: s.name,
+          type: s.type,
+          connected: mcpStatusMap.get(mcpKey(s.name, ezbosType(s.type), c ?? '')) ?? false,
+        };
+      });
+      emitMcpStatus(servers);
+    },
   });
 
   const started = await agent.start();
+
+  // Final status after all connections resolved
+  const finalServers = effectiveMcp.map(s => {
+    const c = s.type === 'http' ? s.url : s.command;
+    return {
+      name: s.name,
+      type: s.type,
+      connected: mcpStatusMap.get(mcpKey(s.name, ezbosType(s.type), c ?? '')) ?? false,
+    };
+  });
+  emitMcpStatus(finalServers);
+
+  let lspStatus = 'disconnected';
+  try {
+    const lsp = await getTypstLspClient(wsRoot);
+    lspStatus = lsp.isInitialized ? 'connected' : 'starting';
+  } catch { /* LSP not available */ }
+  localEmit('lsp-status', { name: 'tinymist', status: lspStatus, trackedFile: _trackedTypFile || null });
 
   if (sessionId) {
     // Check if the factory has a more recent session for this sessionId

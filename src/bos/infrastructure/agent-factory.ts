@@ -1,7 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { BrainOS } from '@open1s/ezbos';
+import { BrainOS, McpStatusCallback } from '@open1s/ezbos';
 import { McpServerConfig } from './config/toolPermissions.js';
 
 function loadMcpFromConfig(): McpServerConfig[] {
@@ -33,6 +33,7 @@ export interface AgentConfig {
   extraTools?: any[];
   sessionId?: string;
   brainOsSession?: string;
+  onMcpStatus?: McpStatusCallback;
 }
 export interface SessionConfig {
   brainOsSession: string;
@@ -266,7 +267,7 @@ class AgentFactory {
     const mcpServers = config.mcpServers ?? this.defaultMcpServers;
     const skillsDirs = config.skillsDirs ?? DEFAULT_SKILLS_DIRS;
 
-    let builder = this.brain.agent(config.name)
+    let builder = this.brain.agent(config.name, config.onMcpStatus ? { onMcpStatus: config.onMcpStatus as any } : {})
       .with_systemPrompt(config.systemPrompt)
       .with_temperature(temperature)
       .with_maxTokens(maxTokens);
