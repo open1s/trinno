@@ -597,6 +597,25 @@
     vscode.postMessage({ type: 'request-file-list' });
   }
 
+  function triggerFileCompletionFromInput() {
+    const cursorPos = inputEl.selectionStart;
+    const val = inputEl.value;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const atMatch = textBeforeCursor.match(/(^|[\s\u4e00-\u9fa5])@([^\s@]*)$/);
+    if (!atMatch) return;
+    const query = atMatch[2] || '';
+    fileCompletionStart = atMatch.index + atMatch[1].length;
+    fileCompletionQuery = query;
+    const items = filterWorkspaceFiles(query);
+    fileCompletionItems = items;
+    if (items.length > 0) {
+      fileCompletionIndex = 0;
+      showFileCompletion();
+    } else {
+      hideFileCompletion();
+    }
+  }
+
   function filterWorkspaceFiles(query) {
     const q = query.toLowerCase();
     if (!q) return workspaceFiles.slice(0, 30);
@@ -1614,6 +1633,9 @@
           fileCompletionItems = filterWorkspaceFiles(fileCompletionQuery);
           fileCompletionIndex = Math.min(fileCompletionIndex, Math.max(0, fileCompletionItems.length - 1));
           renderFileCompletion();
+        } else {
+          // Retrigger @ completion if input still has active @ context
+          triggerFileCompletionFromInput();
         }
         break;
 
