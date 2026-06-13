@@ -719,8 +719,23 @@ body {
 
 .tool-approval-buttons {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 6px;
   margin-top: 8px;
+}
+
+.tool-approval-remember {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #888);
+  cursor: pointer;
+  user-select: none;
+}
+.tool-approval-remember input {
+  cursor: pointer;
 }
 
 .tool-approval-btn {

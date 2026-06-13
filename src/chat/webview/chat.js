@@ -2168,8 +2168,11 @@
         ${intentHtml}
         ${argsHtml}
         <div class="tool-approval-buttons">
-          <button class="tool-approval-btn allow" onclick="window.__approveTool('${id}')">Allow</button>
-          <button class="tool-approval-btn deny" onclick="window.__denyTool('${id}')">Deny</button>
+          <label class="tool-approval-remember"><input type="checkbox" id="remember-${id}"> 记住此工具</label>
+          <div>
+            <button class="tool-approval-btn allow" onclick="window.__approveTool('${id}')">Allow</button>
+            <button class="tool-approval-btn deny" onclick="window.__denyTool('${id}')">Deny</button>
+          </div>
         </div>
       </div>
     `;
@@ -2179,7 +2182,8 @@
   }
 
   window.__approveTool = function(id) {
-    vscode.postMessage({ type: 'tool-approval', id, approved: true });
+    const remember = document.getElementById(`remember-${id}`)?.checked === true;
+    vscode.postMessage({ type: 'tool-approval', id, approved: true, remember });
     const el = document.getElementById(`approval-${id}`);
     if (el) el.remove();
     pendingApproval = null;

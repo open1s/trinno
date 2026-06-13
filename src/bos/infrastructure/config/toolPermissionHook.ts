@@ -8,9 +8,13 @@ let approvalPublisher: any = null;
 let approvalSubscriber: any = null;
 let busInitialized = false;
 
-export const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeout?: NodeJS.Timeout; id: string; toolName: string }>();
+const rememberedApprovals = new Set<string>();
 
-const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeout: NodeJS.Timeout; id: string; toolName: string }>();
+function wsToolKey(toolName: string): string {
+  const ws = (globalThis as any).__TRP_WORKSPACE_ROOT || '';
+  return `${ws}::${toolName}`;
+}
 
 const HIDDEN_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'load_skill',
@@ -74,6 +78,12 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
     }
 
     if (perm === 'ask') {
+      // Skip dialog if remembered for this project
+      if (rememberedApprovals.has(wsToolKey(toolName))) {
+        process.stderr.write(`[approval] remembered: ${toolName}, auto-approving\n`);
+        return HookDecision.Continue;
+      }
+
       process.stderr.write(`[approval] beforeHook: perm=ask, busInitialized=${busInitialized}, publisher=${!!approvalPublisher}, subscriber=${!!approvalSubscriber}\n`);
       if (!busInitialized || !approvalPublisher || !approvalSubscriber) {
         const rejectMsg = `Tool "${toolName}" blocked: approval bus not available`;
@@ -106,13 +116,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
 
       process.stderr.write(`[approval] waiting for approval: id=${id}, toolName=${toolName}, pendingApprovals.size=${pendingApprovals.size}\n`);
       const approved = await new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => {
-          process.stderr.write(`[approval] timeout for id=${id}\n`);
-          const entry = pendingApprovals.get(id);
-          pendingApprovals.delete(id);
-          entry?.resolve(false);
-        }, APPROVAL_TIMEOUT_MS);
-        pendingApprovals.set(id, { resolve, timeout, id, toolName });
+        pendingApprovals.set(id, { resolve, timeout: undefined as unknown as NodeJS.Timeout, id, toolName });
       });
       process.stderr.write(`[approval] got approval result: id=${id}, approved=${approved}\n`);
 
@@ -213,14 +217,18 @@ export function cancelAllPendingApprovals(): void {
   }
 }
 
-export async function sendApprovalResponse(id: string, approved: boolean): Promise<void> {
-  process.stderr.write(`[approval] sendApprovalResponse called: id=${id}, approved=${approved}\n`);
+export async function sendApprovalResponse(id: string, approved: boolean, remember?: boolean): Promise<void> {
+  process.stderr.write(`[approval] sendApprovalResponse called: id=${id}, approved=${approved}, remember=${remember}\n`);
   const entry = pendingApprovals.get(id);
   if (entry) {
     process.stderr.write(`[approval] found pending entry, resolving with ${approved}\n`);
     clearTimeout(entry.timeout);
     pendingApprovals.delete(id);
     entry.resolve(approved);
+    if (approved && remember) {
+      rememberedApprovals.add(wsToolKey(entry.toolName));
+      process.stderr.write(`[approval] remembered ${entry.toolName} for this workspace\n`);
+    }
   } else {
     process.stderr.write(`[approval] NO pending entry found for id=${id}, pendingApprovals.size=${pendingApprovals.size}\n`);
   }

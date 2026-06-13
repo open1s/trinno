@@ -100,7 +100,7 @@ export type WebViewToExtMessage =
   | { type: 'setAgent'; agent: string }
   | { type: 'setModel'; model: string }
   | { type: 'openSettings' }
-  | { type: 'tool-approval'; id: string; approved: boolean }
+  | { type: 'tool-approval'; id: string; approved: boolean; remember?: boolean }
   | { type: 'write-topic-confirm'; docType: 'paper' | 'patent'; topic: string; originalText: string }
   | { type: 'write-topic-cancel'; originalText: string }
   | { type: 'request-file-list' }

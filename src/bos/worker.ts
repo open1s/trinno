@@ -1006,7 +1006,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
           handleCancel();
           break;
         case 'tool-approval':
-          await sendApprovalResponse(msg.id, msg.approved);
+          await sendApprovalResponse(msg.id, msg.approved, msg.remember);
           break;
         case 'compact':
           await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl);

@@ -796,7 +796,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
   } else if (msg.type === 'openSettings') {
     vscode.commands.executeCommand('workbench.action.openSettings', 'chat.');
   } else if (msg.type === 'tool-approval') {
-    sendToolApproval(msg.id, msg.approved);
+    sendToolApproval(msg.id, msg.approved, msg.remember);
   } else if (msg.type === 'rate-limited-retry') {
     handleRateLimitedRetry();
   } else if (msg.type === 'write-topic-confirm') {

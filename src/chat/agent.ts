@@ -296,9 +296,9 @@ export function cancelGeneration(): void {
   }
 }
 
-export function sendToolApproval(id: string, approved: boolean): void {
+export function sendToolApproval(id: string, approved: boolean, remember?: boolean): void {
   if (workerProcess?.stdin) {
-    workerProcess.stdin.write(JSON.stringify({ type: 'tool-approval', id, approved }) + '\n');
+    workerProcess.stdin.write(JSON.stringify({ type: 'tool-approval', id, approved, remember }) + '\n');
   }
 }
 
