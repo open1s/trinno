@@ -49,13 +49,13 @@ describe('write_paper/parseWritePatent', () => {
       const cmd = parseWritePatent('/patent 生物质衍生路线');
       assert.ok(cmd);
       assert.equal(cmd!.title, '生物质衍生路线');
-      assert.equal(cmd!.writePath, '07_Patent/生物质衍生路线.md');
+      assert.equal(cmd!.writePath, '07_Patent/生物质衍生路线.typ');
     });
 
     it('parses /patent with an English title and slugified path', () => {
       const cmd = parseWritePatent('/patent A Method for Biomass Conversion');
       assert.ok(cmd);
-      assert.equal(cmd!.writePath, '07_Patent/a-method-for-biomass-conversion.md');
+      assert.equal(cmd!.writePath, '07_Patent/a-method-for-biomass-conversion.typ');
     });
 
     it('returns null for /patent with no title', () => {
@@ -69,14 +69,14 @@ describe('write_paper/parseWritePatent', () => {
       const cmd = parseWritePatent('撰写专利：生物质衍生路线');
       assert.ok(cmd);
       assert.equal(cmd!.title, '生物质衍生路线');
-      assert.equal(cmd!.writePath, '07_Patent/生物质衍生路线.md');
+      assert.equal(cmd!.writePath, '07_Patent/生物质衍生路线.typ');
     });
 
     it('parses "撰写专利申请书：生物质衍生路线" (the original failing case)', () => {
       const cmd = parseWritePatent('撰写专利申请书：生物质衍生路线');
       assert.ok(cmd);
       assert.equal(cmd!.title, '生物质衍生路线');
-      assert.equal(cmd!.writePath, '07_Patent/生物质衍生路线.md');
+      assert.equal(cmd!.writePath, '07_Patent/生物质衍生路线.typ');
     });
 
     it('parses "写专利：xxx"', () => {
@@ -109,7 +109,7 @@ describe('write_paper/parseWritePatent', () => {
       const cmd = parseWritePatent('write a patent: a method for biomass conversion');
       assert.ok(cmd);
       assert.equal(cmd!.title, 'a method for biomass conversion');
-      assert.equal(cmd!.writePath, '07_Patent/a-method-for-biomass-conversion.md');
+      assert.equal(cmd!.writePath, '07_Patent/a-method-for-biomass-conversion.typ');
     });
 
     it('parses "patent: xxx"', () => {
@@ -148,7 +148,7 @@ describe('write_paper/parseWriteAny', () => {
     assert.ok(r);
     assert.equal(r!.type, 'patent');
     assert.equal(r!.cmd.title, '生物质衍生路线');
-    assert.equal(r!.cmd.writePath, '07_Patent/生物质衍生路线.md');
+    assert.equal(r!.cmd.writePath, '07_Patent/生物质衍生路线.typ');
   });
 
   it('routes /patent slash form to patent', () => {
@@ -180,25 +180,25 @@ describe('write_paper/parseWriteCommand (slugified writePath)', () => {
     assert.ok(cmd);
     assert.equal(cmd!.title, 'Deep Test');
     assert.equal(cmd!.phase, '05_Deliver');
-    assert.equal(cmd!.writePath, '05_Deliver/deep-test.md');
+    assert.equal(cmd!.writePath, '05_Deliver/deep-test.typ');
   });
 
   it('Chinese title is preserved in slug', () => {
     const cmd = parseWriteCommand('写论文：机器学习综述');
     assert.ok(cmd);
-    assert.equal(cmd!.writePath, '05_Deliver/机器学习综述.md');
+    assert.equal(cmd!.writePath, '05_Deliver/机器学习综述.typ');
   });
 
   it('respects refer research phase', () => {
     const cmd = parseWriteCommand('write paper: GDL, refer research 03_Analyze');
     assert.ok(cmd);
-    assert.equal(cmd!.writePath, '03_Analyze/gdl.md');
+    assert.equal(cmd!.writePath, '03_Analyze/gdl.typ');
   });
 
   it('mixed punctuation is stripped from slug', () => {
     const cmd = parseWriteCommand('write paper: Hierarchical Porosity: GDL / Design');
     assert.ok(cmd);
-    assert.equal(cmd!.writePath, '05_Deliver/hierarchical-porosity-gdl-design.md');
+    assert.equal(cmd!.writePath, '05_Deliver/hierarchical-porosity-gdl-design.typ');
   });
 
   it('two papers with different titles no longer collide', () => {
@@ -214,7 +214,7 @@ describe('write_paper/parseWriteCommand (permissive forms)', () => {
     const cmd = parseWriteCommand('write a paper: Zinc-Air Battery GDL');
     assert.ok(cmd);
     assert.equal(cmd!.title, 'Zinc-Air Battery GDL');
-    assert.equal(cmd!.writePath, '05_Deliver/zinc-air-battery-gdl.md');
+    assert.equal(cmd!.writePath, '05_Deliver/zinc-air-battery-gdl.typ');
   });
 
   it('parses "write the paper: <title>" with definite article', () => {
@@ -310,7 +310,7 @@ describe('write_paper/parseWriteCommand (permissive forms)', () => {
     assert.ok(cmd);
     assert.equal(cmd!.title, 'GDL design');
     assert.equal(cmd!.phase, '04_Synthesize');
-    assert.equal(cmd!.writePath, '04_Synthesize/gdl-design.md');
+    assert.equal(cmd!.writePath, '04_Synthesize/gdl-design.typ');
   });
 });
 
