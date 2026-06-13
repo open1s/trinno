@@ -616,11 +616,19 @@
     }
   }
 
+  function fuzzyMatch(text, query) {
+    let qi = 0;
+    for (let ti = 0; ti < text.length && qi < query.length; ti++) {
+      if (text[ti] === query[qi]) qi++;
+    }
+    return qi === query.length;
+  }
+
   function filterWorkspaceFiles(query) {
     const q = query.toLowerCase();
     if (!q) return workspaceFiles.slice(0, 30);
     return workspaceFiles
-      .filter(f => f.path.toLowerCase().includes(q) || f.name.toLowerCase().includes(q))
+      .filter(f => fuzzyMatch(f.path.toLowerCase(), q) || fuzzyMatch(f.name.toLowerCase(), q))
       .slice(0, 30);
   }
 
