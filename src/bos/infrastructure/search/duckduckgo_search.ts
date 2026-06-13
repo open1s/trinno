@@ -101,6 +101,40 @@ export class DuckDuckGoSearchService implements SearchService {
     } catch {
     }
 
+    // Fallback: Bing CN (accessible from China)
+    try {
+      const bingUrl = `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
+      const response = await fetch(bingUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (response.ok) {
+        const html = await response.text();
+        const results: SearchResult[] = [];
+        const blocks = html.split('<li class="b_algo"');
+        for (let i = 1; i < blocks.length && results.length < maxResults; i++) {
+          const block = blocks[i] as string;
+          const linkMatch = block.match(/<h2[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/i);
+          const snippetMatch = block.match(/<p[^>]*class="b_lineclamp2"[^>]*>(.*?)<\/p>/i);
+          if (linkMatch?.[1] && linkMatch[2]) {
+            const title = this.stripHtml(linkMatch[2]);
+            const url = linkMatch[1];
+            const snippet = snippetMatch?.[1] ? this.stripHtml(snippetMatch[1]) : '';
+            if (title && url) {
+              results.push({ title, url, snippet, sourceType });
+            }
+          }
+        }
+        return results;
+      }
+    } catch {
+    }
+
     return [];
   }
 

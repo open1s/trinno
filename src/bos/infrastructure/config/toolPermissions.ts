@@ -38,6 +38,7 @@ export const DEFAULT_TOOL_PERMISSIONS: ToolPermissionConfig = {
   todoread: 'allow',
   typst_lint: 'allow',
   typst_lsp_status: 'allow',
+  websearch: 'allow',
 };
 
 export function getToolName(tool: any): string {
@@ -114,6 +115,7 @@ export const TOOL_METADATA: Record<string, ToolMetadata> = {
   papers_list_downloaded: { description: 'List downloaded papers', dangerous: false, category: 'other' },
   todowrite: { description: 'Create and manage a structured task list, persisted to disk', dangerous: false, category: 'other' },
   todoread: { description: 'Read the current todo list from disk', dangerous: false, category: 'other' },
+  websearch: { description: 'Search the web for current information', dangerous: false, category: 'search' },
 };
 
 export function getToolMetadata(toolName: string): ToolMetadata | null {

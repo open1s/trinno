@@ -178,8 +178,16 @@ body {
   color: var(--vscode-descriptionForeground, #888);
   font-size: 13px;
   font-style: italic;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-
+.waiting-word {
+  transition: opacity 0.15s;
+}
+.waiting-word::first-letter {
+  text-transform: uppercase;
+}
 .waiting-dots::after {
   content: '';
   animation: dots 1.5s steps(4, end) infinite;

@@ -37,6 +37,14 @@
   let currentToolsEl = null;
   let currentToolsLogEl = null;
   let isGenerating = false;
+  let thinkingIntervalId = null;
+  const thinkingWords = [
+    'thinking', 'pondering', 'computing', 'processing', 'ruminating',
+    'synthesizing', 'analyzing', 'reasoning', 'deliberating', 'contemplating',
+    'cogitating', 'musing', 'reflecting', 'meditating', 'wondering',
+    'brainstorming', 'connecting', 'weaving', 'exploring', 'searching',
+  ];
+  let hasReceivedToken = false;
   let pendingRetry = null;
   let lastUserMessageText = '';
   let personaName = 'Research Assistant';
@@ -1780,8 +1788,16 @@
 
     const waitingIndicator = document.createElement('div');
     waitingIndicator.className = 'waiting-indicator';
-    waitingIndicator.innerHTML = '<span class="waiting-dots">Thinking</span>';
+    waitingIndicator.innerHTML = '<span class="waiting-word">thinking</span><span class="waiting-dots"></span>';
     currentMessageEl.appendChild(waitingIndicator);
+    hasReceivedToken = false;
+    let wordIdx = Math.floor(Math.random() * thinkingWords.length);
+    const wordEl = waitingIndicator.querySelector('.waiting-word');
+    if (thinkingIntervalId) clearInterval(thinkingIntervalId);
+    thinkingIntervalId = setInterval(() => {
+      wordIdx = (wordIdx + 1 + Math.floor(Math.random() * 3)) % thinkingWords.length;
+      if (wordEl) wordEl.textContent = thinkingWords[wordIdx];
+    }, 280);
 
     currentContentEl = document.createElement('div');
     currentContentEl.className = 'message-content';
@@ -1877,6 +1893,10 @@
 
     const waitingIndicator = currentMessageEl?.querySelector('.waiting-indicator');
     if (waitingIndicator && hasVisibleContent) {
+      if (thinkingIntervalId) {
+        clearInterval(thinkingIntervalId);
+        thinkingIntervalId = null;
+      }
       waitingIndicator.remove();
       currentContentEl.style.display = '';
     }
@@ -2305,6 +2325,7 @@ window.__denyTool = function(id) {
   }
 
   function showError(messageId, errorText) {
+    stopThinking();
     if (autoRetryTimer) {
       clearInterval(autoRetryTimer);
       autoRetryTimer = null;
