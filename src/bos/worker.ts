@@ -88,7 +88,7 @@ let brain: any = null;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
-const FALLBACK_PERSONA = 'You are the Trinno Research Assistant — a tool-first research agent. Your job is to produce real results in files using tools (read_file, write_file, edit_file, triz_search, etc.). Text responses are for brief status only. Domain expertise: TRIZ, PRISMA, SWOT, PEST, 5W1H, PICO. 7-phase workspace. Be concise — under 4 lines of text per response.';
+const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information.`;';
 
 const slashRegistry = createSlashCommandRegistry();
 
@@ -782,6 +782,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- 05_Deliver — paper, report drafts',
     '- 06_References — downloaded papers + library.json',
     '- 07_Patent — patent drafts',
+    '- 08_Data — experimental data, code snippets, etc.',
     'Check phase dirs before searching; write results back after analysis.',
     '',
     '## Multilingual + PubScholar',
