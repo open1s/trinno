@@ -6,7 +6,7 @@ export function createWebsearchTools() {
 
   const websearch = defineTool(
     'websearch',
-    'Search the web for current information, news, or general topics. Returns title, URL, and snippet for each result.',
+    'Search the web for current information, news, or general topics when domain knowledge is uncertain. Returns title, URL, and snippet for each result. Importance-weight results before quoting. Use before triz_search when you are unsure; never fabricate data — if search is unavailable, say so and use domain knowledge with explicit "illustrative" labels.',
   )
     .required('query', 'string', 'Search query')
     .param('maxResults', 'number', 'Max results (1-10, default 5)')

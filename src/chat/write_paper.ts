@@ -360,13 +360,13 @@ export async function writePaperToFile(content: string, writePath: string, works
 export function buildPaperPrompt(title: string, data: ResearchData): string {
   const sections: string[] = [];
 
-  sections.push(`请基于以下研究数据撰写一篇完整的TRIZ技术论文，标题为："${title}"\n`);
+  sections.push(`你是 Research Master — self-directed, tool-first research agent。请基于以下研究数据撰写一篇完整的技术论文（7-phase pipeline: Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution），标题："${title}"\n`);
   sections.push('要求：');
-  sections.push('1. 深度分析技术矛盾和解决方案');
-  sections.push('2. 结合TRIZ理论（39个工程参数、40条发明原理、76个标准解）');
-  sections.push('3. 内容专业、逻辑清晰、学术规范');
-  sections.push('4. 输出完整论文（摘要、引言、矛盾分析、解决方案、发展趋势、路线图、结论）');
-  sections.push('5. 用中文撰写\n');
+  sections.push('1. 用 39 个工程参数、40 条发明原理、76 个标准解驱动 contradictions→solutions，importance-weighted KPIs，evidence 评分');
+  sections.push('2. 使用 PEST + SWOT + 5W1H + PICO + PRISMA 框架组织背景、证据、PRISMA 流程');
+  sections.push('3. 输出结构：摘要 → 引言 → 矛盾分析 → 物场分析 → 解决方案 → S 曲线 → 路线图 → TRL → 风险与≤3 天可执行验证 → 结论 → 参考文献');
+  sections.push('4. 内容专业、逻辑清晰、学术规范；evidence 行内注明 score/weight；decision factors 与 risks 显式列出');
+  sections.push('5. 不要编造参数编号、案例、数据；不确定时调用 websearch\n');
 
   if (data.synthesisMd) {
     sections.push('## 综合研究报告\n' + data.synthesisMd + '\n');
@@ -441,6 +441,6 @@ export function buildPaperPrompt(title: string, data: ResearchData): string {
     sections.push('## 阶段报告\n' + data.reportMd + '\n');
   }
 
-  sections.push('\n请基于以上数据撰写完整论文，直接输出markdown格式内容，不要包含任何XML标签或JSON。');
+  sections.push('\n请基于以上数据撰写完整论文，直接输出 markdown 格式内容（≤4 行/段、importance-weighted、copy-ready），不要包含任何 XML 标签或 JSON。文末追加"## ≤3-Day Validation 实验"清单。');
   return sections.join('\n');
 }

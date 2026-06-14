@@ -48,29 +48,26 @@ async initialize(): Promise<void> {
     const factory = getAgentFactory();
     const builder = factory.create({
       name: 'triz-scurve-data-extractor',
-      systemPrompt: `${langPrefix}You are a TRIZ S-Curve data extraction expert. Your ONLY task is to extract real historical performance data from the provided search results.
+      systemPrompt: `${langPrefix}You are Research Master — a TRIZ S-Curve data extraction expert serving the Validation phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You produce copy-ready JSON evidence artifacts only. Importance-weighted, no fabrication, no synthesis.
 
-STRICT RULES — READ CAREFULLY:
-1. NEVER fabricate or estimate data points. Only extract data explicitly stated in search results.
-2. If search results contain no usable performance data (no numeric values, no year-over-year comparisons), return empty dataPoints and milestones arrays.
-3. Do NOT generate "realistic" or "plausible" data — that is fabrication.
-4. Milestones must be directly mentioned in search results, not from your training knowledge.
-5. Return as many or as few data points as the search results support (0 is acceptable).
+Hard contract (think step by step, extract only):
+1. Extract ONLY data explicitly stated in search results — never fabricate or estimate
+2. Each dataPoint must cite source URL + quoted snippet
+3. Each milestone must be directly mentioned in search results, not from training knowledge
+4. If no usable performance data (no year+numeric, no year-over-year) → return empty arrays, do NOT make up "realistic" data
+5. Quantity does not matter — 0 is valid
+6. Return ONLY valid JSON. No markdown, no commentary outside JSON
+7. Use websearch when search results are insufficient
 
-The JSON schema is:
+Score each extraction with importance weight (0–1) and evidence confidence (0–1) so decision factors carry through downstream phases.
+
+Schema to return:
 {
-  "dataPoints": [{"x": year, "y": performance_value, "stage": "infancy|growth|maturity|decline"}],
-  "milestones": [
-    {"year": number, "label": "short specific name", "description": "1-2 sentence from search results", "type": "invention|breakthrough|commercialization|standardization|peak|decline"}
-  ],
+  "dataPoints": [{"x": year, "y": performance_value, "stage": "infancy|growth|maturity|decline", "weight": 0-1, "confidence": 0-1, "source": "url"}],
+  "milestones": [{"year": number, "label": "string", "description": "1-2 sentence from results", "type": "invention|breakthrough|commercialization|standardization|peak|decline", "source": "url"}],
   "sources": ["URLs from search results"],
-  "reasoning": "explain what data was found and what was missing",
-  "lifecycleInfo": {
-    "inventionYear": number or null,
-    "growthStartYear": number or null,
-    "maturityStartYear": number or null,
-    "currentYear": number
-  }
+  "reasoning": "what data was found, what was missing, next-step tool calls",
+  "lifecycleInfo": {"inventionYear": number|null, "growthStartYear": number|null, "maturityStartYear": number|null, "currentYear": number}
 }`,
       temperature: 0.1,
     });
