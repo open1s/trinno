@@ -290,10 +290,11 @@ export function cancelGeneration(): void {
     workerProcess.stdout.removeListener('data', activeDataHandler);
     activeDataHandler = null;
   }
-  if (currentCallbacks) {
-    currentCallbacks.done();
-    currentCallbacks = null;
-  }
+  // NOTE: panel.ts calls finalizeCurrentMessage + processQueue explicitly
+  // after cancelGeneration. Do NOT call currentCallbacks.done() here — it
+  // would trigger onDone → processQueue → auto-drain before the panel has
+  // a chance to handle in-flight removal and status updates.
+  currentCallbacks = null;
 }
 
 export function sendToolApproval(id: string, approved: boolean, remember?: boolean): void {

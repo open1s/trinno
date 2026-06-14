@@ -649,31 +649,30 @@ function removeFromQueue(queueId: string): void {
 function forceExecuteQueueItem(queueId: string): void {
   const idx = messageQueue.findIndex(q => q.queueId === queueId);
   if (idx < 0 || messageQueue[idx]!.status === 'in-flight') return;
-  
-  // Halt current in-flight
+
+  cancelGeneration();
+  finalizeCurrentMessage();
   const inFlightIdx = messageQueue.findIndex(q => q.status === 'in-flight');
   if (inFlightIdx >= 0) {
-    cancelGeneration();
-    finalizeCurrentMessage();
-    // Re-queue in-flight at front
-    messageQueue[inFlightIdx]!.status = 'queued';
+    const inFlightId = messageQueue[inFlightIdx]!.queueId;
+    messageQueue.splice(inFlightIdx, 1);
+    currentQueueId = null;
     if (chatView) {
       chatView.webview.postMessage({
-        type: 'queue-status-change',
-        queueId: messageQueue[inFlightIdx]!.queueId,
-        status: 'queued',
+        type: 'queue-remove',
+        queueId: inFlightId,
       } as any);
     }
   }
-  
-  // Move forced item to front of pending queue
-  const item = messageQueue[idx]!;
-  messageQueue.splice(idx, 1);
-  // Insert after any re-queued in-flight items (at index 1 if original was index 0, else at start)
-  const insertAt = inFlightIdx === 0 ? 1 : 0;
-  messageQueue.splice(insertAt, 0, item);
-  
-  // Start processing
+  isGenerating = false;
+
+  // Move forced item to front (recompute index after splice)
+  const newIdx = messageQueue.findIndex(q => q.queueId === queueId);
+  if (newIdx < 0) return;
+  const item = messageQueue[newIdx]!;
+  messageQueue.splice(newIdx, 1);
+  messageQueue.unshift(item);
+
   processQueue();
 }
 
@@ -758,8 +757,21 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
   if (msg.type === 'userMessage') {
     await handleUserMessage(msg.text);
   } else if (msg.type === 'cancel') {
+    const savedQueueId = currentQueueId;
     cancelGeneration();
     finalizeCurrentMessage();
+    isGenerating = false;
+    currentQueueId = null;
+    if (savedQueueId) {
+      const inFlightIdx = messageQueue.findIndex(q => q.queueId === savedQueueId);
+      if (inFlightIdx >= 0) {
+        messageQueue.splice(inFlightIdx, 1);
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'queue-remove', queueId: savedQueueId } as any);
+        }
+      }
+    }
+    setImmediate(() => processQueue());
   } else if (msg.type === 'undoInsert') {
     await undoLastAiInsert();
   } else if (msg.type === 'contextRequest') {

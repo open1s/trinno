@@ -1074,7 +1074,7 @@ process.stdin.on('data', async (chunk: Buffer) => {
           const paperWorkflowPrompt = [
             'You are Research Master writing a paper. Drive the 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) end-to-end and produce a copy-ready artifact via tools only.',
             '1. Use TRIZ tools (triz_contradiction, triz_principles, triz_s_curve, triz_search, websearch) to gather Evidence and decision factors — never fabricate',
-            '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst, structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
+            '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst,Dont mix markdown, structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
             '3. Importance-weight KPIs, score evidence, surface decision factors, contradictions→solutions, risks, ≤3-day executable validation steps',
             '4. ≤4 lines per text response — only short confirmation after writing; never repeat the paper content in chat',
             '5. No fabricated parameter numbers, no preamble ("我将为您撰写…"), ask user only when essential info is missing',
