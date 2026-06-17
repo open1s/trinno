@@ -1,6 +1,9 @@
 import { defineTool, ok } from '@open1s/ezbos';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('todo-tools');
 
 interface TodoItem {
   content: string;
@@ -30,7 +33,7 @@ function loadTodos(baseDir: string): TodoStore {
     }
   } catch (err: any) {
     if (err?.code !== 'ENOENT') {
-      console.warn('[todo] load error:', err?.message);
+      log.warn({ err: err?.message }, 'todo load error');
     }
   }
   return { version: STORE_VERSION, todos: [], updatedAt: 0 };

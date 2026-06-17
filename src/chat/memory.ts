@@ -1,5 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { createModuleLogger } from '../bos/infrastructure/logging/logger';
+
+const log = createModuleLogger('memory');
 
 export interface MemoryEntry {
   id: string;
@@ -45,11 +48,11 @@ export function loadMemoryStore(baseDir: string): MemoryStore {
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.entries)) {
       return parsed as MemoryStore;
     }
-    console.warn('[memory] invalid store format, resetting');
+    log.warn('invalid store format, resetting');
     return { version: STORE_VERSION, entries: [] };
   } catch (err: any) {
     if (err?.code !== 'ENOENT') {
-      console.warn('[memory] load error:', err?.message);
+      log.warn({ err: err?.message }, 'load error');
     }
     return { version: STORE_VERSION, entries: [] };
   }

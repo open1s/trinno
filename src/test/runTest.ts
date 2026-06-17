@@ -1,5 +1,8 @@
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
+import { createModuleLogger } from '../bos/infrastructure/logging/logger';
+
+const log = createModuleLogger('test-runner');
 
 async function main() {
 	try {
@@ -12,7 +15,7 @@ async function main() {
 			launchArgs: ['--disable-extensions']
 		});
 	} catch (err) {
-		console.error('Failed to run tests:', err);
+		log.error({ err }, 'Failed to run tests');
 		process.exit(1);
 	}
 }

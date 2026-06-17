@@ -32,7 +32,7 @@ export interface CellInfo {
 }
 
 export type ExtToWebViewMessage =
-  | { type: 'token'; role: 'assistant'; tokenType: TokenType; text: string; args?: unknown; toolId?: string }
+  | { type: 'token'; role: 'assistant'; tokenType: TokenType; text: string; args?: unknown; toolId?: string; promptTokens?: number; completionTokens?: number; totalTokens?: number; promptTokensDetails?: unknown }
   | { type: 'done'; messageId: string }
   | { type: 'error'; messageId: string; error: string }
   | { type: 'welcome'; context: NotebookContext | null; personaName: string }
@@ -105,9 +105,10 @@ export type WebViewToExtMessage =
   | { type: 'write-topic-cancel'; originalText: string }
   | { type: 'request-file-list' }
   | { type: 'queue-remove'; queueId: string }
-  | { type: 'queue-force-execute'; queueId: string };
+  | { type: 'queue-force-execute'; queueId: string }
+  | { type: 'trace'; message: string; textLength?: number; text?: string };
 
-export type TokenType = 'Text' | 'ReasoningContent' | 'ToolCall' | 'ToolResult';
+export type TokenType = 'Text' | 'ReasoningContent' | 'ToolCall' | 'ToolResult' | 'Usage';
 
 let _idCounter = 0;
 export function nextId(): string {

@@ -3,6 +3,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { getTypstLspClient, LspDiagnostic } from '../lsp/typst_lsp.js';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('typst-tools');
 
 export function createTypstTools(workspaceRoot: string) {
   const typstLint = defineTool(
@@ -47,7 +50,7 @@ export function createTypstTools(workspaceRoot: string) {
           output: 'No diagnostic issues found',
         });
       } catch (lspErr: any) {
-        console.error('[typst_lint] LSP failed, falling back to CLI:', lspErr.message);
+        log.warn({ err: lspErr.message }, 'LSP failed, falling back to CLI');
 
         try {
           const result = execSync(`typst compile "${resolvedPath}"`, {
@@ -90,7 +93,7 @@ export function createTypstTools(workspaceRoot: string) {
   return [typstLint, typstLspStatus];
 }
 
-function severityLabel(severity: number): string {
+export function severityLabel(severity: number): string {
   switch (severity) {
     case 1: return 'error';
     case 2: return 'warning';

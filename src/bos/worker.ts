@@ -35,9 +35,12 @@ import {
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
 import { getTypstLspClient, closeTypstLspClient } from './infrastructure/lsp/typst_lsp.js';
+import { createModuleLogger } from './infrastructure/logging/logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+
+const log = createModuleLogger('worker');
 
 interface TodoEntry {
   content: string;
@@ -58,14 +61,14 @@ function readExistingTodos(workspaceRoot: string): TodoEntry[] | null {
 const HIDDEN_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'load_skill',
   'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
-  'todoread',
+  'todoread', 'todowrite', 'memory_search', 'memory_store',
 ]);
 
 function shouldEmitTool(name: string, context: 'call' | 'result'): boolean {
   const trimmedName = name.trim();
   const isHidden = HIDDEN_TOOLS.has(trimmedName);
   if (isHidden) {
-    console.error(`[debug-tools] hiding ${context}: ${trimmedName}`);
+    log.debug({ context, trimmedName }, 'hiding tool');
   }
   return !isHidden;
 }
@@ -82,13 +85,17 @@ function shouldEmitToolResult(toolId: string, name?: string): boolean {
 
 const toolCallNames = new Map<string, string>();
 
+const prevTokens = new Map<string, { input: number; output: number }>();
+
 let abortController: AbortController | null = null;
 let deps: Awaited<ReturnType<typeof composeRoot>> | null = null;
 let brain: any = null;
+let depsInitPromise: Promise<void> | null = null;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
-const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information.`;';
+const activeAgents = new Map<string, { started: any; agent: any }>();
+const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information. All tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output). For large files: read in 500+ line chunks with offset/limit, never tiny slices.`;';
 
 const slashRegistry = createSlashCommandRegistry();
 
@@ -173,7 +180,7 @@ function emit(type: string, data: any): void {
   } else {
     droppedEmits++;
     if (droppedEmits === 1 || droppedEmits % 100 === 0) {
-      try { fs.writeSync(2, `[bos-worker] emit queue saturated, dropped ${droppedEmits} event(s) (type=${type})\n`); } catch { }
+      log.warn({ droppedEmits, type }, 'emit queue saturated');
     }
   }
 }
@@ -294,6 +301,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   const match = slashRegistry.match(text);
   if (!match) return false;
 
+  if (depsInitPromise) await depsInitPromise;
   if (!deps) {
     const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
     deps = await composeRoot({ workspaceRoot: wsRoot });
@@ -304,7 +312,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
     // Start Typst LSP eagerly so first lint call is fast
-    getTypstLspClient(wsRoot).catch(() => {});
+    getTypstLspClient(wsRoot).catch(() => { });
   }
 
   const { command, args } = match;
@@ -333,10 +341,11 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 }
 
 async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
-  console.error('[bos-worker] handleChat START, sessionId:', sessionId, 'brainOsSession:', brainOsSession ? 'present' : 'absent');
+  log.trace({ sessionId, textLength: text.length, text: text.slice(0, 200) }, '[TRACE] worker recv chat message');
   abortController = new AbortController();
   const signal = abortController.signal;
 
+  if (depsInitPromise) await depsInitPromise;
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -348,7 +357,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
-    getTypstLspClient(brainOptions.workspaceRoot).catch(() => {});
+    getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
 
   const slashList = slashRegistry.list().map(c => '- /' + c.name + ': ' + c.description).join('\n');
@@ -401,7 +410,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     emit('lsp-status', { name: 'tinymist', status: lsp.isInitialized ? 'connected' : 'starting', trackedFile: _trackedTypFile || null });
   } catch { emit('lsp-status', { name: 'tinymist', status: 'disconnected', trackedFile: null }); }
 
-  console.info('[bos-worker] Creating fresh agent (sessionId:', sessionId, ')');
+  log.info({ sessionId }, 'creating fresh agent');
   const f = getAgentFactory();
   const agent = f.create({
     name: 'trinno-chat',
@@ -411,21 +420,21 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     mcpServers: effectiveMcp,
   });
 
-  console.error('[bos-worker] about to call agent.start()');
+  log.debug('about to call agent.start()');
   const started = await agent.start();
-  console.error('[bos-worker] agent.start() done');
+  log.debug('agent.start() done');
 
   if (sessionId) {
     // Check if the factory has a more recent session for this sessionId
     const factorySession = getAgentFactory().getSessionContext(sessionId);
     const sessionToImport = factorySession?.brainOsSession || brainOsSession;
-    console.error('[bos-worker] sessionToImport:', sessionToImport ? 'present (len=' + sessionToImport.length + ')' : 'absent');
+    log.debug({ hasSessionToImport: !!sessionToImport, sessionLen: sessionToImport?.length }, 'importSession check');
     if (sessionToImport) {
       try {
         started.importSession(sessionToImport);
-        console.error('[bos-worker] importSession done');
+        log.debug('importSession done');
       } catch (e) {
-        console.error('[bos-worker] importSession ERROR:', e);
+        log.warn({ err: e }, 'importSession error');
         // ignore import errors, start fresh
       }
     }
@@ -457,7 +466,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   currentSessionIdForCancel = sessionId || null;
 
   try {
-    console.error('[bos-worker] about to call started.stream(), userMessage length:', userMessage.length);
+    log.trace({ sessionId, userMessageLen: userMessage.length }, '[TRACE] worker→LLM: starting stream');
     let hasRealContent = false;
     let streamDone = false;
     let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -476,7 +485,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
       heartbeatTimer = setTimeout(() => {
         if (streamDone) return;
-        console.error('[bos-worker] stream heartbeat timeout — no real content in 45s, aborting');
+        log.warn('stream heartbeat timeout — no real content in 45s, aborting');
         clearHeartbeatTimer();
         emit('rate-limited', { retryAfter: 15, error: 'Upstream timeout (heartbeat only stream)' });
         streamDone = true;
@@ -513,6 +522,9 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             break;
           case 'Text':
             if (token.text && token.text.length > 0) {
+              if (!hasRealContent) {
+                log.trace({ sessionId, firstTokenLen: token.text.length }, '[TRACE] worker←LLM: first text token received');
+              }
               hasRealContent = true;
               resetHeartbeatTimer();
               responseCharCount += token.text.length;
@@ -546,7 +558,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
             if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
             break;
           case 'ToolResult':
-            fs.writeSync(2, `[bos-worker] ToolResult token, name=${token.name}, id=${token.id}, hasResult=${!!token.result}\n`);
+            log.trace({ name: token.name, id: token.id, hasResult: !!token.result }, 'ToolResult token');
             if (token.result || token.text) {
               hasRealContent = true;
               resetHeartbeatTimer();
@@ -573,8 +585,9 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
           case 'Done': {
             clearHeartbeatTimer();
             streamDone = true;
+            log.trace({ sessionId, responseCharCount }, '[TRACE] worker←LLM: stream done');
             if (!hasRealContent) {
-              console.error('[bos-worker]', token.type, 'with no real content — treating as rate-limit');
+              log.warn({ tokenType: token.type }, 'no real content — treating as rate-limit');
               emit('rate-limited', { retryAfter: 15, error: 'Empty response (possible rate limit)' });
               resolve();
               break;
@@ -595,8 +608,14 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
               }
             }
             const metrics = started.metrics;
-            const outputTokens = metrics?.totalOutputTokens ?? 0;
-            const inputTokens = metrics?.totalInputTokens ?? 0;
+            const cumInput = metrics?.totalInputTokens ?? 0;
+            const cumOutput = metrics?.totalOutputTokens ?? 0;
+            const key = sessionId ?? 'default';
+            const prev = prevTokens.get(key) ?? { input: 0, output: 0 };
+            const inputTokens = cumInput - prev.input;
+            const outputTokens = cumOutput - prev.output;
+            prevTokens.set(key, { input: cumInput, output: cumOutput });
+            log.trace({ sessionId, metrics, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] worker (slash): stream done');
             emit('done', {
               sessionId,
               brainOsSession: exportedSession,
@@ -668,6 +687,8 @@ function handleCancel(): void {
     currentAgent.stop().catch(() => { });
     currentSessionIdForCancel = null;
   }
+  // Discard all cached agents so next message creates fresh
+  activeAgents.clear();
 }
 
 function emitMcpStatus(): void {
@@ -705,7 +726,7 @@ function loadSoulMd(): string {
       soul = fs.readFileSync(projectSoul, 'utf-8').trim();
     }
   } catch { }
-  
+
   if (soul) return soul;
 
   let homeContent = undefined;
@@ -715,7 +736,7 @@ function loadSoulMd(): string {
       homeContent = fs.readFileSync(homeSoul, 'utf-8').trim();
     }
   } catch { }
-  return homeContent?? '';
+  return homeContent ?? '';
 }
 
 function buildMethodologyPrompt(slashCommandsList: string): string {
@@ -770,6 +791,14 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- Both EN and ZH queries for technical topics — batch them.',
     '- Aggregate results by DOI/arXivID; dedupe before scoring evidence.',
     '',
+    '## Large File & Truncated Output Handling',
+    '- All tool output is capped at 200 lines / 10KB. If you see "... X lines truncated..." at the end of output, do NOT re-read the full output — it will be truncated again.',
+    '- Instead: use grep tool with specific patterns to find relevant sections, or read specific chunks from the source file with offset/limit.',
+    '- For files >500 lines: always paginate with read(filePath, offset=N, limit=500+). Never read entire large files.',
+    '- Read in 50-200 line chunks. Never request tiny slices (<50 lines).',
+    '- Follow the "Use offset=N to continue." hint in read output — that tells you exactly where to continue.',
+    '- For large-scale analysis across a big file: delegate to a task sub-agent that uses grep/read internally.',
+    '',
     '## Context Budget',
     '- After tool calls: 1-line status, then next action. Max 2 retries on a failing tool.',
     '- If analysis exceeds 5 tool calls, pause and summarize decision factors + next step.',
@@ -788,7 +817,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     'PICO/PICOS: P-Population, I-Intervention, C-Comparison, O-Outcome, S-Study design. Template: "In [P], does [I] vs [C] affect [O]?" PRISMA consumes PICO upstream.',
     '',
     '## Phase Dirs',
-    '- 01_Discover — cached searches (patents.json, papers.json)',
+    '- 01_Discover — search and discover references, download to folder 06_References (patents.json, papers.json)',
     '- 02_TRL — s_curve.json, trl_assessment.json',
     '- 03_Analyze — contradictions.json, su_field_analysis.json, bottlenecks.json',
     '- 04_Synthesize — solutions.json, principles_applied.json, trends.json, roadmap.json',
@@ -810,7 +839,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- Verify each section before marking completed.',
     '',
     '## File Operations',
-    'read_file first, never guess. edit_file for any change (refine/fix/improve/append). write_file only for brand-new files. Every file modification MUST use a tool — text output is never a substitute for writing to disk.',
+    'read_file first, never guess. For large files, paginate with offset/limit (200+ lines per chunk). edit_file for any change (refine/fix/improve/append). write_file only for brand-new files. Every file modification MUST use edit tool — text output is never a substitute for writing to disk.',
     '',
     '## Tools',
     'TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve.',
@@ -849,8 +878,9 @@ async function handleCompact(
   model?: string,
   baseUrl?: string
 ): Promise<void> {
-  console.error('[bos-worker] handleCompact START, message count:', messages.length);
+  log.info({ messageCount: messages.length }, 'handleCompact START');
 
+  if (depsInitPromise) await depsInitPromise;
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -860,7 +890,7 @@ async function handleCompact(
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
-    getTypstLspClient(brainOptions.workspaceRoot).catch(() => {});
+    getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
 
   const conversationText = messages.map(m => {
@@ -934,6 +964,10 @@ ${conversationText}
                 // best-effort
               }
             }
+            const compactMetrics = started?.metrics;
+            const compactIn = compactMetrics?.totalInputTokens ?? 0;
+            const compactOut = compactMetrics?.totalOutputTokens ?? 0;
+            log.trace({ inputTokens: compactIn, outputTokens: compactOut, totalTokens: compactIn + compactOut }, '[TOKEN] worker: compact done');
             emit('done', { compacted: true });
             resolve();
             break;
@@ -951,8 +985,35 @@ ${conversationText}
   }
 }
 
+// Serial async message queue — prevents one hung LLM call from blocking stdin
+interface QueuedMessage {
+  type: string;
+  run: () => Promise<void>;
+}
+const msgQueue: QueuedMessage[] = [];
+let msgQueueProcessing = false;
+
+async function drainMsgQueue(): Promise<void> {
+  if (msgQueueProcessing) return;
+  msgQueueProcessing = true;
+  while (msgQueue.length > 0) {
+    const item = msgQueue.shift()!;
+    try {
+      await item.run();
+    } catch (err) {
+      log.error({ err, msgType: item.type }, 'message processing error');
+    }
+  }
+  msgQueueProcessing = false;
+}
+
+function enqueue(type: string, run: () => Promise<void>): void {
+  msgQueue.push({ type, run });
+  drainMsgQueue();
+}
+
 let stdinBuffer = '';
-process.stdin.on('data', async (chunk: Buffer) => {
+process.stdin.on('data', (chunk: Buffer) => {
   stdinBuffer += chunk.toString();
   const lines = stdinBuffer.split('\n');
   stdinBuffer = lines.pop() || '';
@@ -961,27 +1022,74 @@ process.stdin.on('data', async (chunk: Buffer) => {
     try {
       const msg = JSON.parse(line);
       switch (msg.type) {
+        case 'init':
+          enqueue('init', async () => {
+            if (msg.workspaceRoot) {
+              (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+              chdirToWorkspace();
+            }
+            if (!deps && !depsInitPromise) {
+              depsInitPromise = (async () => {
+                const wsRoot = msg.workspaceRoot || process.cwd();
+                const brainOptions: any = { workspaceRoot: wsRoot };
+                if (msg.apiKey) brainOptions.apiKey = msg.apiKey;
+                if (msg.toolPermissions) brainOptions.toolPermissions = msg.toolPermissions;
+                if (msg.sandboxEnabled) brainOptions.sandboxEnabled = msg.sandboxEnabled;
+                const d = await composeRoot(brainOptions);
+                deps = d;
+                await initApprovalBus(deps.brain);
+                getTypstLspClient(wsRoot).catch(() => { });
+              })();
+            }
+            if (depsInitPromise) {
+              try { await depsInitPromise; } catch (e) {
+                depsInitPromise = null;
+                deps = null;
+              }
+            }
+          });
+          break;
         case 'chat':
-          console.error('[bos-worker] recv chat, text length:', msg.text?.length, 'sessionId:', msg.sessionId);
-          if (msg.workspaceRoot) {
-            (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
-            chdirToWorkspace();
-          }
-          currentJobId++;
-          const jobId = String(currentJobId);
+          enqueue('chat', async () => {
+            log.info({ textLen: msg.text?.length, sessionId: msg.sessionId }, 'recv chat');
+            if (msg.workspaceRoot) {
+              (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+              chdirToWorkspace();
+            }
+            currentJobId++;
+            const jobId = String(currentJobId);
 
-          if (msg.text.trim() === '/help' || msg.text.trim() === '/commands') {
-            handleHelp();
-          } else if (msg.usePubSub) {
-            await runJobWithPubSub(jobId, async (signal, localEmit) => {
+            if (msg.text.trim() === '/help' || msg.text.trim() === '/commands') {
+              handleHelp();
+            } else if (msg.usePubSub) {
+              await runJobWithPubSub(jobId, async (signal, localEmit) => {
+                await handleChatWithEmit(
+                  msg.text,
+                  msg.context ?? null,
+                  msg.persona,
+                  msg.apiKey,
+                  msg.systemSummary,
+                  localEmit,
+                  signal,
+                  msg.sessionId,
+                  msg.brainOsSession,
+                  msg.skillContent,
+                  msg.model,
+                  msg.baseUrl,
+                  msg.toolPermissions,
+                  msg.mcp?.servers,
+                  msg.sandboxEnabled,
+                );
+              });
+            } else {
               await handleChatWithEmit(
                 msg.text,
                 msg.context ?? null,
                 msg.persona,
                 msg.apiKey,
                 msg.systemSummary,
-                localEmit,
-                signal,
+                emit,
+                abortController?.signal ?? new AbortController().signal,
                 msg.sessionId,
                 msg.brainOsSession,
                 msg.skillContent,
@@ -991,124 +1099,125 @@ process.stdin.on('data', async (chunk: Buffer) => {
                 msg.mcp?.servers,
                 msg.sandboxEnabled,
               );
-            });
-          } else {
-            await handleChatWithEmit(
-              msg.text,
-              msg.context ?? null,
-              msg.persona,
-              msg.apiKey,
-              msg.systemSummary,
-              emit,
-              abortController?.signal ?? new AbortController().signal,
-              msg.sessionId,
-              msg.brainOsSession,
-              msg.skillContent,
-              msg.model,
-              msg.baseUrl,
-              msg.toolPermissions,
-              msg.mcp?.servers,
-              msg.sandboxEnabled,
-            );
-          }
+            }
+          });
           break;
         case 'cancel':
           handleCancel();
           break;
-        case 'tool-approval':
-          await sendApprovalResponse(msg.id, msg.approved, msg.remember);
-          break;
-        case 'compact':
-          await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl);
-          break;
-        case 'clear-session':
-          if (msg.sessionId) {
-            getAgentFactory().clearSessionContext(msg.sessionId);
-          }
-          break;
-        case 'compact-result':
-          if (msg.sessionId && msg.summary) {
-            const factory = getAgentFactory();
-            const agent = factory.create({
-              name: 'trinno-compact-result',
-              systemPrompt: `## Conversation History Summary\n\n${msg.summary}`,
-              temperature: 0.3,
-            });
-            const started = await agent.start();
-            try {
-              const exported = started.exportSession();
-              if (exported) {
-                factory.setSessionContext(msg.sessionId, {
-                  brainOsSession: exported,
-                  lastUpdated: Date.now(),
-                });
-              }
-            } finally {
-              started.stop().catch(() => {});
-            }
-          }
-          break;
-        case 'slash': {
-          if (msg.workspaceRoot) {
-            (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
-            chdirToWorkspace();
-          }
-          currentJobId++;
-          const slashJobId = String(currentJobId);
-          if (msg.usePubSub) {
-            await runJobWithPubSub(slashJobId, async (signal, localEmit) => {
-              const matched = await handleSlashCommand(msg.text, signal, localEmit);
-              if (!matched) {
-                localEmit('error', { error: formatUnknownSlash(msg.text) });
-              }
-            });
-          } else {
-            const matched = await handleSlashCommand(msg.text, abortController?.signal ?? new AbortController().signal, emit);
-            if (!matched) {
-              emit('error', { error: formatUnknownSlash(msg.text) });
-            }
-          }
-          break;
-        }
-        case 'paper': {
-          const paperWorkflowPrompt = [
-            'You are Research Master writing a paper. Drive the 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) end-to-end and produce a copy-ready artifact via tools only.',
-            '1. Use TRIZ tools (triz_contradiction, triz_principles, triz_s_curve, triz_search, websearch) to gather Evidence and decision factors — never fabricate',
-            '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst,Dont mix markdown, structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
-            '3. Importance-weight KPIs, score evidence, surface decision factors, contradictions→solutions, risks, ≤3-day executable validation steps',
-            '4. ≤4 lines per text response — only short confirmation after writing; never repeat the paper content in chat',
-            '5. No fabricated parameter numbers, no preamble ("我将为您撰写…"), ask user only when essential info is missing',
-          ].join('\n');
-          const userPersonaPromptForPaper = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
-            ? msg.persona.prompt.trim()
-            : null;
-          const paperPersona = {
-            name: 'trinno-paper',
-            prompt: userPersonaPromptForPaper
-              ? `${userPersonaPromptForPaper}\n\n---\n\n${paperWorkflowPrompt}`
-              : paperWorkflowPrompt,
-          };
-          abortController = new AbortController();
-          await handleChatWithEmit(
-            msg.prompt,
-            null,
-            paperPersona,
-            msg.apiKey,
-            undefined,
-            emit,
-            abortController.signal,
-            undefined,
-            undefined,
-            undefined,
-            msg.model,
-            msg.baseUrl,
-            undefined,
-            undefined,
-            msg.sandboxEnabled,
+        case 'tool-approval': {
+          // Must bypass the message queue: the in-flight chat/agent call awaits
+          // the pending approval promise. If we queue this behind it, the
+          // resolve never runs and the tool hangs forever.
+          sendApprovalResponse(msg.id, msg.approved, msg.remember).catch((err) =>
+            log.error({ err, msgId: msg.id }, 'sendApprovalResponse error'),
           );
           break;
         }
-        
+        case 'compact':
+          enqueue('compact', async () => {
+            await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl);
+          });
+          break;
+        case 'clear-session':
+          if (msg.sessionId) {
+            const existing = activeAgents.get(msg.sessionId);
+            if (existing?.started) {
+              try { existing.started.clearSession(); } catch {
+                // best effort — agent may be mid-stream
+              }
+            }
+            getAgentFactory().clearSessionContext(msg.sessionId);
+            activeAgents.delete(msg.sessionId);
+          }
+          break;
+        case 'compact-result':
+          enqueue('compact-result', async () => {
+            if (msg.sessionId && msg.summary) {
+              const factory = getAgentFactory();
+              const agent = factory.create({
+                name: 'trinno-compact-result',
+                systemPrompt: `## Conversation History Summary\n\n${msg.summary}`,
+                temperature: 0.3,
+              });
+              const started = await agent.start();
+              try {
+                const exported = started.exportSession();
+                if (exported) {
+                  factory.setSessionContext(msg.sessionId, {
+                    brainOsSession: exported,
+                    lastUpdated: Date.now(),
+                  });
+                }
+              } finally {
+                started.stop().catch(() => { });
+              }
+            }
+          });
+          break;
+        case 'slash':
+          enqueue('slash', async () => {
+            if (msg.workspaceRoot) {
+              (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+              chdirToWorkspace();
+            }
+            currentJobId++;
+            const slashJobId = String(currentJobId);
+            if (msg.usePubSub) {
+              await runJobWithPubSub(slashJobId, async (signal, localEmit) => {
+                const matched = await handleSlashCommand(msg.text, signal, localEmit);
+                if (!matched) {
+                  localEmit('error', { error: formatUnknownSlash(msg.text) });
+                }
+              });
+            } else {
+              const matched = await handleSlashCommand(msg.text, abortController?.signal ?? new AbortController().signal, emit);
+              if (!matched) {
+                emit('error', { error: formatUnknownSlash(msg.text) });
+              }
+            }
+          });
+          break;
+        case 'paper':
+          enqueue('paper', async () => {
+            const paperWorkflowPrompt = [
+              'You are Research Master writing a paper. Drive the 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) end-to-end and produce a copy-ready artifact via tools only.',
+              '1. Use TRIZ tools (triz_contradiction, triz_principles, triz_s_curve, triz_search, websearch) to gather Evidence and decision factors — never fabricate',
+              '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst,Dont mix markdown, structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
+              '3. Importance-weight KPIs, score evidence, surface decision factors, contradictions→solutions, risks, ≤3-day executable validation steps',
+              '4. ≤4 lines per text response — only short confirmation after writing; never repeat the paper content in chat',
+              '5. No fabricated parameter numbers, no preamble ("我将为您撰写…"), ask user only when essential info is missing',
+            ].join('\n');
+            const userPersonaPromptForPaper = msg.persona && typeof msg.persona.prompt === 'string' && msg.persona.prompt.trim()
+              ? msg.persona.prompt.trim()
+              : null;
+            const paperPersona = {
+              name: 'trinno-paper',
+              prompt: userPersonaPromptForPaper
+                ? `${userPersonaPromptForPaper}\n\n---\n\n${paperWorkflowPrompt}`
+                : paperWorkflowPrompt,
+            };
+            abortController = new AbortController();
+            await handleChatWithEmit(
+              msg.prompt,
+              null,
+              paperPersona,
+              msg.apiKey,
+              undefined,
+              emit,
+              abortController.signal,
+              undefined,
+              undefined,
+              undefined,
+              msg.model,
+              msg.baseUrl,
+              undefined,
+              undefined,
+              msg.sandboxEnabled,
+            );
+          });
+          break;
+
         case 'mcp-status-request':
           emitMcpStatus();
           break;
@@ -1116,11 +1225,14 @@ process.stdin.on('data', async (chunk: Buffer) => {
           emitLspStatus();
           break;
         case 'todo-status-request':
+          if (msg.workspaceRoot) {
+            (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+          }
           emitTodoUpdate();
           break;
       }
     } catch (err) {
-      process.stderr.write(`[bos-worker] parse error: ${err}\n`);
+      log.warn({ err }, 'parse error');
     }
   }
 });
@@ -1172,6 +1284,8 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
 }
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+  const phaseT0 = Date.now();
+  if (depsInitPromise) await depsInitPromise;
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -1183,7 +1297,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
-    getTypstLspClient(brainOptions.workspaceRoot).catch(() => {});
+    getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
+    log.trace({ phase: 'deps-init', elapsedMs: Date.now() - phaseT0 }, '[PHASE] deps initialized');
   }
 
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
@@ -1224,18 +1339,14 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   function mcpKey(namespace: string, type: string, comm: string): string {
     return `${namespace}::${type}::${comm}`;
   }
-  emitMcpStatus(effectiveMcp.map(s => ({ name: s.name, type: s.type, connected: false })));
-
-  const f = getAgentFactory();
-  const agent = f.create({
-    name: 'trinno-chat',
-    systemPrompt,
-    ...(model ? { model } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-    mcpServers: effectiveMcp,
-    onMcpStatus: (namespace, type, comm, status) => {
-      mcpStatusMap.set(mcpKey(namespace, type, comm), status === 'connected');
-      const servers = effectiveMcp.map(s => {
+  // Debounced MCP status emit — batches rapid connection events into one emit
+  // Prevents flooding stdout + panel postMessage during agent.start()
+  let mcpDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleMcpStatus(): void {
+    if (mcpDebounceTimer) return;
+    mcpDebounceTimer = setTimeout(() => {
+      mcpDebounceTimer = null;
+      const servers = (effectiveMcp as McpServerConfig[]).map(s => {
         const c = s.type === 'http' ? s.url : s.command;
         return {
           name: s.name,
@@ -1244,46 +1355,64 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
         };
       });
       emitMcpStatus(servers);
-    },
-  });
-
-  const started = await agent.start();
-
-  // Final status after all connections resolved
-  const finalServers = effectiveMcp.map(s => {
-    const c = s.type === 'http' ? s.url : s.command;
-    return {
-      name: s.name,
-      type: s.type,
-      connected: mcpStatusMap.get(mcpKey(s.name, ezbosType(s.type), c ?? '')) ?? false,
-    };
-  });
-  emitMcpStatus(finalServers);
-
-  let lspStatus = 'disconnected';
-  try {
-    const lsp = await getTypstLspClient(wsRoot);
-    lspStatus = lsp.isInitialized ? 'connected' : 'starting';
-  } catch { /* LSP not available */ }
-  localEmit('lsp-status', { name: 'tinymist', status: lspStatus, trackedFile: _trackedTypFile || null });
-
-  if (sessionId) {
-    // Check if the factory has a more recent session for this sessionId
-    const factorySession = getAgentFactory().getSessionContext(sessionId);
-    const sessionToImport = factorySession?.brainOsSession || brainOsSession;
-    if (sessionToImport) {
-      try {
-        started.importSession(sessionToImport);
-      } catch {
-        // ignore import errors, start fresh
-      }
+    }, 100);
+  }
+  function cancelMcpDebounce(): void {
+    if (mcpDebounceTimer) {
+      clearTimeout(mcpDebounceTimer);
+      mcpDebounceTimer = null;
     }
-  } else if (brainOsSession) {
+  }
+
+  // Reuse agent across messages in same session (avoids ~4s MCP reconnect)
+  const sessionKey = sessionId || '_default';
+  const existingAgent = activeAgents.get(sessionKey);
+  let started: any;
+  let isNew = false;
+  if (existingAgent && existingAgent.started) {
+    started = existingAgent.started;
+    // Don't re-emit MCP/LSP status — unchanged since last message
+  } else {
+    isNew = true;
+    // Emit initial MCP status (all disconnected)
+    emitMcpStatus(effectiveMcp.map(s => ({ name: s.name, type: s.type, connected: false })));
+
+    const f = getAgentFactory();
+    const agent = f.create({
+      name: 'trinno-chat',
+      systemPrompt,
+      ...(model ? { model } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
+      mcpServers: effectiveMcp,
+      onMcpStatus: (namespace, type, comm, status) => {
+        mcpStatusMap.set(mcpKey(namespace, type, comm), status === 'connected');
+        scheduleMcpStatus();
+      },
+    });
+
+    started = await agent.start();
+    log.trace({ phase: 'agent-start', elapsedMs: Date.now() - phaseT0, isNew: true }, '[PHASE] agent started');
+    activeAgents.set(sessionKey, { started, agent });
+
+    // Final status after all connections resolved
+    cancelMcpDebounce();
+    const finalServers = effectiveMcp.map(s => {
+      const c = s.type === 'http' ? s.url : s.command;
+      return {
+        name: s.name,
+        type: s.type,
+        connected: mcpStatusMap.get(mcpKey(s.name, ezbosType(s.type), c ?? '')) ?? false,
+      };
+    });
+    emitMcpStatus(finalServers);
+
+    // Emit LSP status (only on new agent — persistent across messages)
+    let lspStatus = 'disconnected';
     try {
-      started.importSession(brainOsSession);
-    } catch {
-      // ignore import errors, start fresh
-    }
+      const lsp = await getTypstLspClient(wsRoot);
+      lspStatus = lsp.isInitialized ? 'connected' : 'starting';
+    } catch { /* LSP not available */ }
+    localEmit('lsp-status', { name: 'tinymist', status: lspStatus, trackedFile: _trackedTypFile || null });
   }
 
   let userMessage = text;
@@ -1304,12 +1433,26 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   currentSessionIdForCancel = sessionId || null;
 
   try {
+    const chatStartTime = Date.now();
+    log.trace({ phase: 'stream-start', elapsedMs: Date.now() - phaseT0, isNew }, '[PHASE] starting LLM stream');
+    let firstTokenLogged = false;
     await new Promise<void>((resolve, reject) => {
       started.stream(userMessage, (token: any) => {
         if (signal.aborted) {
           started.stop().catch(() => { });
           resolve();
           return;
+        }
+
+        if (!firstTokenLogged) {
+          firstTokenLogged = true;
+          log.trace({
+            phase: 'first-token',
+            elapsedMs: Date.now() - phaseT0,
+            streamLatencyMs: Date.now() - chatStartTime,
+            tokenType: token.type,
+            isNew,
+          }, '[PHASE] first token received');
         }
 
         switch (token.type) {
@@ -1344,37 +1487,32 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             }
             break;
           case 'Usage':
+            log.trace({ sessionId, rawToken: token }, '[USAGE-RAW] ezbos Usage token received');
             localEmit('token', {
               tokenType: 'Usage',
-              promptTokens: token.promptTokens,
-              completionTokens: token.completionTokens,
-              totalTokens: token.totalTokens,
-              promptTokensDetails: token.promptTokensDetails,
+              promptTokens: token.prompt_tokens,
+              completionTokens: token.completion_tokens,
+              totalTokens: token.total_tokens,
+              promptTokensDetails: token.prompt_tokens_details,
             });
             break;
           case 'Stop':
           case 'Done': {
-            let exportedSession2: string | undefined;
-            if (sessionId) {
-              try {
-                exportedSession2 = started.exportSession();
-                if (exportedSession2) {
-                  const prevCtx2 = getAgentFactory().getSessionContext(sessionId);
-                  getAgentFactory().setSessionContext(sessionId, {
-                    brainOsSession: exportedSession2,
-                    lastUpdated: Date.now(),
-                  });
-                }
-              } catch {
-                // ignore export errors
-              }
-            }
             const metrics2 = started.metrics;
+            const cumInput = metrics2?.totalInputTokens ?? 0;
+            const cumOutput = metrics2?.totalOutputTokens ?? 0;
+            const key = sessionId ?? 'default';
+            const prev = prevTokens.get(key) ?? { input: 0, output: 0 };
+            const inputTokens = cumInput - prev.input;
+            const outputTokens = cumOutput - prev.output;
+            prevTokens.set(key, { input: cumInput, output: cumOutput });
+            log.trace({ sessionId, metrics: metrics2, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] worker: stream done');
+
             localEmit('done', {
               sessionId,
-              brainOsSession: exportedSession2,
-              inputTokens: metrics2?.totalInputTokens ?? 0,
-              outputTokens: metrics2?.totalOutputTokens ?? 0,
+              brainOsSession: undefined,
+              inputTokens,
+              outputTokens,
             });
             resolve();
             break;
@@ -1382,6 +1520,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
           case 'Error':
             if (isRateLimited(token.error)) {
               const retryAfter = parseRetryAfter(token.error);
+              log.warn({ sessionId, error: token.error, retryAfter }, '[RATE-LIMIT] worker received 429 from LLM');
               localEmit('rate-limited', { retryAfter, error: token.error });
             } else {
               localEmit('error', { error: token.error });
@@ -1399,8 +1538,10 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     } else {
       localEmit('error', { error: errMsg });
     }
+    // On error, discard the agent so next message creates a fresh one
+    activeAgents.delete(sessionKey);
   } finally {
-    currentAgent = null;
+    // Keep currentAgent alive for reuse across messages
     currentSessionIdForCancel = null;
   }
 }
@@ -1449,7 +1590,7 @@ async function syncSessionAfterCommand(
 
 process.on('SIGTERM', () => {
   cancelAllPendingApprovals();
-  closeTypstLspClient().catch(() => {});
+  closeTypstLspClient().catch(() => { });
   brain?.stop().catch(() => { });
   deps?.brain.stop().catch(() => { });
   process.exit(0);

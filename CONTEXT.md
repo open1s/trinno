@@ -33,6 +33,9 @@ For multi-file work:
 - **Hybrid Attachment Strategy**: content ≤ `maxCharsPerAttachment` is inlined; larger content is sent as a file reference + preview. Whole notebooks are always sent as references with cell-header previews.
 - **Session**: a chat conversation with persisted message history. Attachments in history store reference + preview, not full content.
 - **Compaction**: summarization of conversation history into a `systemSummary` appended to the system prompt when the context window fills up.
+- **Tool Output Truncation**: All tool output is capped at **2000 lines / 50KB**. When exceeded, full output saved to a temp file. Model sees a bounded preview + hint to use Grep or spawn a Task sub-agent. The LLM must **never re-read the full output** — it will be truncated again.
+- **Chunked File Reading**: The `read` tool defaults to 2000 lines max with `offset`/`limit` params for pagination. The output explicitly tells the model where to continue (`Use offset=N to continue.`). Never read entire large files; always paginate in 500-2000 line chunks. Never request tiny slices (<50 lines).
+- **Binary File Detection**: First 4096 bytes are sampled to detect binary content before full read. Known binary extensions (.zip, .exe, .dll, etc.) are rejected immediately.
 - **BOS Worker**: external process (spawned via stdio) handling LLM streaming, tool orchestration, and skill execution. Communicates with the extension via JSON messages.
 - **Skill**: a markdown-based agent instruction loaded from `~/.trinno/skills/` or the BOS skills directory. Activated via slash commands.
 - **Tool Permission**: per-tool allow/ask/deny policy controlling which BOS tools require user approval before execution.

@@ -1,11 +1,15 @@
 import { composeRoot } from './infrastructure/config/di.js';
+import { createModuleLogger } from './infrastructure/logging/logger.js';
+
+const log = createModuleLogger('main');
+log.level = 'info';
 
 async function main() {
-  console.log('=== TRIZ Methodology Library with AI-Powered Domain Analysis ===\n');
+  log.info('=== TRIZ Methodology Library with AI-Powered Domain Analysis ===');
 
   const deps = await composeRoot();
 
-  console.log('1. Analyzing contradiction: Speed vs Force\n');
+  log.info('1. Analyzing contradiction: Speed vs Force');
   const result = await deps.analyzeContradictionHandler.execute({
     improvingParameter: 9,
     worseningParameter: 10,
@@ -13,30 +17,30 @@ async function main() {
     type: 'technical',
   });
 
-  console.log('Contradiction ID:', result.contradictionId);
-  console.log('Recommended Principles:');
+  log.info({ contradictionId: result.contradictionId }, 'Contradiction ID');
+  log.info('Recommended Principles:');
   for (const p of result.recommendedPrinciples) {
-    console.log(`  #${p.index}: ${p.name} - ${p.description}`);
+    log.info({ index: p.index, name: p.name }, `#${p.index}: ${p.name} - ${p.description}`);
   }
 
-  console.log('\n2. Generating AI-enhanced solutions...\n');
+  log.info('2. Generating AI-enhanced solutions...');
   const solutions = await deps.generateSolutionsHandler.execute({
     contradictionId: result.contradictionId,
     aiEnhanced: false,
   });
 
-  console.log('Generated Solutions:');
+  log.info('Generated Solutions:');
   for (const s of solutions.solutions) {
-    console.log(`  [${s.principleName}] ${s.description}`);
+    log.info({ principleName: s.principleName }, `[${s.principleName}] ${s.description}`);
   }
 
-  console.log('\n3. Searching principles for "segmentation"...\n');
+  log.info('3. Searching principles for "segmentation"...');
   const searchResults = deps.principleEngine.searchPrinciples('segmentation');
   for (const p of searchResults) {
-    console.log(`  #${p.index}: ${p.name}`);
+    log.info({ index: p.index, name: p.name }, `#${p.index}: ${p.name}`);
   }
 
-  console.log('\n4. Evaluating ideality...\n');
+  log.info('4. Evaluating ideality...');
   const ideality = await deps.idealityHandler.execute({
     problemId: 'prob_1',
     benefits: ['Faster processing', 'Lower latency', 'Better throughput'],
@@ -44,19 +48,18 @@ async function main() {
     harms: ['Increased wear on components'],
   });
 
-  console.log('Ideality Score:', ideality.ideality.score);
-  console.log('Level:', ideality.ideality.level);
-  console.log('Recommendations:');
+  log.info({ score: ideality.ideality.score, level: ideality.ideality.level }, 'Ideality Score & Level');
+  log.info('Recommendations:');
   for (const r of ideality.ideality.recommendations) {
-    console.log(`  - ${r}`);
+    log.info({ recommendation: r }, `- ${r}`);
   }
 
-  console.log('\n5. Available EZBOS Tools:');
+  log.info('5. Available EZBOS Tools:');
   for (const tool of deps.tools) {
-    console.log(`  - ${tool.name}: ${tool.description}`);
+    log.info({ toolName: tool.name }, `- ${tool.name}: ${tool.description}`);
   }
 
-  console.log('\n6. S-Curve Analysis: Battery Technology\n');
+  log.info('6. S-Curve Analysis: Battery Technology');
   const sCurveResult = await deps.sCurveHandler.execute({
     technologyName: 'Lithium-ion Batteries',
     performanceMetric: 'Wh/kg',
@@ -70,29 +73,28 @@ async function main() {
     ],
   });
 
-  console.log(sCurveResult.unicodeChart);
-  console.log('\nS1 Stage:', sCurveResult.s1Stage);
-  console.log('S2 Stage:', sCurveResult.s2Stage);
-  console.log('Crossover Year:', sCurveResult.crossoverYear);
+  log.info({ chart: sCurveResult.unicodeChart }, 'S-Curve Chart');
+  log.info({ s1Stage: sCurveResult.s1Stage, s2Stage: sCurveResult.s2Stage }, 'Stages');
+  log.info({ crossoverYear: sCurveResult.crossoverYear }, 'Crossover Year');
   if (sCurveResult.s1TRL) {
-    console.log('S1 TRL:', sCurveResult.s1TRL.level, '-', sCurveResult.s1TRL.title);
+    log.info({ trl: sCurveResult.s1TRL.level, title: sCurveResult.s1TRL.title }, 'S1 TRL');
   }
   if (sCurveResult.s2TRLRange) {
-    console.log('S2 TRL Range:', sCurveResult.s2TRLRange.min, '-', sCurveResult.s2TRLRange.max);
+    log.info({ min: sCurveResult.s2TRLRange.min, max: sCurveResult.s2TRLRange.max }, 'S2 TRL Range');
   }
-  console.log('\nRecommendations:');
+  log.info('Recommendations:');
   for (const r of sCurveResult.recommendations) {
-    console.log(`  ${r}`);
+    log.info({ recommendation: r }, `  ${r}`);
   }
 
-  console.log('\n=== TRIZ Library Ready ===');
-  console.log('Use the tools with an EZBOS AgentBuilder:');
-  console.log('  const agent = new AgentBuilder("triz-agent")');
-  console.log('    .with_tools(...deps.tools)');
-  console.log('    .start();');
+  log.info('=== TRIZ Library Ready ===');
+  log.info('Use the tools with an EZBOS AgentBuilder:');
+  log.info('  const agent = new AgentBuilder("triz-agent")');
+  log.info('    .with_tools(...deps.tools)');
+  log.info('    .start();');
 
   await deps.aiAgent.close();
   await deps.brain.stop();
 }
 
-main().catch(console.error);
+main().catch((err) => { log.error({ err }, 'main failed'); });

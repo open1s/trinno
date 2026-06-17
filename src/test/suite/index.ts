@@ -13,6 +13,7 @@ export async function run(): Promise<void> {
 	mocha.addFile(path.resolve(testsRoot, 'extension.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'file-references.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'write-paper.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'rapid-input-e2e.test.js'));
 
 	return new Promise<void>((resolve, reject) => {
 		mocha.run((failures: number) => {

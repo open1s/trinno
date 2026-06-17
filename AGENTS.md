@@ -25,7 +25,8 @@
 npm run compile       # tsc -p ./ && rm -rf dist/chat/webview && cp -r src/chat/webview dist/chat/webview
 npm run watch         # tsc -watch -p ./
 npm run test          # node ./dist/test/runTest.js  — launches real VS Code via @vscode/test-electron
-npm run test:pipeline # npx mocha dist/test/suite/research-project-pipeline.test.js — single-file mocha run
+npm run test:pipeline # npx mocha dist/test/suite/publication-trends-year-extraction.test.js — single-file mocha run
+npm run test:token    # TRINNO_RUN_TOKEN_TEST=1 npx mocha --timeout 180000 dist/test/suite/token-growth.test.js — verifies per-message token cost is linear (requires configured LLM model, makes real API calls)
 npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignores src/bos/)
 ```
 
@@ -98,14 +99,15 @@ src/
 - **AI tools** are defined in `src/bos/infrastructure/http/triz_tools.ts` and `src/bos/infrastructure/http/papers_tools.ts` using `@open1s/ezbos`'s `defineTool().required().param().handle()`. They're wired into the agent in `src/bos/infrastructure/config/di.ts` (`composeRoot` returns them in `deps.tools`).
 - **Workspace root propagation**: the panel reads `trinno.chat.trpWorkspace` (or auto-detects) and must pass it as the **last argument** to `sendMessage` (signature has it) and `sendSlashRequest` (no signature — pass `getDefaultWorkspaceRoot()` as the 7th arg). The worker stashes it in `globalThis.__TRP_WORKSPACE_ROOT`, then `composeRoot` reads it. The worker defaults to `process.cwd()` if the panel didn't pass one — that's the wrong place (VS Code install dir), so always pass `getDefaultWorkspaceRoot()` from the panel.
 
-### `src/bos/` is tsc-excluded but editable
+### Worker process
 
-`tsconfig.json` excludes `src/bos`. Consequence:
-- `tsc` will not typecheck it. `npm run compile` succeeds even with errors there.
-- The worker process is run at dev time via `tsx` (devDep), which uses on-the-fly transpilation.
-- Your editor's LSP may not resolve `@types/node`, `@open1s/ezbos`, `vscode`, `fetch`, `Buffer`, `process`, etc. inside `src/bos/` — these are **noise**; trust `npm run compile` and the runtime, not the LSP red squiggles.
-- `eslint.config.js` also ignores `src/bos/`.
+The worker (`src/bos/worker.ts`) is compiled to `dist/bos/worker.js` during `npm run compile` and spawned with plain `node` (not `tsx`). `tsconfig.json` excludes only `src/bos/test` from compilation.
+
+`eslint.config.js` ignores `src/bos/`.
+- Your editor's LSP may not resolve `@types/node`, `@open1s/ezbos`, `vscode`, `fetch`, `Buffer`, `process` etc. inside `src/bos/` — these are **noise**; trust `npm run compile` and the runtime, not the LSP red squiggles.
 - If a new file in `src/bos/` is type-sensitive (e.g., a new tool), run `npm run compile` to confirm.
+
+**Orphaned worker cleanup**: `ensureWorker()` in `src/chat/agent.ts` runs `pkill -f "dist/bos/worker.js"` before spawning a new worker, killing any stale processes from old sessions.
 
 ### Paper downloader wiring
 
@@ -193,7 +195,28 @@ Response 5: Documentation
   • "Next: Mark todo completed"
 ```
 
-### Pattern C: Bug Fix (Minimal)
+### Pattern C: Large File Reading (Chunked)
+Instead of: "Read this file and analyze the logic"
+Do this:
+```
+Response 1: Read chunk 1
+  • Read(file, offset=1, limit=500) → see first 500 lines
+  • Identify area of interest from chunk 1
+  • "Next: Read chunk 2 at relevant offset"
+
+Response 2: Read chunk 2
+  • Read(file, offset=501, limit=500) → continue
+  • If still need more, note what offset to continue from
+  • Never read <50 line slices. Read in 500+ line chunks.
+  • "Next: grep for specific pattern if still searching"
+
+Response 3: Targeted grep
+  • grep(pattern, include="*.ts") to find exact match
+  • Only then read specific lines around the match
+  • Done
+```
+
+### Pattern D: Bug Fix (Minimal)
 Instead of: "Debug and fix the crash"
 Do this in 3 responses:
 ```
@@ -216,7 +239,18 @@ Response 3: Fix + Verify
   • Mark todo: "completed"
 ```
 
-### Pattern D: Documentation
+### Pattern E: Truncated Output Recovery
+Instead of: "Re-read the truncated output"
+Do this:
+```
+Truncation happens → "I only see partial output"
+  • Step 1: grep(sourceFile, pattern="relevant keyword") to find line numbers
+  • Step 2: read(filePath, offset=LINE_FOUND, limit=50) to read context around match
+  • If too large: delegate to task sub-agent with explicit instructions
+  • Never: read(filePath) without offset/limit on a known-large file
+```
+
+### Pattern F: Documentation
 Instead of: "Update all docs"
 Do this sequentially:
 ```

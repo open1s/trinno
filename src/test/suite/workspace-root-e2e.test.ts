@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
+import { createModuleLogger } from '../../bos/infrastructure/logging/logger';
+
+const log = createModuleLogger('test-workspace-root');
 
 suite('Workspace Root Flow', () => {
   let worker: ChildProcess | null = null;
@@ -56,7 +59,7 @@ suite('Workspace Root Flow', () => {
     });
 
     worker.stderr?.on('data', (chunk: Buffer) => {
-      console.error('[worker stderr]', chunk.toString());
+      log.warn({ stderr: chunk.toString() }, 'worker stderr');
     });
 
     await waitForReady();
@@ -89,7 +92,7 @@ suite('Workspace Root Flow', () => {
 
     const errorMsg = slashResult.find(m => m.type === 'error');
     if (errorMsg) {
-      console.error('[test] slash error:', errorMsg.error);
+      log.warn({ error: errorMsg.error }, 'slash error');
     }
 
     // Check files were created under the custom workspaceRoot

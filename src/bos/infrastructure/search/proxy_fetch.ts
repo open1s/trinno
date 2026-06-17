@@ -1,5 +1,8 @@
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import * as jsbos from '@open1s/jsbos';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('proxy');
 
 let bootstrapped = false;
 
@@ -22,9 +25,9 @@ export function setupProxy(): void {
     const agent = new ProxyAgent(proxyUrl);
     setGlobalDispatcher(agent);
 
-    console.log(`[proxy] Global fetch proxy set to ${proxyUrl}`);
+    log.info({ proxyUrl }, 'Global fetch proxy set');
   } catch (err) {
-    console.warn(`[proxy] Failed to load proxy config: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn({ err }, 'Failed to load proxy config');
   }
 }
 

@@ -1,5 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('phase-writer');
 
 export type PhaseDir =
   | '01_Discover'
@@ -64,7 +67,7 @@ export class PhaseWriter {
         writtenAt: new Date().toISOString(),
       };
     } catch (err) {
-      console.error(`PhaseWriter: failed to write ${opts.phase}/${filename}:`, err);
+      log.error({ err, phase: opts.phase, filename }, 'failed to write phase file');
       return null;
     }
   }

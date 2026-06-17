@@ -1,5 +1,7 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
+import { createModuleLogger } from '../../bos/infrastructure/logging/logger';
 
+const log = createModuleLogger('zenodo');
 const ZENODO_DOI_RE = /^10\.5281\/zenodo\.(\d+)$/i;
 const API_HOST = 'https://zenodo.org';
 
@@ -92,8 +94,8 @@ export class ZenodoSource implements PaperSource {
       const files: any[] = Array.isArray(data?.files) ? data.files : [];
       const best = pickBestFile(files);
       if (!best) {
-        const fileSummary = files.map((f: any) => f?.key || '<unknown>').slice(0, 5).join(', ');
-        console.warn(`[zenodo] record ${zenodoId} has no downloadable files; entries: ${fileSummary || '<none>'}`);
+        const fileKeys = files.map((f: any) => f?.key || '<unknown>').slice(0, 5).join(', ');
+        log.warn({ zenodoId, files: fileKeys || '<none>' }, 'no downloadable files');
         return null;
       }
       return {

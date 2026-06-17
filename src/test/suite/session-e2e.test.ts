@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
+import { createModuleLogger } from '../../bos/infrastructure/logging/logger';
+
+const log = createModuleLogger('test-session-e2e');
 
 suite('E2E: BOS Worker Session Persistence', () => {
 	let worker: ChildProcess | null = null;
@@ -66,7 +69,7 @@ suite('E2E: BOS Worker Session Persistence', () => {
 		});
 
 		worker.stderr?.on('data', (chunk: Buffer) => {
-			console.error('[worker stderr]', chunk.toString());
+			log.warn({ stderr: chunk.toString() }, 'worker stderr');
 		});
 
 		await waitForReady();

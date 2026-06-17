@@ -1,8 +1,12 @@
 import * as childProcess from 'child_process';
 import * as nodePath from 'path';
+import { EventEmitter } from 'events';
 import type { ExtToWebViewMessage } from './messages';
 import { getChatConfig, getApiKey } from './settings';
 import { extractNotebookContext, insertCellAt, undoLastInsert, formatContextForPrompt } from './context';
+import { createModuleLogger } from '../bos/infrastructure/logging/logger';
+
+const log = createModuleLogger('chat-agent');
 
 interface InsertedCell {
   notebookUri: string;
@@ -14,17 +18,20 @@ type TokenCallback = (msg: ExtToWebViewMessage) => void;
 
 type DoneCallback = (data?: any) => void;
 type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
-type McpStatusCallback = (servers: { name: string; type: string; connected: boolean }[]) => void;
-type LspStatusCallback = (status: { name: string; status: string; trackedFile: string | null }) => void;
-type TodoUpdateCallback = (todos: Array<{ content: string; status: string; priority: string }>) => void;
 type RateLimitedCallback = (retryAfter: number, error: string) => void;
+
+export const agentEvents = new EventEmitter();
+agentEvents.setMaxListeners(20);
+
+export const AgentEvent = {
+  McpStatus: 'mcp-status',
+  LspStatus: 'lsp-status',
+  TodoUpdate: 'todo-update',
+} as const;
 
 let workerProcess: childProcess.ChildProcess | null = null;
 let workerReady = false;
 let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined } | null = null;
-let mcpStatusCallback: McpStatusCallback | null = null;
-let lspStatusCallback: LspStatusCallback | null = null;
-let todoUpdateCallback: TodoUpdateCallback | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
 const insertStack: InsertedCell[] = [];
@@ -69,16 +76,24 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
 }
 
 function spawnWorker(): childProcess.ChildProcess {
-  const projectRoot = nodePath.resolve(__dirname, '..', '..');
-  return childProcess.spawn('npx', ['tsx', 'src/bos/worker.ts'], {
+  const workerPath = process.env.TRINNO_WORKER_PATH
+    || nodePath.resolve(__dirname, '..', '..', 'dist', 'bos', 'worker.js');
+  return childProcess.spawn('node', [workerPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    cwd: projectRoot,
     env: sanitizeEnv(),
   });
 }
 
+export function killOrphanedWorkers(): void {
+  try {
+    childProcess.execSync('pkill -f "dist/bos/worker\\.js" 2>/dev/null || true', { stdio: 'ignore' });
+  } catch { /* ignore */ }
+}
+
 async function ensureWorker(): Promise<void> {
   if (workerProcess && workerReady) return;
+
+  killOrphanedWorkers();
 
   if (workerProcess) {
     try { workerProcess.kill(); } catch { /* ignore */ }
@@ -102,7 +117,7 @@ async function ensureWorker(): Promise<void> {
       }
     });
     proc.stderr?.on('data', (chunk: Buffer) => {
-      console.error('[trinno-chat] bos worker stderr:', chunk.toString());
+      log.warn({ stderr: chunk.toString() }, 'bos worker stderr');
     });
     proc.on('error', () => {
       clearTimeout(timeout);
@@ -120,32 +135,24 @@ async function ensureWorker(): Promise<void> {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line);
-          if (msg.type === 'mcp-status' && mcpStatusCallback) {
-            mcpStatusCallback(msg.servers || []);
+          // Defer status events to next tick so they don't block
+          // the sendMessage handleData from processing token/done in the same chunk.
+          if (msg.type === 'mcp-status') {
+            const servers = msg.servers || [];
+            setImmediate(() => agentEvents.emit(AgentEvent.McpStatus, servers));
           }
-          if (msg.type === 'lsp-status' && lspStatusCallback) {
-            lspStatusCallback(msg);
+          if (msg.type === 'lsp-status') {
+            setImmediate(() => agentEvents.emit(AgentEvent.LspStatus, msg));
           }
-          if (msg.type === 'todo-update' && todoUpdateCallback) {
-            todoUpdateCallback(msg.todos || []);
+          if (msg.type === 'todo-update') {
+            const todos = msg.todos || [];
+            setImmediate(() => agentEvents.emit(AgentEvent.TodoUpdate, todos));
           }
         } catch { /* ignore non-JSON */ }
       }
     };
     workerProcess.stdout?.on('data', workerMessageHandler);
   }
-}
-
-export function setMcpStatusCallback(cb: McpStatusCallback): void {
-  mcpStatusCallback = cb;
-}
-
-export function setLspStatusCallback(cb: LspStatusCallback): void {
-  lspStatusCallback = cb;
-}
-
-export function setTodoUpdateCallback(cb: TodoUpdateCallback): void {
-  todoUpdateCallback = cb;
 }
 
 export async function sendMessage(
@@ -163,14 +170,14 @@ export async function sendMessage(
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
   workspaceRoot?: string
 ): Promise<void> {
-  console.log('[trinno-chat] sendMessage called', { messageId, textLength: text.length, sessionId });
+  log.info({ messageId, textLength: text.length, sessionId }, 'sendMessage called');
   currentCallbacks = { token: onToken, done: onDone, approval: onApproval };
 
   await ensureWorker();
-  console.log('[trinno-chat] ensureWorker done, workerReady:', workerReady);
+  log.debug({ workerReady }, 'ensureWorker done');
 
   if (!workerProcess || !workerReady) {
-    console.log('[trinno-chat] worker not available');
+    log.warn('worker not available');
     onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available. Please ensure tsx is installed.' });
     onDone();
     return;
@@ -227,20 +234,23 @@ export async function sendMessage(
       if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
-        console.log('[trinno-chat] handleData received msg type:', msg.type);
+        log.trace({ msgType: msg.type }, 'handleData received msg');
         switch (msg.type) {
           case 'token':
+            if (msg.tokenType === 'Text' && msg.text?.length > 0) {
+              log.trace({ traceId: payload.messageId, tokenType: msg.tokenType, tokenLen: msg.text.length }, '[TRACE] agent←worker: streaming token');
+            }
             onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
             break;
           case 'done':
             drainRemainingLines(dataBuffer);
             dataBuffer = '';
-            console.log('[trinno-chat] handleData got done, cleaning up');
+            log.trace({ traceId: payload.messageId }, '[TRACE] agent←worker: stream complete');
             cleanup();
             onDone(msg);
             break;
           case 'error':
-            console.log('[trinno-chat] handleData got error:', msg.error);
+            log.warn({ error: msg.error }, 'handleData got error');
             cleanup();
             onError(msg.error);
             break;
@@ -277,9 +287,9 @@ export async function sendMessage(
 
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
-  console.log('[trinno-chat] about to write to stdin, payload sessionId:', payload.sessionId);
+  log.trace({ traceId: payload.messageId, textLength: payload.text?.length, sessionId: payload.sessionId }, '[TRACE] agent→worker: forwarding chat message');
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
-  console.log('[trinno-chat] stdin.write completed');
+  log.trace('[TRACE] agent→worker: stdin.write completed');
 }
 
 export function cancelGeneration(): void {
@@ -371,14 +381,21 @@ export function getWelcomeContext(): { context: ReturnType<typeof extractNoteboo
   };
 }
 
-export async function initializeAgent(onMcpStatus?: (servers: { name: string; type: string; connected: boolean }[]) => void): Promise<void> {
-  if (onMcpStatus) {
-    setMcpStatusCallback(onMcpStatus);
-  }
-  await ensureWorker();
-  console.log('[trinno-chat] Sending init message to worker');
+export async function initializeAgent(
+	workspaceRoot?: string
+): Promise<void> {
+	await ensureWorker();
+  const apiKey = await getApiKey();
+  const config = getChatConfig();
+  log.debug({ workspaceRoot }, 'sending init message to worker');
   if (workerProcess?.stdin) {
-    workerProcess.stdin.write(JSON.stringify({ type: 'init' }) + '\n');
+    workerProcess.stdin.write(JSON.stringify({
+      type: 'init',
+      workspaceRoot,
+      apiKey: apiKey || undefined,
+      toolPermissions: config.tools.permissions,
+      sandboxEnabled: config.sandbox.enabled,
+    }) + '\n');
   }
 }
 
@@ -408,13 +425,13 @@ export async function sendCompactRequest(
   onError: (err: string) => void,
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
 ): Promise<void> {
-  console.log('[trinno-chat] sendCompactRequest called, message count:', messages.length);
+  log.info({ messageCount: messages.length }, 'sendCompactRequest called');
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
 
   await ensureWorker();
 
   if (!workerProcess || !workerReady) {
-    console.log('[trinno-chat] worker not available for compact');
+    log.warn('worker not available for compact');
     onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
     onDone();
     return;
@@ -502,7 +519,7 @@ export async function sendSlashRequest(
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
   workspaceRoot?: string
 ): Promise<void> {
-  console.log('[trinno-chat] sendSlashRequest called, text:', text);
+  log.info({ text }, 'sendSlashRequest called');
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
 
   await ensureWorker();
@@ -687,10 +704,16 @@ export async function requestLspStatus(): Promise<void> {
   }
 }
 
+let _lastWsRoot = '';
+
+export function setLastWorkspaceRoot(root: string): void {
+  _lastWsRoot = root;
+}
+
 export async function requestTodoStatus(): Promise<void> {
   await ensureWorker();
   if (workerProcess?.stdin) {
-    workerProcess.stdin.write(JSON.stringify({ type: 'todo-status-request' }) + '\n');
+    workerProcess.stdin.write(JSON.stringify({ type: 'todo-status-request', workspaceRoot: _lastWsRoot || undefined }) + '\n');
   }
 }
 

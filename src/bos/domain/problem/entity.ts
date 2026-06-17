@@ -23,7 +23,7 @@ export class TrizProblem {
   private _description: string;
   private _systemName: string;
   private _idealityLevel: IdealityLevel;
-  private _suField?: SuFieldComponents;
+  private _suField: SuFieldComponents | undefined = undefined;
   private _constraints: string[];
   private _solved: boolean;
 
@@ -72,7 +72,7 @@ export class TrizProblem {
       type: this.type,
       systemName: this._systemName,
       idealityLevel: this._idealityLevel,
-      suField: this._suField,
+      ...(this._suField !== undefined ? { suField: this._suField } : {}),
       constraints: [...this._constraints],
     };
   }

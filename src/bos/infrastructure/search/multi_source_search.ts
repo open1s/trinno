@@ -5,6 +5,9 @@ import { OpenAlexSearchService } from './openalex_search.js';
 import { GooglePatentsSearchService } from './google_patents_search.js';
 import { UsptoPatentsViewSearchService } from './uspto_patentsview_search.js';
 import { DuckDuckGoSearchService } from './duckduckgo_search.js';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('search');
 
 export interface BraveSearchConfig {
   apiKey: string;
@@ -81,6 +84,7 @@ export class MultiSourceSearchService implements SearchService {
   }
 
   async searchPatents(query: string, maxResults = 5): Promise<SearchResult[]> {
+    log.debug({ query, maxResults }, 'searchPatents');
     if (this.config.serper) {
       try {
         const response = await fetch(`${this.config.serper.baseUrl || 'https://google.serper.dev/patents'}`, {
@@ -97,6 +101,7 @@ export class MultiSourceSearchService implements SearchService {
           const patents = data.patents || data.organic || [];
 
           if (patents.length > 0) {
+            log.debug({ count: patents.length, source: 'serper' }, 'patents found');
             return patents.slice(0, maxResults).map((p: any) => ({
               title: p.title || p.snippet?.split('\n')[0] || 'Unknown Patent',
               url: p.link || p.url || '',
@@ -107,35 +112,55 @@ export class MultiSourceSearchService implements SearchService {
             }));
           }
         }
-      } catch {
+      } catch (e) {
+        log.warn({ err: e }, 'serper patent search failed');
       }
     }
 
     // Try free Google Patents
+    log.debug('fallback: Google Patents');
     const googleResults = await this.googlePatentsSearch.searchPatents(query, maxResults);
-    if (googleResults.length > 0) return googleResults;
+    if (googleResults.length > 0) {
+      log.debug({ count: googleResults.length, source: 'google-patents' }, 'patents found');
+      return googleResults;
+    }
 
     // Try USPTO PatentsView (free, covers US patents)
     try {
+      log.debug('fallback: USPTO PatentsView');
       const usptoResults = await this.usptoPatentsViewSearch.searchPatents(query, maxResults);
-      if (usptoResults.length > 0) return usptoResults;
-    } catch {
+      if (usptoResults.length > 0) {
+        log.debug({ count: usptoResults.length, source: 'uspto' }, 'patents found');
+        return usptoResults;
+      }
+    } catch (e) {
+      log.warn({ err: e }, 'USPTO search failed');
     }
 
     // Last resort: OpenAlex API
     try {
+      log.debug('fallback: OpenAlex patents');
       const openAlexResults = await this.openAlexSearch.searchPatents(query, maxResults);
-      if (openAlexResults.length > 0) return openAlexResults;
-    } catch {
+      if (openAlexResults.length > 0) {
+        log.debug({ count: openAlexResults.length, source: 'openalex' }, 'patents found');
+        return openAlexResults;
+      }
+    } catch (e) {
+      log.warn({ err: e }, 'OpenAlex patent search failed');
     }
 
+    log.debug({ query }, 'no patents found from any source');
     return [];
   }
 
   async searchPapers(query: string, maxResults = 5): Promise<SearchResult[]> {
+    log.debug({ query, maxResults }, 'searchPapers');
     const baseUrl = this.config.semanticScholar?.baseUrl || 'https://api.semanticscholar.org/graph/v1';
 
-    const tryCrossRef = async () => await this.crossRefSearch.searchPapers(query, maxResults);
+    const tryCrossRef = async () => {
+      log.debug('fallback: CrossRef papers');
+      return await this.crossRefSearch.searchPapers(query, maxResults);
+    };
 
     try {
       const response = await fetch(
@@ -159,6 +184,7 @@ export class MultiSourceSearchService implements SearchService {
           // If >50% of results have empty snippets, merge with CrossRef for better abstracts
           const emptyCount = results.filter((r: SearchResult) => !r.snippet).length;
           if (emptyCount > results.length / 2) {
+            log.debug({ total: results.length, emptySnippets: emptyCount }, 'merging with CrossRef abstracts');
             const crResults = await tryCrossRef();
             // Merge: use CrossRef snippet if SS has none, otherwise keep SS
             const crByTitle = new Map<string, string>();
@@ -173,19 +199,22 @@ export class MultiSourceSearchService implements SearchService {
             }
           }
 
+          log.debug({ count: results.length, source: 'semantic-scholar' }, 'papers found');
           return results;
         }
       }
 
       // Semantic Scholar returned empty, try CrossRef
       return await tryCrossRef();
-    } catch {
+    } catch (e) {
+      log.warn({ err: e }, 'Semantic Scholar search failed, falling back to CrossRef');
       // Fallback to CrossRef on any error
       return await tryCrossRef();
     }
   }
 
   async searchTechSolutions(query: string, maxResults = 5): Promise<SearchResult[]> {
+    log.debug({ query, maxResults }, 'searchTechSolutions');
     if (this.config.brave) {
       try {
         const response = await fetch(
@@ -204,6 +233,7 @@ export class MultiSourceSearchService implements SearchService {
           const results = data.web?.results || [];
 
           if (results.length > 0) {
+            log.debug({ count: results.length, source: 'brave' }, 'tech solutions found');
             return results.slice(0, maxResults).map((r: any) => ({
               title: r.title || '',
               url: r.url || '',
@@ -213,21 +243,32 @@ export class MultiSourceSearchService implements SearchService {
             }));
           }
         }
-      } catch {
+      } catch (e) {
+        log.warn({ err: e }, 'Brave search failed');
       }
     }
 
     // Try free DuckDuckGo search
+    log.debug('fallback: DuckDuckGo tech solutions');
     const ddgResults = await this.duckduckgoSearch.searchTechSolutions(query, maxResults);
-    if (ddgResults.length > 0) return ddgResults;
+    if (ddgResults.length > 0) {
+      log.debug({ count: ddgResults.length, source: 'duckduckgo' }, 'tech solutions found');
+      return ddgResults;
+    }
 
     // Last resort: OpenAlex for relevant engineering papers
     try {
+      log.debug('fallback: OpenAlex tech solutions');
       const openAlexResults = await this.openAlexSearch.searchTechSolutions(query, maxResults);
-      if (openAlexResults.length > 0) return openAlexResults;
-    } catch {
+      if (openAlexResults.length > 0) {
+        log.debug({ count: openAlexResults.length, source: 'openalex' }, 'tech solutions found');
+        return openAlexResults;
+      }
+    } catch (e) {
+      log.warn({ err: e }, 'OpenAlex tech solutions failed');
     }
 
+    log.debug({ query }, 'no tech solutions found from any source');
     return [];
   }
 

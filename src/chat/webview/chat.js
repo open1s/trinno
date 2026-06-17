@@ -1307,11 +1307,15 @@
     const attText = getAttachmentText();
     const fullText = attText ? (text ? attText + '\n\n' + text : attText) : text;
     if (!fullText) return;
+    vscode.postMessage({ type: 'trace', message: '[webview] user pressed enter', textLength: fullText.length, text: fullText.slice(0, 200) });
 
     // If already generating, queue the message instead of blocking
     if (isGenerating) {
       if (messageQueue.length >= 20) {
-        return; // Queue full, silently drop
+        const wrapper = inputEl.closest('.input-wrapper') || inputEl;
+        wrapper.classList.add('queue-full-shake');
+        setTimeout(() => wrapper.classList.remove('queue-full-shake'), 600);
+        return;
       }
       vscode.postMessage({ type: 'userMessage', text: fullText });
       lastUserMessageText = fullText;
@@ -1838,7 +1842,8 @@
   }
 
   function appendToken(msg) {
-    if (!currentContentEl) return;
+    if (!currentContentEl && !currentReasoningContentEl) return;
+    if (!currentMessageEl) return;
 
     const tokenType = msg.tokenType;
     const text = msg.text || '';
@@ -1860,6 +1865,7 @@
         messageState.content += text;
         if (textRafId === null) {
           textRafId = requestAnimationFrame(() => {
+            if (!currentContentEl) { textRafId = null; return; }
             textRafId = null;
             currentContentEl.innerHTML = formatContent(messageState.content);
             scrollToBottom();
@@ -1874,7 +1880,7 @@
 
         const existingTool = messageState.tools.find(t => {
           if (!(t.name === toolName && (t.status === 'running' || t.status === 'waiting'))) return false;
-          if (msgToolId && t.id) return t.id === msgToolId;
+          if (msgToolId) return t.id === msgToolId;
           return true;
         });
         if (existingTool) {
@@ -1898,7 +1904,7 @@
       case 'ToolResult':
         const lastRunning = [...messageState.tools].reverse().find(t => {
           if (t.status !== 'running') return false;
-          if (msgToolId && t.id) return t.id === msgToolId;
+          if (msgToolId) return t.id === msgToolId;
           return true;
         });
         if (lastRunning) {
@@ -1908,7 +1914,7 @@
         }
         const lastLog = [...messageState.toolLog].reverse().find(t => {
           if (t.status !== 'running') return false;
-          if (msgToolId && t.id) return t.id === msgToolId;
+          if (msgToolId) return t.id === msgToolId;
           return true;
         });
         if (lastLog) {
@@ -1928,7 +1934,7 @@
         thinkingIntervalId = null;
       }
       waitingIndicator.remove();
-      currentContentEl.style.display = '';
+      if (currentContentEl) currentContentEl.style.display = '';
     }
 
     scrollToBottom();
@@ -2243,7 +2249,8 @@ window.__denyTool = function(id) {
   function ensureReasoningSection() {
     if (!messageState.reasoningVisible) {
       messageState.reasoningVisible = true;
-      const reasoningSection = currentMessageEl?.querySelector('.reasoning-section');
+      if (!currentMessageEl) return;
+      const reasoningSection = currentMessageEl.querySelector('.reasoning-section');
       if (reasoningSection) {
         reasoningSection.style.display = '';
         const contentEl = reasoningSection.querySelector('.reasoning-content');
@@ -2287,6 +2294,11 @@ window.__denyTool = function(id) {
       sendBtn.onclick = sendMessage;
     }
 
+    if (thinkingIntervalId) {
+      clearInterval(thinkingIntervalId);
+      thinkingIntervalId = null;
+    }
+
     for (const tool of messageState.tools) {
       if (tool.status === 'running') {
         tool.status = 'done';
@@ -2302,6 +2314,15 @@ window.__denyTool = function(id) {
     renderToolBadges();
 
     addInsertButtons();
+
+    // Flush any pending text rAF so the latest buffered tokens are rendered
+    if (textRafId !== null) {
+      cancelAnimationFrame(textRafId);
+      textRafId = null;
+      if (currentContentEl && messageState.content) {
+        currentContentEl.innerHTML = formatContent(messageState.content);
+      }
+    }
 
     // Render mermaid diagrams in the completed message
     if (currentMessageEl) {

@@ -1,5 +1,8 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('typst-lsp');
 
 export interface LspDiagnostic {
   range: { start: { line: number; character: number }; end: { line: number; character: number } };
@@ -76,7 +79,7 @@ export class TypstLspClient extends EventEmitter {
               const header = buffer.slice(0, headerEnd);
               const match = header.match(/Content-Length: (\d+)/i);
               if (!match) {
-                console.error('[tinymist] no Content-Length header:', header);
+                log.warn({ header }, 'no Content-Length header');
                 buffer = headerEnd + 4 < buffer.length ? buffer.slice(headerEnd + 4) : '';
                 continue;
               }
@@ -91,7 +94,7 @@ export class TypstLspClient extends EventEmitter {
               try {
                 this.handleMessage(JSON.parse(content));
               } catch (e) {
-                console.error('[tinymist] failed to parse:', content);
+                log.warn({ content: content.slice(0, 200) }, 'failed to parse LSP message');
               }
             } else {
               break;
@@ -100,16 +103,16 @@ export class TypstLspClient extends EventEmitter {
         });
 
         this.process.stderr?.on('data', (data: Buffer) => {
-          console.error('[tinymist stderr]', data.toString().slice(0, 200));
+          log.warn({ stderr: data.toString().slice(0, 200) }, 'tinymist stderr');
         });
 
         this.process.on('error', (err) => {
-          console.error('[tinymist error]', err);
+          log.error({ err }, 'tinymist process error');
           rejectOnce(err);
         });
 
         this.process.on('exit', (code, signal) => {
-          console.error(`[tinymist exited] code=${code} signal=${signal}`);
+          log.info({ code, signal }, 'tinymist exited');
           this.initialized = false;
           this.emit('exit', { code, signal });
         });
@@ -119,12 +122,12 @@ export class TypstLspClient extends EventEmitter {
           workspaceFolders: [{ uri: `file://${this.workspaceRoot}`, name: 'workspace' }],
           capabilities: {},
         }).then((result: any) => {
-          console.error('[tinymist] initialized successfully');
+          log.info('tinymist initialized successfully');
           this.initialized = true;
           this.sendNotification('initialized', {});
           resolveOnce();
         }).catch((err) => {
-          console.error('[tinymist] init error:', err);
+          log.error({ err }, 'tinymist init error');
           rejectOnce(err);
         });
 
@@ -274,13 +277,13 @@ export async function getTypstLspClient(workspaceRoot?: string): Promise<TypstLs
   if (!globalLspClient) {
     globalLspClient = new TypstLspClient(workspaceRoot || process.cwd());
     globalLspClient.onPublishDiagnostics((params) => {
-      console.error(`[typst-lsp] diagnostics for ${params.uri}: ${params.diagnostics.length} issues`);
+      log.debug({ uri: params.uri, count: params.diagnostics.length }, 'diagnostics published');
     });
     globalLspClient.on('error', (err) => {
-      console.error('[typst-lsp] error', err);
+      log.error({ err }, 'LSP error');
     });
     globalLspClient.on('exit', ({ code, signal }) => {
-      console.error(`[typst-lsp] exited code=${code} signal=${signal}`);
+      log.info({ code, signal }, 'LSP exited');
       globalLspClient = null;
     });
     await globalLspClient.start();

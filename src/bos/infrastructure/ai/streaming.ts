@@ -1,4 +1,7 @@
 import { Agent } from '@open1s/ezbos';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('streaming');
 
 export interface StreamingCallbacks {
   onThinking?: (text: string) => void;
@@ -37,7 +40,7 @@ export async function streamAgent(
         break;
       case 'Error':
         streamError = new Error(token.error || 'Stream error');
-        console.error(`[streamAgent] Stream error: ${token.error}`);
+        log.error({ error: token.error }, 'stream error');
         if (callbacks.onError) callbacks.onError(streamError);
         break;
     }

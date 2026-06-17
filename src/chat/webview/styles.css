@@ -2189,3 +2189,17 @@ body {
   color: #fff;
   opacity: 1;
 }
+
+@keyframes queue-full-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+
+.queue-full-shake {
+  animation: queue-full-shake 0.5s ease-in-out;
+  outline: 1px solid #e74c3c !important;
+  outline-offset: 2px;
+}

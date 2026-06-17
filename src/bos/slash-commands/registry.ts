@@ -1,4 +1,7 @@
 import { TrizDeps } from '../infrastructure/config/di.js';
+import { createModuleLogger } from '../infrastructure/logging/logger.js';
+
+const log = createModuleLogger('slash-registry');
 
 export interface SlashCommand {
   name: string;
@@ -64,14 +67,14 @@ export function createSlashCommandRegistry(): SlashCommandRegistry {
     register(cmd, extraAliases) {
       const key = cmd.name.toLowerCase();
       if (commands.has(key)) {
-        console.warn(`[slash-registry] duplicate command registration: /${cmd.name}`);
+        log.warn({ cmdName: cmd.name }, 'duplicate command registration');
       }
       commands.set(key, cmd);
       if (extraAliases) {
         for (const a of extraAliases) {
           const aliasKey = a.toLowerCase();
           if (aliases.has(aliasKey)) {
-            console.warn(`[slash-registry] duplicate alias registration: /${a}`);
+            log.warn({ alias: a }, 'duplicate alias registration');
             continue;
           }
           aliases.set(aliasKey, key);

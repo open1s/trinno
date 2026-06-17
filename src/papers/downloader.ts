@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createModuleLogger } from '../bos/infrastructure/logging/logger';
 import { arxivSource } from './sources/arxiv';
+
+const log = createModuleLogger('papers');
 import { openalexSource } from './sources/openalex';
 import { UnpaywallSource } from './sources/unpaywall';
 import { semanticScholarSource } from './sources/semantic_scholar';
@@ -356,24 +359,34 @@ export async function downloadPaper(
   onProgress?: (p: DownloadProgress) => void,
 ): Promise<DownloadResult> {
   const parsed = parseIdentifier(opts.identifier);
+  log.info({ identifier: opts.identifier, kind: parsed.kind }, 'downloadPaper start');
   if (!isResolvable(parsed)) {
+    log.warn({ identifier: opts.identifier }, 'unresolvable identifier');
     return { ok: false, error: `Cannot resolve identifier: ${opts.identifier}` };
   }
 
   const sources = (opts.sources && opts.sources.length > 0
     ? opts.sources
     : getDefaultSources(opts.email));
+  log.debug({ sourceCount: sources.length }, 'racing sources');
 
   const raceOpts: Parameters<typeof raceSources>[0] = {
     identifier: parsed,
     sources,
-    onSourceStart: (s) => onProgress?.({ source: s, status: 'start' }),
-    onSourceFail: (s, e) => onProgress?.({ source: s, status: 'fail', error: e }),
+    onSourceStart: (s) => {
+      log.debug({ source: s }, 'source race started');
+      onProgress?.({ source: s, status: 'start' });
+    },
+    onSourceFail: (s, e) => {
+      log.warn({ source: s, error: e }, 'source race failed');
+      onProgress?.({ source: s, status: 'fail', error: e });
+    },
   };
   if (opts.signal) raceOpts.signal = opts.signal;
   const race = await raceSources(raceOpts);
 
   if (!race) {
+    log.warn({ identifier: opts.identifier }, 'no source resolved the identifier');
     const meta = await lookupMetadata(parsed, opts.signal);
     return {
       ok: false,
@@ -385,13 +398,17 @@ export async function downloadPaper(
   }
 
   const candidate = race.winner;
+  log.debug({ source: candidate.source, url: candidate.pdfUrl }, 'source won race');
   onProgress?.({ source: candidate.source, status: 'start' });
 
   let fetched: { buffer: Buffer; contentType: string | null; extHint: string | null };
   try {
+    log.debug({ url: candidate.pdfUrl }, 'fetching file');
     fetched = await fetchFile(candidate.pdfUrl, opts.signal, 30_000);
+    log.debug({ bytes: fetched.buffer.length, contentType: fetched.contentType }, 'file fetched');
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    log.warn({ source: candidate.source, error: msg }, 'download failed');
     onProgress?.({ source: candidate.source, status: 'fail', error: msg });
     const failResult: DownloadResult = {
       ok: false,
@@ -472,6 +489,7 @@ export async function downloadPaper(
 
   const outputDir = resolveOutputDir(opts.outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
+  log.debug({ outputDir }, 'resolved output directory');
 
   const fallback: PaperMeta = { title: parsed.value, authors: [] };
   if (parsed.doi) fallback.doi = parsed.doi;
@@ -482,6 +500,7 @@ export async function downloadPaper(
   const filename = dedupeFilename(outputDir, buildFilename(meta, ext));
   const fullPath = path.join(outputDir, filename);
   fs.writeFileSync(fullPath, resolvedBuffer);
+  log.info({ filePath: fullPath, bytes: resolvedBuffer.length, format: resolvedFormat, source: candidate.source }, 'paper saved');
 
   onProgress?.({ source: candidate.source, status: 'success', filePath: fullPath });
 

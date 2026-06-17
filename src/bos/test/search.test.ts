@@ -5,28 +5,30 @@ import { SuFieldAnalysisService } from '../domain/solution/su_field_service.js';
 import { createReference, enrichReferenceWithSummary } from '../domain/solution/external_reference.js';
 import { MultiSourceSearchService } from '../infrastructure/search/multi_source_search.js';
 import { CachedSearchService, SearchCache } from '../infrastructure/search/cached_search.js';
+import { createModuleLogger } from '../infrastructure/logging/logger.js';
 
 import { ContentExtractor } from '../infrastructure/search/content_extractor.js';
 import { CurveFittingService, StageDetectionService, SCurveAnalysisService } from '../domain/s_curve/services.js';
 import { SvgCurveGenerator } from '../domain/s_curve/svg_generator.js';
 import { SCurve } from '../domain/s_curve/entity.js';
 
+const log = createModuleLogger('search-test');
 let passed = 0;
 let failed = 0;
 let skipped = 0;
 
 function assert(condition: boolean, message: string) {
   if (condition) {
-    console.log(`  ✓ ${message}`);
+    log.info({ message }, '✓');
     passed++;
   } else {
-    console.error(`  ✗ ${message}`);
+    log.warn({ message }, '✗');
     failed++;
   }
 }
 
 function skip(message: string) {
-  console.log(`  ⊘ ${message} (skipped)`);
+  log.info({ message }, '⊘ skipped');
   skipped++;
 }
 
@@ -483,18 +485,16 @@ test('SCurve analysis service generates recommendations', async () => {
 
 async function runAll() {
   for (const t of tests) {
-    console.log(`\n── ${t.name} ──`);
+    log.info({ testName: t.name }, 'running');
     try {
       await t.fn();
     } catch (e: any) {
-      console.error(`  ✗ Test crashed: ${e.message}`);
+      log.warn({ err: e.message }, 'Test crashed');
       failed++;
     }
   }
 
-  console.log('\n═══════════════════════════════════════');
-  console.log(`  Results: ${passed} passed, ${failed} failed, ${skipped} skipped`);
-  console.log('═══════════════════════════════════════');
+  log.info({ passed, failed, skipped }, 'test results');
 
   if (failed > 0) {
     process.exit(1);

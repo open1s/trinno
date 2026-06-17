@@ -2,17 +2,21 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createModuleLogger } from '../bos/infrastructure/logging/logger';
 import { getChatConfig } from './settings';
-import type { CompactMessage} from './agent';
-import { sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, setLspStatusCallback, setTodoUpdateCallback } from './agent';
-import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus} from './messages';
+
+const log = createModuleLogger('chat-panel');
+import type { CompactMessage } from './agent';
+import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, setLastWorkspaceRoot } from './agent';
+import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus } from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
 import { extractNotebookContext, insertCellAt, extractEditorSelection, extractNotebookCellSelection, extractWholeFile, extractWholeNotebook } from './context';
 import { resolveCommandFileReference } from './fileReferences';
 import type {
   Session,
-  SessionStore} from './sessions';
+  SessionStore
+} from './sessions';
 import {
   createSession,
   generateSessionTitle,
@@ -36,6 +40,7 @@ let isGenerating = false;
 let messageQueue: QueuedMessage[] = [];
 let autoDrainLock = false;
 let currentQueueId: string | null = null;
+let dequeuedItemText: string | null = null;
 const MAX_QUEUE_SIZE = 20;
 
 const CHAT_VIEW_TYPE = 'trinno.chatView';
@@ -71,7 +76,7 @@ function loadSkillsFromDir(dirPath: string): SkillInfo[] {
 function loadSkillsFromHomeDir(): SkillInfo[] {
   const agentsSkills = loadSkillsFromDir(path.join(os.homedir(), '.agents', 'skills'));
   const bosSkills = loadSkillsFromDir(path.join(os.homedir(), '.bos', 'skills'));
-  
+
   // Merge, .bos/skills takes precedence for duplicates
   const skillMap = new Map<string, SkillInfo>();
   for (const skill of agentsSkills) {
@@ -85,7 +90,7 @@ function loadSkillsFromHomeDir(): SkillInfo[] {
 
 function loadSkillForSlashCommand(): SkillInfo[] {
   const commands = loadSkillsFromDir(path.join(os.homedir(), '.bos', 'commands'));
-  
+
   const skillMap = new Map<string, SkillInfo>();
   for (const skill of commands) {
     skillMap.set(skill.name, skill);
@@ -140,7 +145,7 @@ function loadModelsFromConfig(): ModelConfig[] {
     loader.discover();
     const configJson = loader.loadSync();
     const config = JSON.parse(configJson);
-    
+
     const gm = config.global_model || {};
     if (gm.model || gm.base_url || gm.api_key) {
       globalModelConfig = { name: 'global' };
@@ -148,7 +153,7 @@ function loadModelsFromConfig(): ModelConfig[] {
       if (gm.base_url) globalModelConfig.baseUrl = gm.base_url;
       if (gm.api_key) globalModelConfig.apiKey = gm.api_key;
     }
-    
+
     const llmSection = config.llm;
     if (llmSection && typeof llmSection === 'object') {
       for (const [name, value] of Object.entries(llmSection)) {
@@ -161,7 +166,7 @@ function loadModelsFromConfig(): ModelConfig[] {
       }
     }
   } catch (e) {
-    console.error('[trinno-chat] Failed to load BOS config:', e);
+    log.warn({ err: e }, 'Failed to load BOS config');
   }
   return models;
 }
@@ -220,7 +225,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
   ): void {
     void _context;
     void _token;
-    console.log('[trinno-chat] resolveWebviewView called');
+    log.debug('resolveWebviewView called');
     chatView = webviewView;
 
     webviewView.webview.options = {
@@ -237,6 +242,12 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       undefined,
       this.context.subscriptions
     );
+
+    agentEvents.on(AgentEvent.TodoUpdate, (todos: Array<{ content: string; status: string; priority: string }>) => {
+      if (chatView) {
+        chatView.webview.postMessage({ type: 'todo-update', todos } as any);
+      }
+    });
 
     chatView.onDidChangeVisibility(() => {
       if (chatView?.visible) {
@@ -295,6 +306,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       requestMcpStatus();
     }
     requestLspStatus();
+    setLastWorkspaceRoot(getDefaultWorkspaceRoot() || '');
     requestTodoStatus();
 
     if (currentSession.messages.length > 0) {
@@ -428,22 +440,17 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
     })
   );
 
-  initializeAgent((servers) => {
+  agentEvents.on(AgentEvent.McpStatus, (servers: Array<{ name: string; type: string; connected: boolean }>) => {
     pendingMcpStatus = servers;
     if (chatView) {
       chatView.webview.postMessage({ type: 'mcp-status', servers } as any);
     }
-  }).catch(() => {});
+  });
+  initializeAgent(getDefaultWorkspaceRoot()).catch(() => { });
 
-  setLspStatusCallback((status) => {
+  agentEvents.on(AgentEvent.LspStatus, (status: { name: string; status: string; trackedFile: string | null }) => {
     if (chatView) {
       chatView.webview.postMessage({ type: 'lsp-status', ...status } as any);
-    }
-  });
-
-  setTodoUpdateCallback((todos) => {
-    if (chatView) {
-      chatView.webview.postMessage({ type: 'todo-update', todos } as any);
     }
   });
 }
@@ -495,7 +502,7 @@ async function switchSession(sessionId: string): Promise<void> {
 
     const session = await loadSession(sessionId);
     if (!session) {
-      console.error('[trinno-chat] Session not found:', sessionId);
+      log.warn({ sessionId }, 'Session not found');
       if (chatView) {
         chatView.webview.postMessage({ type: 'error', messageId: '', error: `Session not found: ${sessionId}` } as any);
       }
@@ -533,7 +540,7 @@ async function switchSession(sessionId: string): Promise<void> {
       } as any);
     }
   } catch (err) {
-    console.error('[trinno-chat] Error switching session:', err);
+    log.warn({ err }, 'Error switching session');
     if (chatView) {
       chatView.webview.postMessage({ type: 'error', messageId: '', error: `Failed to switch session: ${err instanceof Error ? err.message : String(err)}` } as any);
     }
@@ -621,24 +628,23 @@ function addToQueue(text: string): QueuedMessage | null {
 }
 
 function removeFromQueue(queueId: string): void {
-  const idx = messageQueue.findIndex(q => q.queueId === queueId);
-  if (idx < 0) return;
-  
-  const item = messageQueue[idx]!;
-  
-  if (item.status === 'in-flight') {
-    // Cancel in-flight, no re-queue
+  // Active (already-dequeued) item — cancel and clean up
+  if (queueId === currentQueueId) {
     cancelGeneration();
-    messageQueue.splice(idx, 1);
+    finalizeCurrentMessage();
+    isGenerating = false;
+    currentQueueId = null;
+    dequeuedItemText = null;
     if (chatView) {
       chatView.webview.postMessage({ type: 'queue-remove', queueId } as any);
     }
-    finalizeCurrentMessage();
-    // Auto-drain to next if any
     setImmediate(() => processQueue());
     return;
   }
-  
+
+  const idx = messageQueue.findIndex(q => q.queueId === queueId);
+  if (idx < 0) return;
+
   // Pending item — just remove
   messageQueue.splice(idx, 1);
   if (chatView) {
@@ -648,25 +654,22 @@ function removeFromQueue(queueId: string): void {
 
 function forceExecuteQueueItem(queueId: string): void {
   const idx = messageQueue.findIndex(q => q.queueId === queueId);
-  if (idx < 0 || messageQueue[idx]!.status === 'in-flight') return;
+  if (idx < 0) return;
 
   cancelGeneration();
   finalizeCurrentMessage();
-  const inFlightIdx = messageQueue.findIndex(q => q.status === 'in-flight');
-  if (inFlightIdx >= 0) {
-    const inFlightId = messageQueue[inFlightIdx]!.queueId;
-    messageQueue.splice(inFlightIdx, 1);
-    currentQueueId = null;
+  // In-flight item was already removed from extension queue
+  // Webview still has it — tell it to remove
+  if (currentQueueId) {
     if (chatView) {
-      chatView.webview.postMessage({
-        type: 'queue-remove',
-        queueId: inFlightId,
-      } as any);
+      chatView.webview.postMessage({ type: 'queue-remove', queueId: currentQueueId } as any);
     }
+    currentQueueId = null;
+    dequeuedItemText = null;
   }
   isGenerating = false;
 
-  // Move forced item to front (recompute index after splice)
+  // Move forced item to front
   const newIdx = messageQueue.findIndex(q => q.queueId === queueId);
   if (newIdx < 0) return;
   const item = messageQueue[newIdx]!;
@@ -679,12 +682,13 @@ function forceExecuteQueueItem(queueId: string): void {
 function processQueue(): void {
   if (autoDrainLock) return;
   if (isGenerating) return;
-  
+
   const nextIdx = messageQueue.findIndex(q => q.status === 'queued');
   if (nextIdx < 0) return;
-  
+
   const item = messageQueue[nextIdx]!;
-  item.status = 'in-flight';
+  messageQueue.splice(nextIdx, 1);
+  dequeuedItemText = item.text;
   currentQueueId = item.queueId;
   if (chatView) {
     chatView.webview.postMessage({
@@ -693,7 +697,7 @@ function processQueue(): void {
       status: 'in-flight',
     } as any);
   }
-  
+
   handleUserMessage(item.text);
 }
 
@@ -701,13 +705,13 @@ function markQueueCompleted(queueId: string): void {
   const item = messageQueue.find(q => q.queueId === queueId);
   if (item) {
     item.status = 'completed';
-    if (chatView) {
-      chatView.webview.postMessage({
-        type: 'queue-status-change',
-        queueId,
-        status: 'completed',
-      } as any);
-    }
+  }
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'queue-status-change',
+      queueId,
+      status: 'completed',
+    } as any);
   }
 }
 
@@ -716,14 +720,14 @@ function markQueueError(queueId: string, error: string): void {
   if (item) {
     item.status = 'error';
     item.error = error;
-    if (chatView) {
-      chatView.webview.postMessage({
-        type: 'queue-status-change',
-        queueId,
-        status: 'error',
-        error,
-      } as any);
-    }
+  }
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'queue-status-change',
+      queueId,
+      status: 'error',
+      error,
+    } as any);
   }
 }
 
@@ -731,19 +735,21 @@ function markQueueRateLimited(queueId: string): void {
   const item = messageQueue.find(q => q.queueId === queueId);
   if (item) {
     item.status = 'rate-limited';
-    if (chatView) {
-      chatView.webview.postMessage({
-        type: 'queue-status-change',
-        queueId,
-        status: 'rate-limited',
-      } as any);
-    }
+  }
+  if (chatView) {
+    chatView.webview.postMessage({
+      type: 'queue-status-change',
+      queueId,
+      status: 'rate-limited',
+    } as any);
   }
 }
 
 function clearQueue(): void {
   messageQueue = [];
   autoDrainLock = false;
+  currentQueueId = null;
+  dequeuedItemText = null;
   if (chatView) {
     chatView.webview.postMessage({
       type: 'queue-state',
@@ -753,23 +759,23 @@ function clearQueue(): void {
 }
 
 async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: string; sessionAction?: string }): Promise<void> {
-  console.log('[trinno-chat] panel: handleWebViewMessage type:', msg.type);
+  log.trace({ msgType: msg.type, textLength: 'text' in msg ? (msg as any).text?.length : undefined }, 'handleWebViewMessage');
+  if (msg.type === 'trace') {
+    log.trace({ textLength: msg.textLength, text: msg.text }, 'webview trace');
+    return;
+  }
   if (msg.type === 'userMessage') {
     await handleUserMessage(msg.text);
   } else if (msg.type === 'cancel') {
-    const savedQueueId = currentQueueId;
     cancelGeneration();
     finalizeCurrentMessage();
     isGenerating = false;
-    currentQueueId = null;
-    if (savedQueueId) {
-      const inFlightIdx = messageQueue.findIndex(q => q.queueId === savedQueueId);
-      if (inFlightIdx >= 0) {
-        messageQueue.splice(inFlightIdx, 1);
-        if (chatView) {
-          chatView.webview.postMessage({ type: 'queue-remove', queueId: savedQueueId } as any);
-        }
+    if (currentQueueId) {
+      if (chatView) {
+        chatView.webview.postMessage({ type: 'queue-remove', queueId: currentQueueId } as any);
       }
+      currentQueueId = null;
+      dequeuedItemText = null;
     }
     setImmediate(() => processQueue());
   } else if (msg.type === 'undoInsert') {
@@ -798,7 +804,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
   } else if (msg.type === 'setAgent') {
     const agent = loadedAgents.find(a => a.name === msg.agent);
     selectedAgentContent = agent ? agent.content : undefined;
-    console.log('[trinno-chat] Agent set to:', msg.agent, 'has content:', !!selectedAgentContent);
+    log.debug({ agent: msg.agent, hasContent: !!selectedAgentContent }, 'Agent set');
   } else if (msg.type === 'setModel') {
     if (msg.model === 'Auto') {
       selectedModelConfig = undefined;
@@ -982,12 +988,12 @@ async function handleDownloadCommand(identifier: string): Promise<void> {
       type: 'history-message',
       message: createAssistantMessageForText(
         '**Usage:** `/download <DOI|arXiv ID|PMID|url>`\n\n' +
-          'Examples:\n' +
-          '- `/download 10.1038/nature12373`\n' +
-          '- `/download arXiv:2401.01234`\n' +
-          '- `/download 2401.01234`\n' +
-          '- `/download https://doi.org/10.1126/science.aec6396`\n\n' +
-          'PDFs are saved to `<workspace>/.trinno/papers/` (or `~/.trinno/papers/` outside a workspace).',
+        'Examples:\n' +
+        '- `/download 10.1038/nature12373`\n' +
+        '- `/download arXiv:2401.01234`\n' +
+        '- `/download 2401.01234`\n' +
+        '- `/download https://doi.org/10.1126/science.aec6396`\n\n' +
+        'PDFs are saved to `<workspace>/.trinno/papers/` (or `~/.trinno/papers/` outside a workspace).',
       ),
     } as any);
     return;
@@ -1126,9 +1132,9 @@ async function handleGetCommand(args: string): Promise<void> {
       type: 'history-message',
       message: createAssistantMessageForText(
         '**Usage:** `/get <query>` — search OpenAlex and auto-download the top match.\n\n' +
-          'Add ` all` to download the top 3 matches:\n' +
-          '- `/get lithium-ion battery cathode optimization`\n' +
-          '- `/get attention is all you need all`',
+        'Add ` all` to download the top 3 matches:\n' +
+        '- `/get lithium-ion battery cathode optimization`\n' +
+        '- `/get attention is all you need all`',
       ),
     } as any);
     return;
@@ -1247,13 +1253,13 @@ export function _getRateLimitRetryStateForTest(): { count: number; max: number }
   return { count: rateLimitRetryCount, max: MAX_RATE_LIMIT_RETRIES };
 }
 
-function handleRateLimited(retryAfter: number, _error: string): void {
-  void _error;
+function handleRateLimited(retryAfter: number, error: string): void {
+  log.warn({ retryAfter, error }, '[RATE-LIMIT] LLM returned 429 — pausing generation');
+  void error;
   if (!currentStreamingId) return;
-  
   const messageId = currentStreamingId;
   const seconds = Math.max(1, Math.round(retryAfter));
-  
+
   if (chatView) {
     chatView.webview.postMessage({
       type: 'rate-limited',
@@ -1286,25 +1292,26 @@ function handleRateLimited(retryAfter: number, _error: string): void {
       if (rateLimitTimer) clearInterval(rateLimitTimer);
       rateLimitTimer = null;
       // Auto-resume queue if this was a queued message
-      if (currentQueueId) {
-        const qItem = messageQueue.find(q => q.queueId === currentQueueId);
-        if (qItem) {
-          // Re-queue the rate-limited item, remove from in-flight
-          finalizeCurrentMessage();
-          const idx = messageQueue.indexOf(qItem);
-          if (idx >= 0) {
-            qItem.status = 'queued';
-          }
-          if (chatView) {
-            chatView.webview.postMessage({
-              type: 'queue-status-change',
-              queueId: qItem.queueId,
-              status: 'queued',
-            } as any);
-          }
-          currentQueueId = null;
-          setImmediate(() => processQueue());
+      if (currentQueueId && dequeuedItemText) {
+        finalizeCurrentMessage();
+        // Re-add to extension queue (was removed in processQueue)
+        messageQueue.push({
+          queueId: currentQueueId,
+          text: dequeuedItemText,
+          timestamp: Date.now(),
+          status: 'queued',
+        });
+        // Webview still has the item; update its status back to queued
+        if (chatView) {
+          chatView.webview.postMessage({
+            type: 'queue-status-change',
+            queueId: currentQueueId,
+            status: 'queued',
+          } as any);
         }
+        currentQueueId = null;
+        dequeuedItemText = null;
+        setImmediate(() => processQueue());
       }
     }
   }, 1000);
@@ -1319,6 +1326,7 @@ function handleRateLimited(retryAfter: number, _error: string): void {
       if (currentQueueId) markQueueError(currentQueueId, `已达到最大重试次数 (${MAX_RATE_LIMIT_RETRIES})。`);
       const savedQueueId2 = currentQueueId;
       currentQueueId = null;
+      dequeuedItemText = null;
       if (chatView && mid) {
         chatView.webview.postMessage({
           type: 'error',
@@ -1353,6 +1361,8 @@ function handleRateLimitedRetry(): void {
 }
 
 let _autoCompactInProgress = false;
+let _lastCumulativeInput = 0;
+let _lastCumulativeOutput = 0;
 
 function isTrpWorkspaceRoot(p: string): boolean {
   const phaseDirs = ['01_Discover', '02_TRL', '03_Analyze', '04_Synthesize', '05_Deliver', '06_References', '07_Patent'];
@@ -1445,7 +1455,7 @@ async function sendFileList(workspaceRoot: string): Promise<void> {
       }
     }
   } catch (err) {
-    console.error('[trinno-chat] sendFileList error:', err);
+    log.warn({ err }, 'sendFileList error');
   }
   const trimmed = files.slice(0, MAX_FILES);
   chatView?.webview.postMessage({
@@ -1551,6 +1561,7 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
 }
 
 async function handleUserMessage(text: string): Promise<void> {
+  log.trace({ textLength: text.length, text: text.slice(0, 300) }, '[TRACE] user→panel: user pressed enter');
   if (!chatView || !currentSession) {
     return;
   }
@@ -1638,21 +1649,30 @@ async function handleUserMessage(text: string): Promise<void> {
         if (chatView) {
           chatView.webview.postMessage(tokenMsg);
         }
-if (currentStreamingMsg && tokenMsg.type === 'token') {
-        if (tokenMsg.tokenType === 'ReasoningContent') {
-          currentStreamingMsg.reasoning += tokenMsg.text;
-        } else if (tokenMsg.tokenType === 'Text') {
-          currentStreamingMsg.content += tokenMsg.text;
-        } else if (tokenMsg.tokenType === 'ToolCall') {
-          (currentStreamingMsg.toolCalls as any[]).push({ name: tokenMsg.text, status: 'running', result: '', ...(tokenMsg.args !== undefined ? { args: tokenMsg.args } : {}) });
-        } else if (tokenMsg.tokenType === 'ToolResult') {
-          const lastTool = [...(currentStreamingMsg.toolCalls as any[])].reverse().find(t => t.status === 'running');
-          if (lastTool) {
-            lastTool.result = tokenMsg.text || 'Completed';
-            lastTool.status = 'done';
+        if (currentStreamingMsg && tokenMsg.type === 'token') {
+          if (tokenMsg.tokenType === 'ReasoningContent') {
+            currentStreamingMsg.reasoning += tokenMsg.text;
+          } else if (tokenMsg.tokenType === 'Text') {
+            currentStreamingMsg.content += tokenMsg.text;
+          } else if (tokenMsg.tokenType === 'Usage') {
+            chatView?.webview.postMessage({
+              type: 'token-usage',
+              usage: {
+                input: tokenMsg.promptTokens ?? 0,
+                output: tokenMsg.completionTokens ?? 0,
+                total: (tokenMsg.promptTokens ?? 0) + (tokenMsg.completionTokens ?? 0),
+              },
+            } as any);
+          } else if (tokenMsg.tokenType === 'ToolCall') {
+            (currentStreamingMsg.toolCalls as any[]).push({ name: tokenMsg.text, status: 'running', result: '', ...(tokenMsg.args !== undefined ? { args: tokenMsg.args } : {}) });
+          } else if (tokenMsg.tokenType === 'ToolResult') {
+            const lastTool = [...(currentStreamingMsg.toolCalls as any[])].reverse().find(t => t.status === 'running');
+            if (lastTool) {
+              lastTool.result = tokenMsg.text || 'Completed';
+              lastTool.status = 'done';
+            }
           }
         }
-      }
       },
       async (_) => {
         if (chatView) {
@@ -1684,7 +1704,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
             if (metaIndex >= 0) {
               sessionStore.sessions[metaIndex] = sessionToMetadata(currentSession);
             }
-            saveSessionStore(sessionStore).catch(() => {});
+            saveSessionStore(sessionStore).catch(() => { });
           }
 
           sendClearSession(currentSession.id);
@@ -1784,6 +1804,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
         if (currentQueueId) markQueueError(currentQueueId, err);
         const savedQueueId2 = currentQueueId;
         currentQueueId = null;
+        dequeuedItemText = null;
         setImmediate(() => processQueue());
         if (chatView) {
           chatView.webview.postMessage({
@@ -1817,7 +1838,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
   }
 
   if (isGenerating) {
-    console.log('[trinno-chat] panel: isGenerating=true, queuing');
+    log.debug('isGenerating=true, queuing');
     const item = addToQueue(text);
     if (!item) {
       chatView?.webview.postMessage({
@@ -1827,8 +1848,6 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
     }
     return;
   }
-
-  console.log('[trinno-chat] panel: handleUserMessage, text length:', text.length, 'sessionId:', currentSession?.id);
 
   const skillMatch = detectSkillCommand(text);
   let displayText = text;
@@ -1874,7 +1893,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
   const messageText = fileReferenceTarget?.text ?? text;
   const workspaceRoot = fileReferenceTarget?.workspaceRoot ?? defaultWorkspaceRoot;
 
-  console.log('[trinno-chat] panel: calling sendMessage for messageId:', assistantMsg.id);
+  log.trace({ traceId: assistantMsg.id, textLength: messageText.length, sessionId: currentSession?.id, text: messageText.slice(0, 200) }, '[TRACE] panel→agent: user message entering pipeline');
   await sendMessage(
     assistantMsg.id,
     messageText,
@@ -1891,23 +1910,21 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
       }
     },
     (doneData) => {
-      console.log('[trinno-chat] panel: onDone callback, doneData:', JSON.stringify(doneData));
+      log.trace({ traceId: assistantMsg.id, responseLength: currentStreamingMsg?.content?.length ?? 0, hasReasoning: !!currentStreamingMsg?.reasoning?.length }, '[TRACE] panel→agent: full response received');
       if (doneData?.rateLimited) {
         if (currentQueueId) markQueueRateLimited(currentQueueId);
+        isGenerating = false;
         handleRateLimited(doneData.retryAfter ?? 60, doneData.error ?? '');
         return;
       }
       if (currentQueueId) markQueueCompleted(currentQueueId);
       currentQueueId = null;
+      dequeuedItemText = null;
       if (chatView) {
         chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         let inputTokens = doneData?.inputTokens ?? 0;
         let outputTokens = doneData?.outputTokens ?? 0;
-        if (inputTokens === 0 && outputTokens === 0 && currentStreamingMsg && currentSession) {
-          outputTokens = Math.ceil((currentStreamingMsg.content.length + currentStreamingMsg.reasoning.length) / 4);
-          const contextText = currentSession.messages.slice(0, -1).map(m => m.content + (m.reasoning || '')).join(' ');
-          inputTokens = Math.ceil(contextText.length / 4);
-        }
+        log.trace({ sessionId: currentSession?.id, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] panel: stream done');
         chatView.webview.postMessage({
           type: 'token-usage',
           usage: {
@@ -1917,15 +1934,12 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
           },
         } as any);
       }
-      if (currentSession && doneData?.brainOsSession) {
-        currentSession.brainOsSession = doneData.brainOsSession;
-      }
       finalizeCurrentMessage();
       // Auto-drain next queued message
       processQueue();
     },
     (err) => {
-      console.log('[trinno-chat] panel: onError callback:', JSON.stringify(err));
+      log.warn({ err }, 'onError callback');
       const isOverflow = err.includes('context length') || err.includes('reduce the length') || err.includes('input tokens') || err.includes('maximum context') || err.includes('too many tokens') || err.includes('400');
 
       if (isOverflow && currentSession && chatView && !_autoCompactInProgress) {
@@ -1966,7 +1980,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
               if (metaIndex >= 0) {
                 sessionStore.sessions[metaIndex] = sessionToMetadata(currentSession);
               }
-              saveSessionStore(sessionStore).catch(() => {});
+              saveSessionStore(sessionStore).catch(() => { });
             }
             sendClearSession(currentSession.id);
             sendCompactResult(currentSession.id, llmSummary);
@@ -1995,10 +2009,10 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
             _autoCompactInProgress = false;
             if (chatView) chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
           },
-      selectedModelConfig || globalModelConfig,
-    );
-    return;
-  }
+          selectedModelConfig || globalModelConfig,
+        );
+        return;
+      }
 
       if (currentStreamingMsg) {
         currentStreamingMsg.status = 'error';
@@ -2007,6 +2021,7 @@ if (currentStreamingMsg && tokenMsg.type === 'token') {
       if (currentQueueId) markQueueError(currentQueueId, err);
       const savedQueueId = currentQueueId;
       currentQueueId = null;
+      dequeuedItemText = null;
       finalizeCurrentMessage();
       // Skip errored item, auto-drain to next
       if (savedQueueId) {
@@ -2046,14 +2061,14 @@ function finalizeCurrentMessage(): void {
 
   if (currentSession) {
     updateSessionTimestamp(currentSession);
-    saveSession(currentSession).catch(() => {});
+    saveSession(currentSession).catch(() => { });
 
     if (sessionStore) {
       const metaIndex = sessionStore.sessions.findIndex(s => s.id === currentSession!.id);
       if (metaIndex >= 0) {
         sessionStore.sessions[metaIndex] = sessionToMetadata(currentSession);
       }
-      saveSessionStore(sessionStore).catch(() => {});
+      saveSessionStore(sessionStore).catch(() => { });
     }
 
     if (chatView) {

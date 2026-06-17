@@ -2,6 +2,9 @@ import { defineHook, HookEvent, HookDecision } from '@open1s/ezbos';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ToolPermissionConfig, getToolMetadata, getBashIntent } from './toolPermissions.js';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('tool-permission');
 
 let approvalCounter = 0;
 let approvalPublisher: any = null;
@@ -19,7 +22,7 @@ function wsToolKey(toolName: string): string {
 const HIDDEN_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'load_skill',
   'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
-  'todoread',
+  'todoread','todowrite', 'memory_search', 'memory_store',
 ]);
 
 let onEmit: ((type: string, data: any) => void) | null = null;
@@ -72,7 +75,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
         onEmit('error', { error: rejectMsg });
         onEmit('token', { tokenType: 'ToolResult', text: rejectMsg, toolId: 'denied', status: 'error' });
       } else {
-        process.stderr.write(`[tool-permission] ${rejectMsg}\n`);
+        log.warn({ toolName }, 'PERMISSION_DENIED');
       }
       return HookDecision.Abort;
     }
@@ -80,23 +83,23 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
     if (perm === 'ask') {
       // Skip dialog if remembered for this project
       if (rememberedApprovals.has(wsToolKey(toolName))) {
-        process.stderr.write(`[approval] remembered: ${toolName}, auto-approving\n`);
+        log.trace({ toolName }, 'remembered approval, auto-approving');
         return HookDecision.Continue;
       }
 
-      process.stderr.write(`[approval] beforeHook: perm=ask, busInitialized=${busInitialized}, publisher=${!!approvalPublisher}, subscriber=${!!approvalSubscriber}\n`);
+      log.trace({ toolName, busInitialized, hasPublisher: !!approvalPublisher, hasSubscriber: !!approvalSubscriber }, 'beforeHook: ask permission');
       if (!busInitialized || !approvalPublisher || !approvalSubscriber) {
         const rejectMsg = `Tool "${toolName}" blocked: approval bus not available`;
         if (onEmit) {
           onEmit('error', { error: rejectMsg });
         } else {
-          process.stderr.write(`[tool-permission] ${rejectMsg}\n`);
+          log.warn({ toolName }, 'approval bus not available');
         }
         return HookDecision.Abort;
       }
 
       const id = `approval_${++approvalCounter}`;
-  process.stderr.write(`[tool-call] ${toolName} (${id})\n`);
+      log.trace({ toolName, id }, 'tool-call (ask)');
 
       const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
       const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;
@@ -114,17 +117,17 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       });
       emit('tool-approval-needed', { id, toolName, args, metadata, bashIntent });
 
-      process.stderr.write(`[approval] waiting for approval: id=${id}, toolName=${toolName}, pendingApprovals.size=${pendingApprovals.size}\n`);
+      log.trace({ id, toolName, pendingCount: pendingApprovals.size }, 'waiting for approval');
       const approved = await new Promise<boolean>((resolve) => {
         pendingApprovals.set(id, { resolve, timeout: undefined as unknown as NodeJS.Timeout, id, toolName });
       });
-      process.stderr.write(`[approval] got approval result: id=${id}, approved=${approved}\n`);
+      log.trace({ id, approved }, 'got approval result');
 
       return approved ? HookDecision.Continue : HookDecision.Abort;
     }
 
 const id = `auto_${++approvalCounter}`;
-  process.stderr.write(`[tool-call] ${toolName} (${id})\n`);
+  log.trace({ toolName, id }, 'tool-call (auto)');
   ctx.data.toolId = id;
   const rawArgs2 = data.tool_args || data.args || data.command || data.cmd || '';
   const autoArgs = typeof rawArgs2 === 'string' ? tryParseJson(rawArgs2) : rawArgs2;
@@ -218,26 +221,26 @@ export function cancelAllPendingApprovals(): void {
 }
 
 export async function sendApprovalResponse(id: string, approved: boolean, remember?: boolean): Promise<void> {
-  process.stderr.write(`[approval] sendApprovalResponse called: id=${id}, approved=${approved}, remember=${remember}\n`);
+  log.trace({ id, approved, remember }, 'sendApprovalResponse called');
   const entry = pendingApprovals.get(id);
   if (entry) {
-    process.stderr.write(`[approval] found pending entry, resolving with ${approved}\n`);
+    log.trace({ id, approved }, 'found pending entry, resolving');
     clearTimeout(entry.timeout);
     pendingApprovals.delete(id);
     entry.resolve(approved);
     if (approved && remember) {
       rememberedApprovals.add(wsToolKey(entry.toolName));
-      process.stderr.write(`[approval] remembered ${entry.toolName} for this workspace\n`);
+      log.trace({ toolName: entry.toolName }, 'remembered for this workspace');
     }
   } else {
-    process.stderr.write(`[approval] NO pending entry found for id=${id}, pendingApprovals.size=${pendingApprovals.size}\n`);
+    log.warn({ id, pendingCount: pendingApprovals.size }, 'NO pending entry found');
   }
   if (approvalPublisher) {
-    process.stderr.write(`[approval] publishing response to bus\n`);
+    log.trace('publishing response to bus');
     await approvalPublisher.json({ id, approved, type: 'response' });
-    process.stderr.write(`[approval] published\n`);
+    log.trace('published');
   } else {
-    process.stderr.write(`[approval] NO approvalPublisher available\n`);
+    log.warn({ id }, 'NO approvalPublisher available');
   }
 }
 
