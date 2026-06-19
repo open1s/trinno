@@ -75,23 +75,42 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
   return safe;
 }
 
+// Track all spawned worker PIDs so cleanup is reliable regardless of argv
+const spawnedWorkerPids = new Set<number>();
+
 function spawnWorker(): childProcess.ChildProcess {
   const workerPath = process.env.TRINNO_WORKER_PATH
     || nodePath.resolve(__dirname, '..', '..', 'dist', 'bos', 'worker.js');
-  return childProcess.spawn('node', [workerPath], {
+  const proc = childProcess.spawn(process.execPath, [workerPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: sanitizeEnv(),
   });
+  if (proc.pid !== undefined) {
+    spawnedWorkerPids.add(proc.pid);
+    proc.on('exit', () => spawnedWorkerPids.delete(proc.pid!));
+    proc.on('error', () => spawnedWorkerPids.delete(proc.pid!));
+  }
+  return proc;
 }
 
-export function killOrphanedWorkers(): void {
-  try {
-    childProcess.execSync('pkill -f "dist/bos/worker\\.js" 2>/dev/null || true', { stdio: 'ignore' });
-  } catch { /* ignore */ }
+function killOrphanedWorkers(): void {
+  for (const pid of spawnedWorkerPids) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+  }
+  spawnedWorkerPids.clear();
 }
 
 async function ensureWorker(): Promise<void> {
-  if (workerProcess && workerReady) return;
+  if (workerProcess && workerReady) {
+    // Process may have exited without us noticing (no exit listener on old process).
+    // Check if it's still alive; if not, fall through to respawn.
+    if (workerProcess.exitCode === null && workerProcess.signalCode === null && !workerProcess.killed) {
+      return;
+    }
+    log.warn({ exitCode: workerProcess.exitCode, signalCode: workerProcess.signalCode, killed: workerProcess.killed }, 'bos worker dead but workerReady true — respawning');
+    workerProcess = null;
+    workerReady = false;
+  }
 
   killOrphanedWorkers();
 
@@ -104,8 +123,30 @@ async function ensureWorker(): Promise<void> {
   const proc = spawnWorker();
   workerProcess = proc;
 
+  // Detect worker exit so subsequent calls can respawn a healthy worker.
+  // Without this, a crashed/exited worker leaves workerReady=true and the
+  // message pipeline silently hangs (e.g. /compact after an unhandled error).
+  proc.on('exit', (code, signal) => {
+    log.warn({ code, signal }, 'bos worker exited');
+    if (workerProcess === proc) {
+      workerProcess = null;
+      workerReady = false;
+    }
+  });
+  proc.on('error', (err) => {
+    log.warn({ err }, 'bos worker spawn error');
+    if (workerProcess === proc) {
+      workerProcess = null;
+      workerReady = false;
+    }
+  });
+
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => resolve(), 5000);
+    const timeout = setTimeout(() => {
+      // Worker started but may have sent ready before we listened
+      workerReady = true;
+      resolve();
+    }, 5000);
     proc.stdout?.once('data', (chunk: Buffer) => {
       clearTimeout(timeout);
       const text = chunk.toString();
@@ -113,6 +154,8 @@ async function ensureWorker(): Promise<void> {
         workerReady = true;
         resolve();
       } else {
+        // First data wasn't the ready signal — still mark ready (race with worker)
+        workerReady = true;
         resolve();
       }
     });
@@ -125,7 +168,10 @@ async function ensureWorker(): Promise<void> {
     });
   });
 
-  if (workerProcess && !workerMessageHandler) {
+  // Reset workerMessageHandler on each spawn so respawned workers get the
+  // general message handler for mcp-status / lsp-status / todo-update events.
+  workerMessageHandler = null;
+  if (workerProcess) {
     let messageBuffer = '';
     workerMessageHandler = (chunk: Buffer) => {
       messageBuffer += chunk.toString();
@@ -255,9 +301,12 @@ export async function sendMessage(
             onError(msg.error);
             break;
           case 'rate-limited':
-            cleanup();
             if (currentCallbacks?.done) {
-              currentCallbacks.done({ rateLimited: true, retryAfter: msg.retryAfter, error: msg.error });
+              const doneCb = currentCallbacks.done;
+              cleanup();
+              doneCb({ rateLimited: true, retryAfter: msg.retryAfter, error: msg.error });
+            } else {
+              cleanup();
             }
             break;
           case 'insert-cell':
@@ -400,11 +449,16 @@ export async function initializeAgent(
 }
 
 export function disposeAgent(): void {
+  // Kill all tracked workers (current + any orphaned PIDs).
+  // Safe: only kills PIDs we explicitly spawned, not other VS Code instances.
+  killOrphanedWorkers();
+
   if (workerProcess) {
     try { workerProcess.kill(); } catch { /* ignore */ }
     workerProcess = null;
     workerReady = false;
   }
+
   insertStack.length = 0;
   currentCallbacks = null;
   activeDataHandler = null;

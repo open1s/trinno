@@ -680,6 +680,50 @@ export function isRateLimitedForTest(msg: string): boolean {
   return isRateLimited(msg);
 }
 
+/**
+ * Debug helper: wraps an LLM stream callback to inject mock errors.
+ *
+ * Enable via env vars:
+ *   TRINNO_MOCK_ERROR=rate_limited   — simulate rate-limit (429) with 10s retry
+ *   TRINNO_MOCK_ERROR=error           — simulate generic LLM error
+ *   TRINNO_MOCK_ERROR_AFTER=N         — inject after N tokens (default 2)
+ *   TRINNO_MOCK_ENABLE=1              — must also be set to activate (extra safety)
+ */
+function withMockInjector(
+  callback: (token: any) => void,
+  emitFn: (type: string, data: any) => void,
+  resolve: () => void,
+): (token: any) => void {
+  const mockType = process.env.TRINNO_MOCK_ERROR || '';
+  const enabled = process.env.TRINNO_MOCK_ENABLE === '1';
+
+  if (!mockType || !enabled) return callback;
+  const after = parseInt(process.env.TRINNO_MOCK_ERROR_AFTER || '2', 10);
+  let count = 0;
+  let done = false;
+
+  log.info('[MOCK] LLM mock injector enabled — type=%s after=%d', mockType, after);
+
+  return (token: any) => {
+    if (done) return;
+    if (token.type === 'Stop' || token.type === 'Done' || token.type === 'Error') return;
+    count++;
+    if (count < after) {
+      callback(token);
+      return;
+    }
+    done = true;
+    log.info('[MOCK] injecting mock LLM error at token #%d (type=%s)', count, mockType);
+
+    if (mockType === 'rate_limited') {
+      emitFn('rate-limited', { retryAfter: 10, error: '[MOCK] Simulated rate limit (429) for debugging' });
+    } else {
+      emitFn('error', { error: '[MOCK] Simulated LLM error for debugging' });
+    }
+    resolve();
+  };
+}
+
 function handleCancel(): void {
   abortController?.abort();
   cancelAllPendingApprovals();
@@ -755,7 +799,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## Phased Research Philosophy',
     '- Research is incremental. Complete one phase before moving to the next.',
-    '- 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent.',
+    '- 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent  → 08_TData.',
     '- Each phase writes its output to the corresponding phase directory. Do not skip phases.',
     '- If context grows large, suggest compaction (/compact) instead of summarizing yourself.',
     '',
@@ -824,7 +868,8 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- 05_Deliver — paper, report drafts',
     '- 06_References — downloaded papers + library.json',
     '- 07_Patent — patent drafts',
-    '- 08_Data — experimental data, code snippets, etc.',
+    '- 08_TData — experimental data, code snippets, etc.',
+    'Add README.md to each phase dir with instructions. Always write results to files in the correct phase dir.',
     'Check phase dirs before searching; write results back after analysis. Each produced JSON must include importance weights and evidence scores.',
     '',
     '## Multilingual + PubScholar',
@@ -1082,6 +1127,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 );
               });
             } else {
+              abortController = new AbortController();
               await handleChatWithEmit(
                 msg.text,
                 msg.context ?? null,
@@ -1089,7 +1135,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 msg.apiKey,
                 msg.systemSummary,
                 emit,
-                abortController?.signal ?? new AbortController().signal,
+                abortController.signal,
                 msg.sessionId,
                 msg.brainOsSession,
                 msg.skillContent,
@@ -1437,7 +1483,18 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     log.trace({ phase: 'stream-start', elapsedMs: Date.now() - phaseT0, isNew }, '[PHASE] starting LLM stream');
     let firstTokenLogged = false;
     await new Promise<void>((resolve, reject) => {
-      started.stream(userMessage, (token: any) => {
+      // Resolve the promise immediately when the abort signal fires (e.g. user
+      // presses ESC or clicks Cancel).  The stream callback can't be relied
+      // on to fire when the LLM is stalled — without this listener the
+      // drainMsgQueue blocks forever and /compact / new messages hang.
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          started.stop().catch(() => { });
+          resolve();
+        }, { once: true });
+      }
+
+      started.stream(userMessage, withMockInjector((token: any) => {
         if (signal.aborted) {
           started.stop().catch(() => { });
           resolve();
@@ -1528,7 +1585,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
             resolve();
             break;
         }
-      });
+      }, localEmit, resolve));
     });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

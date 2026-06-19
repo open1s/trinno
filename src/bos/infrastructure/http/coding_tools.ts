@@ -136,14 +136,15 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
 
   const editFile = defineTool(
     'edit_file',
-    'Apply an edit to a file. Supports exact search-and-replace (using oldString) or line-range replacement (using startLine and endLine).',
+    'Sed-like file edit. Line-range mode (startLine+endLine): replace entire range, or if oldString given, find/replace only within those lines. No-range mode (oldString only): global find/replace. Append mode (append=true): append newString to end of file.',
   )
     .required('filePath', 'string', 'Path to the file (relative to workspace root)')
-    .required('newString', 'string', 'Text to replace with')
-    .param('oldString', 'string', 'Exact text to find and replace (if not using line numbers)')
-    .param('startLine', 'number', 'Starting line number for line-based replace (1-indexed)')
-    .param('endLine', 'number', 'Ending line number for line-based replace (1-indexed, inclusive)')
-    .param('replaceAll', 'boolean', 'Replace all occurrences of oldString (default: false)')
+    .required('newString', 'string', 'Text to replace with, or content to append when append=true')
+    .param('oldString', 'string', 'Exact text to find (required if startLine/endLine not given)')
+    .param('startLine', 'number', 'Start line for range-scoped edit (1-indexed)')
+    .param('endLine', 'number', 'End line for range-scoped edit (1-indexed, inclusive)')
+    .param('replaceAll', 'boolean', 'Replace all occurrences within scope (default: false)')
+    .param('append', 'boolean', 'Append newString to end of file (default: false)')
     .handle((args) => {
       try {
         const filePath = path.resolve(workspaceRoot, args.filePath);
@@ -156,6 +157,14 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (!fs.existsSync(filePath)) {
           return err(`File not found: ${args.filePath}`);
         }
+
+        if (args.append) {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          const separator = content.endsWith('\n') ? '' : '\n';
+          fs.writeFileSync(filePath, content + separator + args.newString, 'utf-8');
+          return ok({ filePath: args.filePath, action: 'append' });
+        }
+
         const content = fs.readFileSync(filePath, 'utf-8');
 
         if (args.startLine !== undefined && args.endLine !== undefined) {
@@ -165,6 +174,21 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           if (start < 0 || end > lines.length || start > end) {
             return err(`Invalid line range: ${args.startLine}-${args.endLine} (file has ${lines.length} lines)`);
           }
+          if (args.oldString !== undefined) {
+            // sed-like: search oldString within range only
+            const rangeContent = lines.slice(start, end).join('\n');
+            if (!rangeContent.includes(args.oldString)) {
+              return err(`oldString not found in lines ${args.startLine}-${args.endLine}`);
+            }
+            const replaced = args.replaceAll
+              ? rangeContent.split(args.oldString).join(args.newString)
+              : rangeContent.replace(args.oldString, args.newString);
+            const replacedLines = replaced.split('\n');
+            lines.splice(start, end - start, ...replacedLines);
+            fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+            return ok({ filePath: args.filePath, action: 'sed_replace', lines: `${args.startLine}-${args.endLine}`, occurrences: args.replaceAll ? 'all' : 'first' });
+          }
+          // Replace entire range
           const newLines = args.newString === '' ? [] : args.newString.split('\n');
           lines.splice(start, end - start, ...newLines);
           fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
@@ -179,7 +203,7 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           fs.writeFileSync(filePath, newContent, 'utf-8');
           return ok({ filePath: args.filePath, replaced: args.replaceAll ? 'all' : 'first' });
         } else {
-          return err('Must provide either oldString or both startLine and endLine.');
+          return err('Must provide oldString, startLine+endLine (+ optional oldString for sed-like find/replace), or append=true.');
         }
       } catch (e: any) {
         return err(e.message);

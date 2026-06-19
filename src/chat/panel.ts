@@ -816,6 +816,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
   } else if (msg.type === 'tool-approval') {
     sendToolApproval(msg.id, msg.approved, msg.remember);
   } else if (msg.type === 'rate-limited-retry') {
+    log.info({ messageId: msg.messageId }, '[RATE-LIMIT] webview clicked Retry Now — check rateLimitRetryCallback exists and call it');
     handleRateLimitedRetry();
   } else if (msg.type === 'write-topic-confirm') {
     const topic = msg.topic.trim();
@@ -1258,7 +1259,7 @@ function handleRateLimited(retryAfter: number, error: string): void {
   void error;
   if (!currentStreamingId) return;
   const messageId = currentStreamingId;
-  const seconds = Math.max(1, Math.round(retryAfter));
+  const seconds = Math.max(1, Math.round(retryAfter)) * Math.pow(2, rateLimitRetryCount);
 
   if (chatView) {
     chatView.webview.postMessage({
@@ -1291,8 +1292,11 @@ function handleRateLimited(retryAfter: number, error: string): void {
     if (remaining <= 0) {
       if (rateLimitTimer) clearInterval(rateLimitTimer);
       rateLimitTimer = null;
-      // Auto-resume queue if this was a queued message
-      if (currentQueueId && dequeuedItemText) {
+      // Auto-retry for both queued and direct messages
+      log.trace({ remaining, hasCallback: !!rateLimitRetryCallback, hasQueueId: !!currentQueueId, hasDequeuedText: !!dequeuedItemText }, '[RATE-LIMIT] countdown expired');
+      if (rateLimitRetryCallback) {
+        rateLimitRetryCallback();
+      } else if (currentQueueId && dequeuedItemText) {
         finalizeCurrentMessage();
         // Re-add to extension queue (was removed in processQueue)
         messageQueue.push({
@@ -1340,9 +1344,32 @@ function handleRateLimited(retryAfter: number, error: string): void {
       return;
     }
     rateLimitRetryCount++;
-    if (chatView && currentSession && isGenerating) {
+    log.trace({ retryCount: rateLimitRetryCount, hasQueueId: !!currentQueueId, hasDequeuedText: !!dequeuedItemText, hasLastText: !!lastUserMessageText, hasChatView: !!chatView, hasSession: !!currentSession }, '[RATE-LIMIT] retry callback proceeding');
+
+    if (!chatView || !currentSession) return;
+
+    if (currentQueueId && dequeuedItemText) {
+      // Queued message: re-add to queue and drain
       finalizeCurrentMessage();
-      handleUserMessage(lastUserMessageText || '');
+      messageQueue.push({
+        queueId: currentQueueId,
+        text: dequeuedItemText,
+        timestamp: Date.now(),
+        status: 'queued',
+      });
+      chatView.webview.postMessage({
+        type: 'queue-status-change',
+        queueId: currentQueueId,
+        status: 'queued',
+      } as any);
+      currentQueueId = null;
+      dequeuedItemText = null;
+      setImmediate(() => processQueue());
+    } else if (lastUserMessageText) {
+      // Direct message: resend — don't set isGenerating=true here,
+      // handleUserMessage would see it and *queue* instead of send.
+      finalizeCurrentMessage();
+      handleUserMessage(lastUserMessageText);
     }
   };
 }
@@ -1354,6 +1381,7 @@ function resetRateLimitRetries(): void {
 let lastUserMessageText: string = '';
 
 function handleRateLimitedRetry(): void {
+  log.trace({ hasCallback: !!rateLimitRetryCallback, retryCount: rateLimitRetryCount }, '[RATE-LIMIT] handleRateLimitedRetry called');
   if (rateLimitRetryCallback) {
     rateLimitRetryCallback();
     rateLimitRetryCallback = null;
@@ -1361,8 +1389,6 @@ function handleRateLimitedRetry(): void {
 }
 
 let _autoCompactInProgress = false;
-let _lastCumulativeInput = 0;
-let _lastCumulativeOutput = 0;
 
 function isTrpWorkspaceRoot(p: string): boolean {
   const phaseDirs = ['01_Discover', '02_TRL', '03_Analyze', '04_Synthesize', '05_Deliver', '06_References', '07_Patent'];
@@ -1575,7 +1601,6 @@ async function handleUserMessage(text: string): Promise<void> {
     currentStreamingMsg = null;
   }
 
-  resetRateLimitRetries();
   lastUserMessageText = text;
 
   const sessionMatch = text.match(/^\/session\s*(.*)$/i);
@@ -1917,6 +1942,7 @@ async function handleUserMessage(text: string): Promise<void> {
         handleRateLimited(doneData.retryAfter ?? 60, doneData.error ?? '');
         return;
       }
+      rateLimitRetryCount = 0;
       if (currentQueueId) markQueueCompleted(currentQueueId);
       currentQueueId = null;
       dequeuedItemText = null;

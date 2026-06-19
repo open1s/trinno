@@ -1806,6 +1806,7 @@
     messageState.toolLog = [];
 
     currentMessageEl = document.createElement('div');
+    currentMessageEl.id = messageId;
     currentMessageEl.className = 'message assistant';
 
     const reasoningSection = document.createElement('div');
@@ -2227,9 +2228,16 @@ window.__denyTool = function(id) {
       <div class="rate-limited-text">
         <div class="rate-limited-title">Rate Limited (429)</div>
         <div class="rate-limited-countdown">Retrying in <span id="rate-countdown-${messageId}">${retryAfter}</span>s…</div>
-      </div>
-      <button class="rate-limited-retry-btn" onclick="vscode.postMessage({ type: 'rate-limited-retry', messageId: '${messageId}' })">Retry Now</button>
-    `;
+      </div>`;
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'rate-limited-retry-btn';
+    retryBtn.textContent = 'Retry Now';
+    retryBtn.addEventListener('click', () => {
+      console.log('[WEBVIEW] Retry Now clicked', messageId);
+      wrapper.style.display = 'none';
+      vscode.postMessage({ type: 'rate-limited-retry', messageId });
+    });
+    wrapper.appendChild(retryBtn);
     contentEl.appendChild(wrapper);
     scrollToBottom();
   }
