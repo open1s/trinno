@@ -93,7 +93,7 @@ function spawnWorker(): childProcess.ChildProcess {
   return proc;
 }
 
-function killOrphanedWorkers(): void {
+export function killOrphanedWorkers(): void {
   for (const pid of spawnedWorkerPids) {
     try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
   }
