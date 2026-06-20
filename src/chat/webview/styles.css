@@ -2203,3 +2203,37 @@ body {
   outline: 1px solid #e74c3c !important;
   outline-offset: 2px;
 }
+
+.copy-tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: #275bb4;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 12px 12px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  transform: translate(-50%, -100%) scale(0.85);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 1000;
+  white-space: nowrap;
+}
+.copy-tooltip.visible {
+  opacity: 1;
+  transform: translate(-50%, -100%) scale(1);
+}
+
+.copy-tooltip::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid #2d2d2d;
+}

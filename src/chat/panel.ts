@@ -194,7 +194,7 @@ function formatSkillMessage(skill: SkillInfo, args: string): string {
 }
 
 const staticSlashCommands = [
-  { name: 'init', description: 'Initialize a Trinno workspace (creates 7 phase folders + README)' },
+  { name: 'init', description: 'Initialize a Trinno workspace (creates 8 phase folders + READMEs + AGENTS.md)' },
   { name: 'session', description: 'Manage sessions: list, select, delete, rename' },
   { name: 'new', description: 'Create a new chat session' },
   { name: 'compact', description: 'Compact current session: summarize old messages, reduce context' },

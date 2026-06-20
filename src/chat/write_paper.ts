@@ -366,7 +366,8 @@ export function buildPaperPrompt(title: string, data: ResearchData): string {
   sections.push('2. 使用 PEST + SWOT + 5W1H + PICO + PRISMA 框架组织背景、证据、PRISMA 流程');
   sections.push('3. 输出结构：摘要 → 引言 → 矛盾分析 → 物场分析 → 解决方案 → S 曲线 → 路线图 → TRL → 风险与≤3 天可执行验证 → 结论 → 参考文献');
   sections.push('4. 内容专业、逻辑清晰、学术规范；evidence 行内注明 score/weight；decision factors 与 risks 显式列出');
-  sections.push('5. 不要编造参数编号、案例、数据；不确定时调用 websearch\n');
+  sections.push('5. 不要编造参数编号、案例、数据；不确定时调用 websearch');
+  sections.push('6. 所有汉字必须为有效 UTF-8，不可出现乱码、缺字或编码错误\n');
 
   if (data.synthesisMd) {
     sections.push('## 综合研究报告\n' + data.synthesisMd + '\n');

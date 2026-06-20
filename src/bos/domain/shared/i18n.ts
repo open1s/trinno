@@ -717,8 +717,8 @@ export function svgLabel(key: string, lang: Language): string {
 
 export function getLanguagePrompt(lang: Language): string {
   return lang === 'zh'
-    ? '请用中文回答。'
-    : 'Please respond in English.';
+    ? '请用中文回答。所有汉字必须为有效 UTF-8，不可出现乱码、缺字或编码错误。'
+    : 'Please respond in English. All characters must be valid UTF-8 — no garbled text, no mojibake.';
 }
 
 export function progressMsg(key: string, lang: Language): string {

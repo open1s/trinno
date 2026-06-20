@@ -785,7 +785,7 @@ function loadSoulMd(): string {
 
 function buildMethodologyPrompt(slashCommandsList: string): string {
   const soul = loadSoulMd();
-  const soulSection = soul ? `\n\n## SOUL (Core Guidelines)\n\n${soul}\n\n` : '';
+  const soulSection = soul ? `\n\n## SOUL (Must Follow,Must Follow)\n\n${soul}\n\n` : '';
   return soulSection + [
     '## Persona Anchor (7-Phase Research Pipeline)',
     '- You operate inside a 7-phase pipeline: Problem → Context → Evidence → Modeling → TRIZ → Validation → Execution',
@@ -796,6 +796,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- Use tools whenever possible; ask user only when essential info is missing',
     '- Think step by step, break complex problems into smaller parts',
     '- When uncertain, use websearch first',
+    '- When need user clarification, ask specific, concise questions,give choices for selection. Avoid open-ended questions.',
     '',
     '## Phased Research Philosophy',
     '- Research is incremental. Complete one phase before moving to the next.',
@@ -875,6 +876,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '## Multilingual + PubScholar',
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
+    '- Output language follows user input language — if user writes in Chinese, respond in Chinese; if English, respond in English. Never mix languages in the same output. Ensure all Chinese characters are valid UTF-8 — no garbled text, no partial characters, no mojibake.',
     '',
     '## Writing Papers/Patents (use /patent or /write paper, LLM self-directs with skills, plan via todos, write incrementally, verify each step)',
     '- When writing is requested, the panel injects a skill (paper-writer or patent-writer); load via load_skill.',
@@ -882,6 +884,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic. Ask for the topic.',
     '- Target artifact: 7-phase paper with contradiction → solution mapping, importance-weighted KPIs, evidence scores, decision factors, risks, ≤3-day validation.',
     '- Verify each section before marking completed.',
+    '- Aways build typst output file using \`typst compile\`, then fix errors',
     '',
     '## File Operations',
     'read_file first, never guess. For large files, paginate with offset/limit (200+ lines per chunk). edit_file for any change (refine/fix/improve/append). write_file only for brand-new files. Every file modification MUST use edit tool — text output is never a substitute for writing to disk.',
@@ -1229,7 +1232,7 @@ process.stdin.on('data', (chunk: Buffer) => {
             const paperWorkflowPrompt = [
               'You are Research Master writing a paper. Drive the 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) end-to-end and produce a copy-ready artifact via tools only.',
               '1. Use TRIZ tools (triz_contradiction, triz_principles, triz_s_curve, triz_search, websearch) to gather Evidence and decision factors — never fabricate',
-              '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst,Dont mix markdown, structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
+              '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst, Dont mix markdown. All Chinese must be valid UTF-8 — no garbled text, no mojibake, no partial characters. Structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
               '3. Importance-weight KPIs, score evidence, surface decision factors, contradictions→solutions, risks, ≤3-day executable validation steps',
               '4. ≤4 lines per text response — only short confirmation after writing; never repeat the paper content in chat',
               '5. No fabricated parameter numbers, no preamble ("我将为您撰写…"), ask user only when essential info is missing',

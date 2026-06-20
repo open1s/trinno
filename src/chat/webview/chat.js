@@ -72,7 +72,7 @@
   const vscode = acquireVsCodeApi();
 
   let slashCommands = [
-    { name: 'init', description: 'Initialize a Trinno workspace (creates 7 phase folders + README)' },
+    { name: 'init', description: 'Initialize a Trinno workspace (creates 8 phase folders + READMEs + AGENTS.md)' },
     { name: 'session', description: 'Manage sessions: list, select, delete, rename' },
     { name: 'new', description: 'Create a new chat session' },
     { name: 'compact', description: 'Compact current session: summarize old messages, reduce context' },
@@ -458,36 +458,33 @@
     }
   }
 
-  function handleCopyOnSelect() {
+  function handleCopyOnSelect(e) {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed) return;
 
     const selectedText = selection.toString().trim();
     if (!selectedText) return;
 
-    const range = selection.getRangeAt(0);
-    const container = range.commonAncestorContainer;
-    const msgEl = container.nodeType === 1 ? container : container.parentElement;
-    const messageDiv = msgEl?.closest?.('.message');
+    navigator.clipboard.writeText(selectedText).catch(() => {});
+    showCopyTooltip(e.clientX, e.clientY);
+  }
 
-    if (messageDiv) {
-      const contentEl = messageDiv.querySelector('.message-content');
-      const reasoningEl = messageDiv.querySelector('.reasoning-content');
-      let fullText = '';
+  function showCopyTooltip(x, y) {
+    const existing = document.querySelector('.copy-tooltip');
+    if (existing) existing.remove();
 
-      if (reasoningEl && reasoningEl.textContent.trim()) {
-        fullText += `## Thinking\n${reasoningEl.textContent.trim()}\n\n`;
-      }
-      if (contentEl) {
-        fullText += contentEl.textContent.trim();
-      }
+    const tip = document.createElement('div');
+    tip.className = 'copy-tooltip';
+    tip.textContent = 'Copied to clipboard';
+    tip.style.left = (x+60) + 'px';
+    tip.style.top = (y - 100) + 'px';
+    document.body.appendChild(tip);
 
-      if (fullText) {
-        navigator.clipboard.writeText(fullText).catch(() => {});
-      }
-    } else {
-      navigator.clipboard.writeText(selectedText).catch(() => {});
-    }
+    requestAnimationFrame(() => tip.classList.add('visible'));
+    setTimeout(() => {
+      tip.classList.remove('visible');
+      setTimeout(() => tip.remove(), 200);
+    }, 1200);
   }
 
   function handleInputKeydown(e) {
