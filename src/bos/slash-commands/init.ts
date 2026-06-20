@@ -11,187 +11,265 @@ const PHASE_DIRS = [
   '05_Deliver',
   '06_References',
   '07_Patent',
+  '08_TData',
 ] as const;
 
 type PhaseDir = typeof PHASE_DIRS[number];
 
-interface PhaseInfo {
-  dir: PhaseDir;
+interface PhaseReadmeContent {
   title: string;
   purpose: string;
-  bullets: string[];
-  commands: string;
-  methodology: string[];
-  antiPatterns: string[];
+  workflow: string[];
+  outputFiles: string[];
+  extraTitle?: string;
+  extraContent: string[];
+  notes: string[];
 }
 
-const PHASE_INFO: Record<PhaseDir, PhaseInfo> = {
+const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
   '01_Discover': {
-    dir: '01_Discover',
-    title: '01_Discover — Exploration & problem framing',
-    purpose: 'Free-form exploration. Everything you chat about with the AI before you commit to a structured analysis lands here.',
-    bullets: [
-      'Free-form notes, scope discussions, brainstorming with the AI.',
-      'Problem statement drafts, stakeholder maps, raw interview snippets.',
-      'Anything you want to remember from early conversations.',
+    title: '01_Discover — 文献检索与发现',
+    purpose: '通过多源检索收集领域相关文献（论文、专利、技术报告），建立证据基础。',
+    workflow: [
+      '使用 `scansci_pdf_search` / `triz_search` 检索相关文献',
+      '使用 `papers_download` / `scansci_pdf_batch_download` 下载全文',
+      '将下载的文献保存至 `../06_References/` 目录',
+      '更新 `../06_References/library.json` 记录元数据',
     ],
-    commands: 'No slash command writes here directly. Use the Trinno chat panel; the AI auto-saves key points.',
-    methodology: [
-      '**Frame before solving.** Write a one-paragraph problem statement: who has the pain, what is the cost of inaction, and what does "solved" look like. If you can\'t fill all three, you don\'t yet have a problem.',
-      '**Talk to 3+ stakeholders** with different lenses (operator, regulator, payer). Disagreements between them are usually the actual problem.',
-      '**Read 1 paper from each adjacent field.** A solution in aerospace, biology, or software often ports over. The most original ideas are usually importations, not inventions.',
-      '**Capture the "why now?"** What changed in the last 2 years (cost curve, regulation, new theory) that makes this problem solvable today? Without that, the timing is wrong.',
-      '**Time-box.** Set a hard deadline (usually 1–3 days of focused work) to move from Discover to Analyze. Endless exploration is a sign of avoidance, not depth.',
-      '**Keep a question log.** Every open question goes here with an owner. Review the log before moving to the next phase — every unanswered question is a risk.',
+    outputFiles: [
+      '`papers.json` — 论文检索结果（含标题、作者、年份、DOI、重要性评分）',
+      '`patents.json` — 专利检索结果',
+      '`search_queries.md` — 本次检索使用的查询词（便于复现）',
     ],
-    antiPatterns: [
-      'Anchoring on the first solution you hear. The first idea is rarely the best.',
-      'Treating "I\'d buy that" as validation. Customers are bad at predicting their own behavior; ask about past spend.',
-      'Skipping the failure-mode brainstorm. If you can\'t name 3 ways the idea could fail, you don\'t understand it.',
+    extraTitle: '重要性评分标准',
+    extraContent: [
+      '| 分数 | 含义 |',
+      '|------|------|',
+      '| 0.9–1.0 | 核心文献，直接相关方法/理论 |',
+      '| 0.7–0.8 | 密切相关，提供重要背景 |',
+      '| 0.5–0.6 | 中度相关，辅助理解 |',
+      '| < 0.5 | 边缘相关，仅作参考 |',
+    ],
+    notes: [
+      '中英文检索词并行，提高覆盖率',
+      '优先下载开放获取（OA）论文',
+      '专利检索使用 `triz_search` target=patents',
     ],
   },
   '02_TRL': {
-    dir: '02_TRL',
-    title: '02_TRL — Maturity & S-curve',
-    purpose: 'Technology Readiness Level (TRL) assessments and S-curve positioning for your technology and adjacent ones.',
-    bullets: [
-      'One file per technology, containing the S-curve chart, stage detection, and recommendations.',
-      'Use to argue why your topic is on a growth, maturity, or decline curve.',
-      'Helps decide whether to invest in the current S-curve or pivot to a next-gen one.',
+    title: '02_TRL — 技术成熟度评估',
+    purpose: '评估目标技术在 S-curve 中的位置，判断当前发展阶段与潜力。',
+    workflow: [
+      '使用 `triz_s_curve` 分析技术演进曲线',
+      '填写 `trl_assessment.json` 评估技术成熟度等级（TRL 1-9）',
+      '结合文献证据确定技术所处阶段',
     ],
-    commands: '`/s-curve "<topic>" <param> <TRL>` — one file per run, named `s_curve_<topic>_<timestamp>.json`.',
-    methodology: [
-      '**Use the NASA TRL scale (1–9) consistently.** 1=basic principles observed, 3=proof of concept, 6=demo in relevant environment, 9=proven in operational environment. Resist the urge to inflate; reviewers can tell.',
-      '**Pick the right metric.** The metric on the y-axis must be the one the field actually optimizes (e.g., Wh/kg for batteries, $/Mbps for telecom, MTBF for storage). Convenience metrics lie.',
-      '**Plot at least 5 historical data points.** Two points is a line, not a curve. Use peer-reviewed data, patents, or industry reports — not vendor decks.',
-      '**Look for the "S" inflection.** A logistic curve has 4 stages: embryonic, growth, maturity, decline. The crossover between growth→maturity is where ROI plummets for new entrants.',
-      '**Always compare to the next-gen S-curve.** The dominant question is "is this S1 or already-S2?" — incumbents on a dying S1 lose to challengers on a young S2.',
-      '**Re-assess every 6 months.** TRL claims decay. A 2023 TRL 6 is not a 2025 TRL 6 — the field has moved.',
+    outputFiles: [
+      '`trl_assessment.json` — TRL 评估结果与依据',
+      '`s_curve.json` — S-curve 数据点与技术阶段标注',
     ],
-    antiPatterns: [
-      'Letting proponents set the TRL. The technology owner always rates higher than the independent assessor.',
-      'Confusing engineering maturity with market maturity. A tech can be TRL 9 and still commercially unviable.',
-      'Using the same metric across technologies. Comparing batteries by Wh/kg and motors by RPM is meaningless.',
+    extraTitle: 'TRL 定义速查',
+    extraContent: [
+      '| 等级 | 阶段 | 说明 |',
+      '|------|------|------|',
+      '| TRL 1–3 | 基础研究 | 观察到原理，提出概念，实验验证 |',
+      '| TRL 4–6 | 开发验证 | 实验室验证，原型演示，真实环境测试 |',
+      '| TRL 7–9 | 商业化 | 系统原型，示范系统，实际运行 |',
+    ],
+    notes: [
+      'S-curve 数据点需标注年份 + 性能指标（如效率、成本、精度）',
+      'TRL 评估需引用文献中的证据',
     ],
   },
   '03_Analyze': {
-    dir: '03_Analyze',
-    title: '03_Analyze — Contradictions, ideality, Su-Field',
-    purpose: 'Structured TRIZ analysis artifacts. The three core techniques for finding the root cause of a problem.',
-    bullets: [
-      '**Contradictions** — technical (`improving` vs `worsening` parameter) and physical (one part needs two opposing states).',
-      '**Ideality** — score Benefits / (Costs + Harms); track dominant factor and confidence.',
-      '**Su-Field** — Substance-Field decomposition with the 76 standard solutions for harmful / insufficient / excessive / complete models.',
+    title: '03_Analyze — 矛盾分析与瓶颈识别',
+    purpose: '从文献和评估结果中提炼技术矛盾、物理矛盾与关键瓶颈。',
+    workflow: [
+      '使用 `triz_contradiction` 分析技术矛盾（改善参数 vs 恶化参数）',
+      '使用 `triz_su_field` 进行 Su-Field 分析',
+      '汇总瓶颈到 `bottlenecks.json`',
+      '将矛盾记录到 `contradictions.json`',
     ],
-    commands: '`/contradiction <i> vs <j> [desc]` · `/ideality benefits:… costs:… harms:…` · `/su-field <s1> <s2> <field> [type]`',
-    methodology: [
-      '**Start with contradictions, not solutions.** If you can\'t state the contradiction, you don\'t have a problem — you have a complaint.',
-      '**Distinguish technical vs physical.** Technical = two parameters trade off (e.g., weight vs strength). Physical = one part must have two opposing properties (e.g., rigid AND flexible in the same region). The 39 parameters only handle technical — physical needs the separation-in-time/space principles.',
-      '**Score ideality with numbers, not adjectives.** "Heavy" → weight in kg; "expensive" → cost in $. Adjectives hide what you can\'t actually measure.',
-      '**Be brutal about harms.** Every solution has side effects. If the harm list is empty, you haven\'t thought hard enough.',
-      '**Build the complete Su-Field first.** A working system has S1 (tool), S2 (object), F (field). If you can\'t draw all three, the model is incomplete — fix that before adding "harmful" or "insufficient".',
-      '**Generate at least 3 candidate solutions per problem.** Quantity breeds quality; the third idea is usually better than the first.',
+    outputFiles: [
+      '`contradictions.json` — 技术矛盾与物理矛盾列表',
+      '`su_field_analysis.json` — Su-Field 模型分析',
+      '`bottlenecks.json` — 关键技术瓶颈（按重要性排序）',
     ],
-    antiPatterns: [
-      'Treating "no contradiction found" as success. Often it means the problem is under-specified — dig deeper.',
-      'Skipping the harm list to make a solution look better. The ideality score will punish you anyway.',
-      'Picking one inventive principle from the matrix and stopping. The matrix is a starting set, not the answer.',
+    extraTitle: '矛盾记录格式',
+    extraContent: [
+      '```json',
+      '{',
+      '  "id": "TC-001",',
+      '  "type": "technical|physical",',
+      '  "improvingParameter": 27,  // TRIZ 参数编号',
+      '  "worseningParameter": 5,',
+      '  "description": "矛盾描述",',
+      '  "evidence": ["文献引用"],',
+      '  "importance": 0.9',
+      '}',
+      '```',
+    ],
+    notes: [
+      '每条矛盾需附重要性权重（0–1）',
+      '技术矛盾使用 TRIZ 39 参数；物理矛盾使用分离原理',
+      '瓶颈分析需结合 TRL 阶段判断优先级',
     ],
   },
   '04_Synthesize': {
-    dir: '04_Synthesize',
-    title: '04_Synthesize — Inventive principles & solutions',
-    purpose: 'Generated solution candidates. Outputs from the principle engine and synthesis tools.',
-    bullets: [
-      '40 TRIZ inventive principles — search by keyword or browse full list.',
-      'Solution candidates generated from contradiction analysis.',
-      'Notes on which principle fits the current problem and why.',
+    title: '04_Synthesize — 解决方案合成与路线图',
+    purpose: '基于矛盾分析，应用 TRIZ inventive principles 生成解决方案，制定技术路线图。',
+    workflow: [
+      '对每个矛盾应用 `triz_contradiction` action=analyze 获取 inventive principles',
+      '使用 `triz_ideality` 评估方案理想度',
+      '汇总解决方案到 `solutions.json`',
+      '制定 roadmap.json（短期/中期/长期任务）',
     ],
-    commands: '`/principles search <keyword>` · `/principles list` · `/principles <number>`',
-    methodology: [
-      '**Read the full principle, not just the name.** "Segmentation" and "Taking out" look similar but solve different problems. Skim 1–2 examples per principle to see if it fits.',
-      '**Combine 2–3 principles.** Most real innovations use 2–3 inventive principles together (e.g., segmentation + dynamization). Single-principle solutions tend to be incremental.',
-      '**Generate broadly before evaluating.** Make 5–10 candidates first; kill them in a later phase. Filtering while generating kills creativity.',
-      '**Map each candidate back to the contradiction it solves.** If a candidate doesn\'t address a contradiction you named, it\'s a different idea — note it separately or drop it.',
-      '**Prefer principles that are sub-system local.** Changes confined to one component are easier to prototype and less risky than whole-architecture changes.',
-      '**Use the AI to brainstorm at the sub-principle level.** Once you\'ve picked a principle, ask "what are 5 ways to apply segmentation here?" — that\'s where the real novelty lives.',
+    outputFiles: [
+      '`solutions.json` — 解决方案列表（含原理映射、验证计划）',
+      '`principles_applied.json` — 各矛盾应用的 TRIZ 原理',
+      '`trends.json` — 技术趋势分析',
+      '`roadmap.json` — 研发路线图（≤3天可执行任务优先）',
     ],
-    antiPatterns: [
-      'Picking the principle with the highest matrix count. Frequency ≠ fit; the rare 4x4 hit can be the breakthrough.',
-      'Falling in love with one candidate before evaluation. Selection criteria live in 05_Deliver — don\'t pre-judge.',
-      'Treating the principle as the answer. The principle is the lever; you still have to design the actual mechanism.',
+    extraTitle: '理想度评估',
+    extraContent: [
+      '```',
+      'Ideality = Σ(Benefits) / (Σ(Costs) + Σ(Harms))',
+      '```',
+      '- 分数越高方案越优',
+      '- 需为每个 benefit/cost 赋重要性权重',
+    ],
+    notes: [
+      '每条解决方案需链接到对应的矛盾 ID',
+      '路线图任务粒度：≤3天可完成',
+      '验证计划需包含具体实验或仿真方案',
     ],
   },
   '05_Deliver': {
-    dir: '05_Deliver',
-    title: '05_Deliver — Selected concepts & prototype plans',
-    purpose: 'What survives the funnel. The chosen solutions, with rationale, risk, and a path to a working prototype.',
-    bullets: [
-      'Selected concept(s) from 04_Synthesize, with rejection notes for the rest.',
-      'Prototype plan: bill of materials, fabrication method, test plan.',
-      'Risk register: failure modes, mitigations, go/no-go criteria.',
+    title: '05_Deliver — 成果交付物',
+    purpose: '将研究分析结果整理为可交付的正式文档（论文、报告、演示文稿）。',
+    workflow: [
+      '根据需求选择输出格式（Typst 论文 / Markdown 报告）',
+      '调用 `load_skill("paper-writer")` 或 `load_skill("patent-writer")` 获取写作指引',
+      '使用 `todowrite` 规划章节，逐步撰写',
+      '交叉验证各章节与 03_Analyze、04_Synthesize 结论的一致性',
     ],
-    commands: 'No slash command writes here directly. Add files manually as you make selection decisions.',
-    methodology: [
-      '**Use a weighted Pugh matrix** to score candidates on the same criteria (cost, risk, time-to-prototype, alignment with stakeholders). Don\'t skip weighting — equal weights hide what actually matters.',
-      '**Prototype the riskiest assumption first**, not the whole concept. If the highest-risk part fails, you want to know in week 2, not month 6.',
-      '**Set go/no-go criteria up front.** Decide now what result will make you kill the concept. Post-hoc decisions are sunk-cost decisions.',
-      '**Build the cheapest prototype that answers the key question.** Foam-core mockup before CAD, CAD before CNC, CNC before injection mold. Each fidelity jump costs 10x.',
-      '**Document rejected concepts.** A "rejection journal" is gold 6 months later when the requirements change and yesterday\'s no is today\'s yes.',
-      '**Plan the test before building the prototype.** If you don\'t know how you\'ll measure success, you\'re not prototyping — you\'re tinkering.',
+    outputFiles: [
+      '`paper.typ` / `paper.md` — 论文全文',
+      '`report.md` — 技术报告',
+      '`presentation.md` — 演示文稿大纲',
     ],
-    antiPatterns: [
-      'Selecting the most innovative concept. Innovation is a cost, not a benefit — choose the lowest-risk concept that meets the success criteria.',
-      'Skipping the risk register. Every prototype has a "thing that will go wrong" — name it before it surprises you.',
-      'Building in secret. Show the prototype to a skeptic in week 1; their questions reveal gaps you\'re blind to.',
+    extraTitle: '论文结构建议（TRIZ主题）',
+    extraContent: [
+      '1. 引言（问题背景、技术现状）',
+      '2. 文献综述（01_Discover 证据）',
+      '3. 技术矛盾分析（03_Analyze）',
+      '4. TRIZ 解决方案（04_Synthesize）',
+      '5. 实验验证（08_TData 数据）',
+      '6. 结论与展望',
+    ],
+    notes: [
+      '所有结论需引用对应 phase 的 JSON 文件作为证据',
+      '矛盾→解决方案映射需清晰呈现',
+      '验证实验需包含风险评估',
     ],
   },
   '06_References': {
-    dir: '06_References',
-    title: '06_References — Literature & downloaded papers',
-    purpose: 'Everything you read, search, or download. Search results and full-text PDFs/documents.',
-    bullets: [
-      'Search-result JSON files from `/search`.',
-      'Downloaded papers (PDF, DOCX, HTML, EPUB, etc.) from `/download` and `papers_download`.',
-      'Notes pulled from the AI\'s reading of these papers.',
+    title: '06_References — 文献库',
+    purpose: '集中存储所有下载的文献全文与元数据，便于检索与引用。',
+    workflow: [
+      '01_Discover 下载文献后自动存入此目录',
+      '使用 `papers_list_downloaded` 查看已下载文献',
+      '定期更新 library.json 补充 importance 和 tags',
     ],
-    commands: '`/search <query> [limit N]` · `/download <doi|arxiv|url>` · `papers_download` tool from chat',
-    methodology: [
-      '**Snowball from one good paper.** Found a great paper? Read its references (backward) and its citing articles (forward). The 5th iteration usually finds the real breakthroughs.',
-      '**Triangulate every key claim.** 3+ independent sources for any claim that drives a design decision. One paper is a hypothesis; three is a fact.',
-      '**Skim-abstract, deep-read intro+conclusion first.** Most papers are 80% routine method, 20% insight. The insight lives in intro and conclusion.',
-      '**Read methods only if you\'ll replicate.** If you\'re using the result, not reproducing it, methods is skimmed at best.',
-      '**Check for predatory venues.** Journal name unfamiliar + no DOI prefix + email-only contact = suspect. Use the Beall\'s list or your field\'s equivalent.',
-      '**Maintain a citation graph in your head.** When you cite paper A in 03_Analyze, also note paper B that refutes A. Disagreements in the literature are research opportunities.',
+    outputFiles: [
+      '`library.json` — 文献索引（元数据 + 文件路径）',
+      '`papers/` — 论文 PDF/DOCX/EPUB',
+      '`patents/` — 专利 PDF',
+      '`supplementary/` — 补充材料',
     ],
-    antiPatterns: [
-      'Stopping at the first result. First-page Google results are usually the most-cited, not the most relevant — and citation count ≠ correctness.',
-      'Reading only abstracts. The most-cited findings are sometimes the ones the authors retracted in a footnote on page 7.',
-      'Citing without reading. AI summaries are a starting point, never the citation. Always check the primary source.',
+    extraTitle: 'library.json 格式',
+    extraContent: [
+      '```json',
+      '[',
+      '  {',
+      '    "id": "REF-001",',
+      '    "type": "paper|patent|report",',
+      '    "title": "文献标题",',
+      '    "authors": ["作者列表"],',
+      '    "year": 2024,',
+      '    "doi": "10.xxxx/xxxxx",',
+      '    "file": "papers/xxx.pdf",',
+      '    "importance": 0.9,',
+      '    "tags": ["关键词"],',
+      '    "notes": "个人备注"',
+      '  }',
+      ']',
+      '```',
+    ],
+    notes: [
+      '文件命名规范：`{第一作者}_{年份}_{关键词}.pdf`',
+      'DOI 作为唯一标识符，避免重复下载',
+      '使用 `scansci_pdf_import_bib` 从 .bib 文件批量导入',
     ],
   },
   '07_Patent': {
-    dir: '07_Patent',
-    title: '07_Patent — Patent drafts',
-    purpose: 'Patent applications built incrementally by the AI. Each section is drafted in its own turn so you can review before the next.',
-    bullets: [
-      'Claims (independent + dependent).',
-      'Abstract, background, summary, detailed description, drawings notes.',
-      'Prior-art citations pulled from 06_References.',
+    title: '07_Patent — 专利撰写',
+    purpose: '将 TRIZ 解决方案转化为专利申请文件（权利要求书 + 说明书）。',
+    workflow: [
+      '调用 `load_skill("patent-writer")` 获取专利写作指引',
+      '使用 `todowrite` 规划专利结构',
+      '撰写权利要求书（独立权利要求 + 从属权利要求）',
+      '撰写说明书（技术领域、背景、发明内容、附图说明、具体实施方式）',
     ],
-    commands: '`/patent "<topic>"` — starts a new draft. Re-run with the same topic to append the next section.',
-    methodology: [
-      '**Write claims first, then description.** Claims define what you\'re actually patenting. Everything else (abstract, background, detailed description) exists to support the claims\' validity.',
-      '**Distinguish independent vs dependent claims.** Independent = stands alone. Dependent = narrows an independent claim and adds fall-back positions if the independent is invalidated.',
-      '**Do a real prior-art search before drafting.** Use 06_References. If you can\'t find anything similar, you haven\'t searched hard enough — change keywords, fields, languages.',
-      '**Follow the standard order.** Background → Summary → Brief Description of Drawings → Detailed Description → Claims. Examiners expect this structure; deviating raises red flags.',
-      '**Use the "person having ordinary skill in the art" test.** Write enough detail that a skilled practitioner can reproduce your invention without inventing anything new themselves. Less = unenforceable; more = unnecessary disclosure.',
-      '**One concept per patent.** Filing three narrow patents > one broad one. Broad claims are easier to invalidate; narrow ones survive.',
+    outputFiles: [
+      '`patent_disclosure.typ` — 专利说明书（Typst 格式）',
+      '`claims.md` — 权利要求书',
+      '`abstract.md` — 摘要',
     ],
-    antiPatterns: [
-      'Drafting the description before the claims. You\'ll write 10 pages of beautiful prose around claims you didn\'t actually want.',
-      'Skipping dependent claims. They\'re your fallback when an examiner invalidates the independent claim — without them you have no second line of defense.',
-      'Disclosing trade secrets in the description. Once filed, the patent is public. Anything in the spec is no longer secret.',
+    extraTitle: '专利核心要素',
+    extraContent: [
+      '| 部分 | 内容要求 |',
+      '|------|----------|',
+      '| 技术领域 | 简洁定义本发明所属领域 |',
+      '| 背景技术 | 引用现有技术缺点，引出本发明要解决的问题 |',
+      '| 发明内容 | 技术方案 + 有益效果 |',
+      '| 权利要求 | 独立权利要求（broadest）+ 从属权利要求 |',
+      '| 实施方式 | 具体例子，支持独立权利要求的可实现性 |',
+    ],
+    notes: [
+      '权利要求需覆盖核心原理 + 变体实施例',
+      '引用 04_Synthesize 的 solutions.json 作为技术方案来源',
+      '避免使用功能性描述，优先用结构/步骤限定',
+    ],
+  },
+  '08_TData': {
+    title: '08_TData — 实验数据与代码',
+    purpose: '存储验证实验数据、仿真代码、测试结果，支持 04_Synthesize 的解决方案验证。',
+    workflow: [
+      '根据 04_Synthesize 的验证计划设计实验',
+      '将实验代码保存在 `code/` 目录',
+      '记录实验数据与结果到 `experiments/`',
+      '撰写验证报告到 `validation/`',
+    ],
+    outputFiles: [
+      '`experiments/` — 实验记录与原始数据',
+      '`code/` — 仿真/分析代码',
+      '`results/` — 处理后的结果',
+      '`validation/` — 验证报告',
+    ],
+    extraTitle: '数据记录规范',
+    extraContent: [
+      '每条实验记录需包含：',
+      '- 实验目的（链接到 solutions.json 中的验证计划）',
+      '- 实验条件（参数设置、环境）',
+      '- 原始数据文件路径',
+      '- 分析结果与结论',
+      '- 与预期对比（PASS/FAIL）',
+    ],
+    notes: [
+      '命名规范：`exp_{日期}_{序号}_{描述}.md`',
+      '大型数据文件（如 CSV、JSON）单独存放，实验记录引用路径',
+      '验证报告需量化对比改善参数与恶化参数',
     ],
   },
 };
@@ -329,6 +407,7 @@ function buildRootReadme(name: string, goal: string, today: string, root: string
     '| `05_Deliver/` | Selected concepts, prototype plans. | [`05_Deliver/README.md`](05_Deliver/README.md) |',
     '| `06_References/` | Literature search results, downloaded papers. | [`06_References/README.md`](06_References/README.md) |',
     '| `07_Patent/` | Patent drafts. | [`07_Patent/README.md`](07_Patent/README.md) |',
+    '| `08_TData/` | 实验数据与代码. | [`08_TData/README.md`](08_TData/README.md) |',
     '',
     '## Problem statement',
     '',
@@ -357,49 +436,43 @@ function buildRootReadme(name: string, goal: string, today: string, root: string
 }
 
 function buildPhaseReadme(phase: PhaseDir, projectName: string, rootReadmeExisted: boolean): string {
-  const info = PHASE_INFO[phase];
-  const bullets = info.bullets.map(b => `- ${b}`).join('\n');
-  const methodology = info.methodology.map(m => `- ${m}`).join('\n');
-  const antiPatterns = info.antiPatterns.map(a => `- ${a}`).join('\n');
+  const info = PHASE_README[phase];
   const rootLink = rootReadmeExisted
     ? '[← Back to workspace root](../README.md)'
     : '[← Back to workspace root](../)';
-  return [
+  const lines: string[] = [
     `# ${info.title}`,
     '',
-    `_Project: **${projectName}**_`,
+    `_项目: **${projectName}**_`,
     '',
-    '## Purpose',
+    '## 目的',
     '',
     info.purpose,
     '',
-    '## What goes here',
+    '## 工作流',
     '',
-    bullets,
+    ...info.workflow.map((w, i) => `${i + 1}. ${w}`),
     '',
-    '## Commands that populate this folder',
+    '## 输出文件',
     '',
-    info.commands,
+    ...info.outputFiles.map(f => `- ${f}`),
     '',
-    '## Research methodology — best practice',
+  ];
+  if (info.extraTitle) {
+    lines.push(
+      `## ${info.extraTitle}`,
+      '',
+      ...info.extraContent,
+      '',
+    );
+  }
+  lines.push(
+    '## 注意事项',
     '',
-    'How to actually do the work in this phase, not just what to file.',
-    '',
-    methodology,
-    '',
-    '## Anti-patterns to avoid',
-    '',
-    'Common failure modes. Skim before you start; re-read before you finish.',
-    '',
-    antiPatterns,
-    '',
-    '## File naming',
-    '',
-    'Slash commands write timestamped files in the form `<name>_<ISO-timestamp>.{json,md}`. Files sort newest-first, so the most recent run is always at the top of any directory listing.',
-    '',
-    '---',
+    ...info.notes.map(n => `- ${n}`),
     '',
     rootLink,
     '',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
