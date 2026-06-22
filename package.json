@@ -2,7 +2,7 @@
   "name": "trinno-research",
   "displayName": "Trinno Research Assist",
   "description": "Research assistant with AI-powered chat for Jupyter notebooks",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "publisher": "Open1s",
   "license": "MIT",
   "repository": {
