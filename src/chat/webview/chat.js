@@ -2604,9 +2604,9 @@ function formatContent(text) {
       return '';
     });
 
-    // Protect mermaid blocks from marked parsing (replace with HTML comment placeholder)
+    // Protect mermaid blocks from marked parsing (replace with placeholder)
     text = text.replace(/```mermaid\n([\s\S]*?)```/g, (match, code) => {
-      const placeholder = `<!--__MERMAID_${mermaidIndex}__-->`;
+      const placeholder = `__MERMAID_${mermaidIndex}__`;
       mermaidPlaceholders.push({ placeholder, code: code.trim(), index: mermaidIndex });
       mermaidIndex++;
       return placeholder;
@@ -2616,7 +2616,7 @@ function formatContent(text) {
     let svgPlaceholders = [];
     let svgIndex = 0;
     text = text.replace(/```svg\n([\s\S]*?)```/g, (match, svgContent) => {
-      const placeholder = `<!--__SVG_${svgIndex}__-->`;
+      const placeholder = `__SVG_${svgIndex}__`;
       svgPlaceholders.push({ placeholder, content: svgContent.trim() });
       svgIndex++;
       return placeholder;
