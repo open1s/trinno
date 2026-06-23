@@ -39,7 +39,7 @@
             const id = 'mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
             return '<div class="mermaid-container" data-mermaid-id="' + id + '">' +
               '<pre class="mermaid-source" style="display:none">' + escapeHtml(text) + '</pre>' +
-              '<div id="' + id + '" class="mermaid"></div></div>\n';
+              '<div id="' + id + '" class="mermaid-target"></div></div>\n';
           }
           if (lang === 'svg') {
             return '<div class="svg-preview">' + text.trim() + '</div>\n';
@@ -2649,11 +2649,10 @@ function formatContent(text) {
     const mermaidContainers = container.querySelectorAll('.mermaid-container');
     for (const mc of mermaidContainers) {
       const sourceEl = mc.querySelector('.mermaid-source');
-      const diagramEl = mc.querySelector('.mermaid');
+      const diagramEl = mc.querySelector('.mermaid-target');
       
       if (sourceEl && diagramEl && !diagramEl.getAttribute('data-rendered')) {
         const code = sourceEl.textContent;
-        diagramEl.textContent = code;
         try {
           const { svg } = await mermaid.render('mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), code);
           // mermaid may return an error SVG instead of throwing
