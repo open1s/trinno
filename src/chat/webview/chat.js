@@ -24,18 +24,10 @@
 
   // Initialize Mermaid
   if (typeof mermaid !== 'undefined') {
-    mermaid.initialize({ 
-      startOnLoad: false,
-      theme: 'default',
-      securityLevel: 'loose'
-    });
+    try { mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' }); } catch {}
   } else if (typeof __esbuild_esm_mermaid_nm !== 'undefined' && __esbuild_esm_mermaid_nm.mermaid) {
     window.mermaid = __esbuild_esm_mermaid_nm.mermaid;
-    mermaid.initialize({ 
-      startOnLoad: false,
-      theme: 'default',
-      securityLevel: 'loose'
-    });
+    try { mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' }); } catch {}
   }
 
   // Custom marked renderer for mermaid/SVG blocks (one-time setup)
