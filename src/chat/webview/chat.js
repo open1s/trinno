@@ -2652,14 +2652,18 @@ function formatContent(text) {
       const diagramEl = mc.querySelector('.mermaid');
       
       if (sourceEl && diagramEl && !diagramEl.getAttribute('data-rendered')) {
+        const code = sourceEl.textContent;
+        diagramEl.textContent = code;
         try {
-          const code = sourceEl.textContent;
-          diagramEl.textContent = code;
           const { svg } = await mermaid.render('mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), code);
+          // mermaid may return an error SVG instead of throwing
+          if (/error-icon|error-text|class="error[^"]*"|Syntax error|parse error/i.test(svg)) {
+            throw new Error();
+          }
           diagramEl.innerHTML = svg;
           diagramEl.setAttribute('data-rendered', 'true');
           sourceEl.style.display = 'none';
-        } catch (err) {
+        } catch {
           diagramEl.innerHTML = `<pre class="mermaid-source" style="white-space:pre-wrap">${escapeHtml(code)}</pre>`;
           diagramEl.setAttribute('data-rendered', 'error');
           sourceEl.remove();
