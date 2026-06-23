@@ -2668,8 +2668,9 @@ function formatContent(text) {
           diagramEl.setAttribute('data-rendered', 'true');
           sourceEl.style.display = 'none';
         } catch (err) {
-          diagramEl.innerHTML = `<div class="mermaid-error">Failed to render diagram: ${err.message}</div>`;
-          sourceEl.style.display = 'block';
+          diagramEl.innerHTML = `<pre class="mermaid-source" style="white-space:pre-wrap">${escapeHtml(code)}</pre>`;
+          diagramEl.setAttribute('data-rendered', 'error');
+          sourceEl.remove();
         }
       }
     }
