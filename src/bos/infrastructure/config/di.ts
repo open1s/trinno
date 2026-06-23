@@ -18,6 +18,7 @@ import { createMemoryTools } from '../http/memory_tools.js';
 import { createTodoTools } from '../http/todo_tools.js';
 import { createTypstTools } from '../http/typst_tools.js';
 import { createWebsearchTools } from '../http/websearch_tools.js';
+import { createRemoteSkillTools } from '../http/remote_skill_tools.js';
 import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
 import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
 import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
@@ -127,6 +128,7 @@ export async function composeRoot(options: {
   const memoryTools = createMemoryTools(workspaceRoot);
   const todoTools = createTodoTools(workspaceRoot);
   const typstTools = createTypstTools(workspaceRoot);
+  const remoteSkillTools = createRemoteSkillTools(workspaceRoot);
   const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
   const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
   const idealityHandler = new EvaluateIdealityHandler(locale);
@@ -134,7 +136,7 @@ export async function composeRoot(options: {
 
   const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
   const websearchTools = createWebsearchTools();
-  const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools, ...todoTools, ...typstTools, ...websearchTools];
+  const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools, ...todoTools, ...typstTools, ...websearchTools, ...remoteSkillTools];
   const tools = wrapAllTools(allTools, toolPermissions);
 
   initAgentFactory(brain, {
