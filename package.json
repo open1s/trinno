@@ -2,7 +2,7 @@
   "name": "trinno-research",
   "displayName": "Trinno Research Assist",
   "description": "Research assistant with AI-powered chat for Jupyter notebooks",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "publisher": "Open1s",
   "license": "MIT",
   "repository": {
@@ -295,28 +295,28 @@
     "@eslint/js": "^10.0.1",
     "@types/global-agent": "^3.0.0",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^25.9.1",
-    "@types/vscode": "^1.120.0",
-    "@vscode/test-electron": "^2.5.2",
-    "eslint": "^10.4.0",
+    "@types/node": "^26.0.0",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-electron": "^3.0.0",
+    "eslint": "^10.5.0",
     "glob": "^13.0.6",
-    "mocha": "^11.7.5",
+    "mocha": "^8.1.3",
     "tslib": "^2.6.0",
-    "tsx": "^4.22.1",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.4",
-    "vscode-languageclient": "^9.0.1"
+    "typescript-eslint": "^8.62.0",
+    "vscode-languageclient": "^10.0.0"
   },
   "dependencies": {
     "@open1s/ezbos": "^1.3.6",
     "@vscode/jupyter-extension": "^1.1.1",
     "global-agent": "^4.1.3",
-    "i18next": "^26.2.0",
-    "marked": "^14.1.4",
-    "mermaid": "^10.9.6",
+    "i18next": "^26.3.1",
+    "marked": "^18.0.5",
+    "mermaid": "^11.15.0",
     "pino": "^10.3.1",
     "toml": "^4.1.1",
-    "undici": "^7.26.0"
+    "undici": "^8.5.0"
   },
   "packageManager": "yarn@4.13.0+sha512.5c20ba010c99815433e5c8453112165e673f1c7948d8d2b267f4b5e52097538658388ebc9f9580656d9b75c5cc996f990f611f99304a2197d4c56d21eea370e7"
 }

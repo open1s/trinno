@@ -2,6 +2,7 @@ import pino from 'pino';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as jsbos from '@open1s/jsbos';
 
 let _rootLogger: pino.Logger | null = null;
 
@@ -23,7 +24,6 @@ function resolveLogFile(): string {
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {
-    // fallback to tmpdir if we can't create
     const fallback = path.join(os.tmpdir(), 'trinno-logs');
     fs.mkdirSync(fallback, { recursive: true });
     return path.join(fallback, 'trinno.log');
@@ -32,7 +32,26 @@ function resolveLogFile(): string {
 }
 
 function resolveLevel(): string {
-  return process.env['TRINNO_LOG_LEVEL'] || 'trace';
+  try {
+    const loader = new jsbos.ConfigLoader();
+    loader.discover();
+    const config = JSON.parse(loader.loadSync());
+    return config?.logging?.level || process.env['TRINNO_LOG_LEVEL'] || 'error';
+  } catch {
+    return process.env['TRINNO_LOG_LEVEL'] || 'error';
+  }
+}
+
+function shouldLogToConsole(): boolean {
+  try {
+    const loader = new jsbos.ConfigLoader();
+    loader.discover();
+    const config = JSON.parse(loader.loadSync());
+    if (config?.logging?.console !== undefined) return config.logging.console;
+    return true;
+  } catch {
+    return true;
+  }
 }
 
 export function getLogger(): pino.Logger {
@@ -41,7 +60,6 @@ export function getLogger(): pino.Logger {
   const logFile = resolveLogFile();
   const level = resolveLevel();
 
-  // Sync file destination (no worker thread — logs appear immediately)
   const fileDest = pino.destination({
     dest: logFile,
     sync: true,
@@ -49,9 +67,8 @@ export function getLogger(): pino.Logger {
     append: true,
   });
 
-  // Also write to stderr so logs are visible in VS Code output
   const stderrDest = pino.destination({
-    dest: 2, // stderr fd
+    dest: 2,
     sync: true,
   });
 
@@ -71,7 +88,7 @@ export function getLogger(): pino.Logger {
     },
     pino.multistream([
       { stream: fileDest, level: 'trace' },
-      { stream: stderrDest, level: 'trace' },
+      ...(shouldLogToConsole() ? [{ stream: stderrDest, level: 'trace' }] : []),
     ]),
   );
 

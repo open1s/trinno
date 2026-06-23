@@ -29,6 +29,13 @@
       theme: 'default',
       securityLevel: 'loose'
     });
+  } else if (typeof __esbuild_esm_mermaid_nm !== 'undefined' && __esbuild_esm_mermaid_nm.mermaid) {
+    window.mermaid = __esbuild_esm_mermaid_nm.mermaid;
+    mermaid.initialize({ 
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose'
+    });
   }
 
   let currentMessageEl = null;
@@ -1866,6 +1873,7 @@
             if (!currentContentEl) { textRafId = null; return; }
             textRafId = null;
             currentContentEl.innerHTML = formatContent(messageState.content);
+            renderMermaidDiagrams(currentContentEl).catch(() => {});
             scrollToBottom();
           });
         }
@@ -2596,9 +2604,9 @@ function formatContent(text) {
       return '';
     });
 
-    // Protect mermaid blocks from marked parsing (replace with placeholder)
+    // Protect mermaid blocks from marked parsing (replace with HTML comment placeholder)
     text = text.replace(/```mermaid\n([\s\S]*?)```/g, (match, code) => {
-      const placeholder = `__MERMAID_${mermaidIndex}__`;
+      const placeholder = `<!--__MERMAID_${mermaidIndex}__-->`;
       mermaidPlaceholders.push({ placeholder, code: code.trim(), index: mermaidIndex });
       mermaidIndex++;
       return placeholder;
@@ -2608,7 +2616,7 @@ function formatContent(text) {
     let svgPlaceholders = [];
     let svgIndex = 0;
     text = text.replace(/```svg\n([\s\S]*?)```/g, (match, svgContent) => {
-      const placeholder = `__SVG_${svgIndex}__`;
+      const placeholder = `<!--__SVG_${svgIndex}__-->`;
       svgPlaceholders.push({ placeholder, content: svgContent.trim() });
       svgIndex++;
       return placeholder;
@@ -2643,6 +2651,9 @@ function formatContent(text) {
       html = html.replace(placeholder, wrapped);
     }
 
+    // Unwrap <p> tags that contain block-level elements (invalid HTML)
+    html = html.replace(/<p>\s*(<(?:div|pre|table|ul|ol|h[1-6]|blockquote|figure)[^>]*>.*?<\/(?:div|pre|table|ul|ol|h[1-6]|blockquote|figure)>)\s*<\/p>/gs, '$1');
+
     // Add skill badge if present
     if (skillContent) {
       html = `<div class="skill-badge">Skill Applied</div>` + html;
@@ -2661,14 +2672,14 @@ function formatContent(text) {
     
     const mermaidContainers = container.querySelectorAll('.mermaid-container');
     for (const mc of mermaidContainers) {
-      const id = mc.getAttribute('data-mermaid-id');
       const sourceEl = mc.querySelector('.mermaid-source');
-      const diagramEl = document.getElementById(id);
+      const diagramEl = mc.querySelector('.mermaid');
       
       if (sourceEl && diagramEl && !diagramEl.getAttribute('data-rendered')) {
         try {
           const code = sourceEl.textContent;
-          const { svg } = await mermaid.render(id, code);
+          diagramEl.textContent = code;
+          const { svg } = await mermaid.render('mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), code);
           diagramEl.innerHTML = svg;
           diagramEl.setAttribute('data-rendered', 'true');
           sourceEl.style.display = 'none';
