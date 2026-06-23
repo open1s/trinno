@@ -38,6 +38,26 @@
     });
   }
 
+  // Custom marked renderer for mermaid/SVG blocks (one-time setup)
+  if (typeof marked !== 'undefined') {
+    marked.use({
+      renderer: {
+        code({ text, lang }) {
+          if (lang === 'mermaid') {
+            const id = 'mermaid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+            return '<div class="mermaid-container" data-mermaid-id="' + id + '">' +
+              '<pre class="mermaid-source" style="display:none">' + escapeHtml(text) + '</pre>' +
+              '<div id="' + id + '" class="mermaid"></div></div>\n';
+          }
+          if (lang === 'svg') {
+            return '<div class="svg-preview">' + text.trim() + '</div>\n';
+          }
+          return false;
+        }
+      }
+    });
+  }
+
   let currentMessageEl = null;
   let currentContentEl = null;
   let currentReasoningContentEl = null;
@@ -2588,9 +2608,6 @@ window.__denyTool = function(id) {
 function formatContent(text) {
     if (!text) return '';
 
-    let mermaidPlaceholders = [];
-    let mermaidIndex = 0;
-
     // Extract skill tags before markdown parsing
     let skillContent = '';
     let userTask = '';
@@ -2604,25 +2621,7 @@ function formatContent(text) {
       return '';
     });
 
-    // Protect mermaid blocks from marked parsing (replace with placeholder)
-    text = text.replace(/```mermaid\n([\s\S]*?)```/g, (match, code) => {
-      const placeholder = `__MERMAID_${mermaidIndex}__`;
-      mermaidPlaceholders.push({ placeholder, code: code.trim(), index: mermaidIndex });
-      mermaidIndex++;
-      return placeholder;
-    });
-
-    // Protect SVG code blocks
-    let svgPlaceholders = [];
-    let svgIndex = 0;
-    text = text.replace(/```svg\n([\s\S]*?)```/g, (match, svgContent) => {
-      const placeholder = `__SVG_${svgIndex}__`;
-      svgPlaceholders.push({ placeholder, content: svgContent.trim() });
-      svgIndex++;
-      return placeholder;
-    });
-
-    // Parse markdown to HTML using marked
+    // Parse markdown to HTML using marked (mermaid/SVG handled by custom renderer)
     let html = '';
     if (typeof marked !== 'undefined') {
       marked.setOptions({
@@ -2638,21 +2637,6 @@ function formatContent(text) {
     // Sanitize HTML: remove script tags and event handlers
     html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
     html = html.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-
-    // Restore SVG blocks
-    for (const { placeholder, content } of svgPlaceholders) {
-      html = html.replace(placeholder, `<div class="svg-preview">${content.trim()}</div>`);
-    }
-
-    // Restore mermaid blocks (wrap in container for JS rendering)
-    for (const { placeholder, code, index } of mermaidPlaceholders) {
-      const containerId = `mermaid-${Date.now()}-${index}`;
-      const wrapped = `<div class="mermaid-container" data-mermaid-id="${containerId}"><pre class="mermaid-source" style="display:none">${escapeHtml(code)}</pre><div id="${containerId}" class="mermaid"></div></div>`;
-      html = html.replace(placeholder, wrapped);
-    }
-
-    // Unwrap <p> tags that contain block-level elements (invalid HTML)
-    html = html.replace(/<p>\s*(<(?:div|pre|table|ul|ol|h[1-6]|blockquote|figure)[^>]*>.*?<\/(?:div|pre|table|ul|ol|h[1-6]|blockquote|figure)>)\s*<\/p>/gs, '$1');
 
     // Add skill badge if present
     if (skillContent) {
