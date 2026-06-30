@@ -60,5 +60,13 @@ jobs:
       - name: Publish to Open VSX
         run: npx ovsx publish -p ${{ secrets.OVSX_PAT }}
 
-      - name: Publish to VS Code Marketplace
-        run: npx -y @vscode/vsce publish -p ${{ secrets.VSCE_PAT }}
+      - name: Package VSIX
+        run: npx @vscode/vsce package --out trinno-research.vsix
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: trinno-research.vsix
+          generate_release_notes: true
