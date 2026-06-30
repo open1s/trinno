@@ -5,7 +5,14 @@ import { spawn } from 'child_process';
 export interface RemoteSkillEntry {
   name: string;
   description: string;
-  repo: string;
+  /** Primary git URL. Optional when `repos` is provided. */
+  repo?: string;
+  /**
+   * Additional git URLs that contribute skills under the same `name`.
+   * Order matters: `repo` (if any) is consulted first, then entries here in
+   * array order. Useful for mirrors / multi-source skill aggregation.
+   */
+  repos?: string[];
   ref?: string;
   tags?: string[];
 }
@@ -32,15 +39,61 @@ const README_FILE = 'README.md';
 const VALID_SEG = /^[a-zA-Z0-9_.-]+$/;
 const MAX_SCAN_DEPTH = 6;
 
+/**
+ * Resolve the effective ordered list of git URLs for a registry entry.
+ * `repo` (primary) is first, followed by the `repos` array; duplicates are
+ * removed and surrounding whitespace is trimmed.
+ */
+export function getEntryRepos(entry: RemoteSkillEntry): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v !== 'string') return;
+    const trimmed = v.trim();
+    if (trimmed.length > 0 && !out.includes(trimmed)) out.push(trimmed);
+  };
+  push(entry.repo);
+  if (Array.isArray(entry.repos)) {
+    for (const r of entry.repos) push(r);
+  }
+  return out;
+}
+
 export function parseRemoteSkillsFromConfigJson(configJson: string): RemoteSkillEntry[] {
   try {
     const config = JSON.parse(configJson);
     const sec = config?.skills_registry;
     const list = sec?.skills;
     if (!Array.isArray(list)) return [];
-    return list.filter((e: any) =>
-      e && typeof e.name === 'string' && typeof e.repo === 'string' && typeof e.description === 'string'
-    ) as RemoteSkillEntry[];
+    return list
+      .filter((e: any) => {
+        if (!e || typeof e.name !== 'string' || typeof e.description !== 'string') return false;
+        const hasRepo = typeof e.repo === 'string' && e.repo.trim().length > 0;
+        const hasRepos =
+          Array.isArray(e.repos) &&
+          e.repos.some((r: any) => typeof r === 'string' && r.trim().length > 0);
+        return hasRepo || hasRepos;
+      })
+      .map((e: any) => {
+        const entry: RemoteSkillEntry = {
+          name: e.name,
+          description: e.description,
+        };
+        if (typeof e.repo === 'string' && e.repo.trim().length > 0) {
+          entry.repo = e.repo.trim();
+        }
+        if (Array.isArray(e.repos)) {
+          const cleaned = e.repos
+            .filter((r: any) => typeof r === 'string' && r.trim().length > 0)
+            .map((r: string) => r.trim());
+          if (cleaned.length > 0) entry.repos = cleaned;
+        }
+        if (typeof e.ref === 'string' && e.ref.length > 0) entry.ref = e.ref;
+        if (Array.isArray(e.tags)) {
+          const tags = e.tags.filter((t: any) => typeof t === 'string' && t.length > 0);
+          if (tags.length > 0) entry.tags = tags;
+        }
+        return entry;
+      });
   } catch {
     return [];
   }
@@ -62,8 +115,13 @@ function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function getCacheDir(workspaceRoot: string, name: string): string {
-  return path.join(workspaceRoot, '.bos', 'skills-remote', name);
+function getCacheDir(workspaceRoot: string, name: string, repoIndex: number = -1): string {
+  // Single-repo entries (or unknown index) cache at `<name>` for backward
+  // compatibility with previously cloned folders. Multi-repo entries (>=2
+  // effective repos) split into `<name>/repo-0`, `<name>/repo-1`, ...
+  const base = path.join(workspaceRoot, '.bos', 'skills-remote', name);
+  if (repoIndex < 0) return base;
+  return path.join(base, `repo-${repoIndex}`);
 }
 
 function parseFrontmatterDescription(content: string): string {

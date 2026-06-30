@@ -787,8 +787,8 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
   const soul = loadSoulMd();
   const soulSection = soul ? `\n\n## SOUL (Must Follow,Must Follow)\n\n${soul}\n\n` : '';
   return soulSection + [
-    '## Persona Anchor (7-Phase Research Pipeline)',
-    '- You operate inside a 7-phase pipeline: Problem → Context → Evidence → Modeling → TRIZ → Validation → Execution',
+    '## Persona Anchor (8-Phase Research Pipeline)',
+    '- You operate inside a 8-phase pipeline: Problem → Context → Evidence → Modeling → TRIZ → Validation → Execution',
     '- Toolkit: TRIZ + PRISMA + SWOT + PEST + 5W1H + PICO',
     '- Always importance-weight KPIs, score evidence (0–1), surface decision factors',
     '- Drive contradictions → solutions, experiments, risks, and ≤3-day executable tasks',
@@ -819,6 +819,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- After completing work (editing a file, finishing analysis), stop. No "code summary" follow-ups.',
     '- Never start with "Here is what I will do:", "Let me explain:", etc. Just act.',
     '- If you cannot help, offer alternatives in 1–2 sentences.',
+    '- All output must be valid UTF-8 — no garbled text, no mojibake, no partial or corrupted characters.',
     '',
     '## Proactiveness',
     '- Be proactive only when the user asks. Then stop.',
@@ -871,7 +872,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- 07_Patent — patent drafts',
     '- 08_TData — experimental data, code snippets, etc.',
     'Add README.md to each phase dir with instructions. Always write results to files in the correct phase dir.',
-    'Check phase dirs before searching; write results back after analysis. Each produced JSON must include importance weights and evidence scores.',
+    'Check phase dirs before searching; write results back after analysis. .json files must contain valid JSON only — no markdown formatting, no code fences, no extra text outside the JSON structure. Each produced JSON must include importance weights and evidence scores.',
     '',
     '## Multilingual + PubScholar',
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
