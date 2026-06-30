@@ -168,7 +168,7 @@ export async function searchRemoteSkills(
       hits.push({
         name: entry.name,
         description: entry.description,
-        repo: entry.repo,
+        repo: entry.repo ?? '',
         ...(entry.ref !== undefined ? { ref: entry.ref } : {}),
         ...(entry.tags !== undefined ? { tags: entry.tags } : {}),
         score: s,
@@ -209,8 +209,8 @@ function spawnCapture(
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString('utf-8'); });
     proc.on('error', (e: any) => {
       clearTimeout(timer);
-      finish(false);
       stderr += e.message || String(e);
+      finish(false);
     });
     proc.on('exit', code => {
       clearTimeout(timer);
@@ -257,10 +257,11 @@ async function ensureCloned(
   name: string,
   repo: string,
   ref?: string,
+  repoIndex?: number,
 ): Promise<{cacheDir: string; error?: string}> {
-  const cacheDir = getCacheDir(workspaceRoot, name);
+  const cacheDir = getCacheDir(workspaceRoot, name, repoIndex);
   if (fs.existsSync(cacheDir)) return {cacheDir};
-  return withCloneLock(name, async () => {
+  return withCloneLock(`${name}:${repoIndex ?? -1}`, async () => {
     if (fs.existsSync(cacheDir)) return {cacheDir};
     try {
       ensureDir(path.dirname(cacheDir));
@@ -269,11 +270,13 @@ async function ensureCloned(
       args.push(repo, cacheDir);
       const r = await spawnCapture('git', args, path.dirname(cacheDir), 60000);
       if (!r.ok) {
+        try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch { /* cleanup best-effort */ }
         const msg = (r.stderr || r.stdout || 'git clone failed').trim();
         return {cacheDir, error: `clone failed: ${msg.slice(0, 500)}`};
       }
       return {cacheDir};
     } catch (e: any) {
+      try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch { /* cleanup best-effort */ }
       return {cacheDir, error: `clone error: ${e.message || String(e)}`};
     }
   });
@@ -304,8 +307,8 @@ function scanForSkillFiles(
         const entry: RemoteSkillEntry = {
           name,
           description: desc || rel || parentName,
-          repo: parentEntry.repo,
         };
+        if (parentEntry.repo) entry.repo = parentEntry.repo;
         if (parentEntry.ref) entry.ref = parentEntry.ref;
         if (parentEntry.tags) entry.tags = [...parentEntry.tags];
         results.push(entry);
@@ -343,17 +346,24 @@ export async function buildRemoteSkillIndex(
       seen.add(entry.name);
       all.push(entry);
     } else {
-      // Repo root — ensure cloned, then scan
-      const { cacheDir, error } = await ensureCloned(workspaceRoot, entry.name, entry.repo, entry.ref);
-      if (error || !cacheDir) {
-        console.warn(`[remote-skills] clone failed for ${entry.name}: ${error}`);
+      // Repo root — iterate over all effective repo URLs
+      const repos = getEntryRepos(entry);
+      if (repos.length === 0) {
+        console.warn(`[remote-skills] no valid repo URL for ${entry.name}`);
         continue;
       }
-      const discovered = scanForSkillFiles(cacheDir, entry.name, entry);
-      for (const d of discovered) {
-        if (seen.has(d.name)) continue;
-        seen.add(d.name);
-        all.push(d);
+      for (let ri = 0; ri < repos.length; ri++) {
+        const { cacheDir, error } = await ensureCloned(workspaceRoot, entry.name, repos[ri]!, entry.ref, repos.length >= 2 ? ri : undefined);
+        if (error || !cacheDir) {
+          console.warn(`[remote-skills] clone failed for ${entry.name}[${ri}]: ${error}`);
+          continue;
+        }
+        const discovered = scanForSkillFiles(cacheDir, entry.name, entry);
+        for (const d of discovered) {
+          if (seen.has(d.name)) continue;
+          seen.add(d.name);
+          all.push(d);
+        }
       }
     }
   }
@@ -387,8 +397,12 @@ export async function loadRemoteSkill(
     return {ok: false, error: `parent repo not found in registry: ${parentName}`};
   }
 
-  // Clone
-  const { cacheDir, error } = await ensureCloned(workspaceRoot, parentName, parentEntry.repo, parentEntry.ref);
+  // Clone — try primary repo first, fall back to repos[0]
+  const repos = getEntryRepos(parentEntry);
+  if (repos.length === 0) {
+    return {ok: false, error: `no valid repo URL for ${parentName}`};
+  }
+  const { cacheDir, error } = await ensureCloned(workspaceRoot, parentName, repos[0]!, parentEntry.ref);
   if (error) return {ok: false, error, cacheDir};
 
   // Read target file

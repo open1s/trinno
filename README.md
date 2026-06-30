@@ -226,6 +226,39 @@ timeout_seconds = 30
 level = "debug"
 ```
 
+#### Remote Skills (`~/.bos/conf/config.toml`)
+
+Trinno can discover and load skills from remote git repos. Configure one or more repos under `skills_registry.skills`:
+
+```toml
+[[skills_registry.skills]]
+name = "awesome-journal-skills"
+repo = "https://github.com/user/awesome-journal-skills.git"
+description = "Journal-specific paper writing skills"
+ref = "main"
+
+[[skills_registry.skills]]
+name = "scientific-agent-skills"
+repo = "https://github.com/user/scientific-agent-skills.git"
+description = "Scientific agent workflows"
+ref = "main"
+```
+
+Each repo is cloned to `.bos/skills-remote/<name>/` and scanned for `SKILL.md` files with YAML frontmatter. Sub-skills are addressed as `<name>/<subpath>`. Use `/find_skill <keyword>` in the chat to search across all configured repos.
+
+For repo mirrors or multi-source aggregation, use the `repos` array:
+
+```toml
+[[skills_registry.skills]]
+name = "multi-source-skills"
+repos = [
+  "https://github.com/mirror/skills.git",
+  "https://gitee.com/mirror/skills.git",
+]
+description = "Skills aggregated from multiple mirrors"
+ref = "main"
+```
+
 #### MCP Servers (`~/.bos/conf/app.toml`)
 
 Trinno-specific MCP server definitions. VS Code `chat.mcp.servers` takes precedence over this file.
