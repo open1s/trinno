@@ -61,12 +61,12 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     purpose: '评估目标技术在 S-curve 中的位置，判断当前发展阶段与潜力。',
     workflow: [
       '使用 `triz_s_curve` 分析技术演进曲线',
-      '填写 `trl_assessment.json` 评估技术成熟度等级（TRL 1-9）',
+      '填写 `trl_assessment.md` 评估技术成熟度等级（TRL 1-9）',
       '结合文献证据确定技术所处阶段',
     ],
     outputFiles: [
-      '`trl_assessment.json` — TRL 评估结果与依据',
-      '`s_curve.json` — S-curve 数据点与技术阶段标注',
+      '`trl_assessment.md` — TRL 评估结果与依据',
+      '`s_curve.md` — S-curve 数据点与技术阶段标注',
     ],
     extraTitle: 'TRL 定义速查',
     extraContent: [
@@ -87,13 +87,13 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     workflow: [
       '使用 `triz_contradiction` 分析技术矛盾（改善参数 vs 恶化参数）',
       '使用 `triz_su_field` 进行 Su-Field 分析',
-      '汇总瓶颈到 `bottlenecks.json`',
-      '将矛盾记录到 `contradictions.json`',
+      '汇总瓶颈到 `bottlenecks.md`',
+      '将矛盾记录到 `contradictions.md`',
     ],
     outputFiles: [
-      '`contradictions.json` — 技术矛盾与物理矛盾列表',
-      '`su_field_analysis.json` — Su-Field 模型分析',
-      '`bottlenecks.json` — 关键技术瓶颈（按重要性排序）',
+      '`contradictions.md` — 技术矛盾与物理矛盾列表',
+      '`su_field_analysis.md` — Su-Field 模型分析',
+      '`bottlenecks.md` — 关键技术瓶颈（按重要性排序）',
     ],
     extraTitle: '矛盾记录格式',
     extraContent: [
@@ -121,14 +121,14 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     workflow: [
       '对每个矛盾应用 `triz_contradiction` action=analyze 获取 inventive principles',
       '使用 `triz_ideality` 评估方案理想度',
-      '汇总解决方案到 `solutions.json`',
-      '制定 roadmap.json（短期/中期/长期任务）',
+      '汇总解决方案到 `solutions.md`',
+      '制定 roadmap.md（短期/中期/长期任务）',
     ],
     outputFiles: [
-      '`solutions.json` — 解决方案列表（含原理映射、验证计划）',
-      '`principles_applied.json` — 各矛盾应用的 TRIZ 原理',
-      '`trends.json` — 技术趋势分析',
-      '`roadmap.json` — 研发路线图（≤3天可执行任务优先）',
+      '`solutions.md` — 解决方案列表（含原理映射、验证计划）',
+      '`principles_applied.md` — 各矛盾应用的 TRIZ 原理',
+      '`trends.md` — 技术趋势分析',
+      '`roadmap.md` — 研发路线图（≤3天可执行任务优先）',
     ],
     extraTitle: '理想度评估',
     extraContent: [
@@ -238,7 +238,7 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     ],
     notes: [
       '权利要求需覆盖核心原理 + 变体实施例',
-      '引用 04_Synthesize 的 solutions.json 作为技术方案来源',
+      '引用 04_Synthesize 的 solutions.md 作为技术方案来源',
       '避免使用功能性描述，优先用结构/步骤限定',
     ],
   },
@@ -260,7 +260,7 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     extraTitle: '数据记录规范',
     extraContent: [
       '每条实验记录需包含：',
-      '- 实验目的（链接到 solutions.json 中的验证计划）',
+      '- 实验目的（链接到 solutions.md 中的验证计划）',
       '- 实验条件（参数设置、环境）',
       '- 原始数据文件路径',
       '- 分析结果与结论',

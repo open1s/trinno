@@ -34,9 +34,9 @@ Toolkit: TRIZ + PRISMA + SWOT + PEST + 5W1H + PICO. 6-phase workspace. Multiling
 
 ## Workspace (6-phase)
 - 01_Discover — cached searches (patents.json, papers.json, web_results.json)
-- 02_TRL — s_curve.json, trl_assessment.json
-- 03_Analyze — contradictions.json, su_field_analysis.json, bottlenecks.json
-- 04_Synthesize — solutions.json, principles_applied.json, trends.json, roadmap.json
+- 02_TRL — s_curve.md, trl_assessment.md
+- 03_Analyze — contradictions.md, su_field_analysis.md, bottlenecks.md
+- 04_Synthesize — solutions.md, principles_applied.md, trends.md, roadmap.md
 - 05_Deliver — paper.md, report.md
 - 06_References — downloaded papers (default output) + library.json
 - 07_Patent — patent drafts

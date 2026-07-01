@@ -145,7 +145,25 @@ export function parseWriteIntent(text: string): WriteIntent | null {
 }
 
 export async function readJsonFileSafe(filePath: string): Promise<any> {
-  try { return JSON.parse(await fs.readFile(filePath, 'utf8')); } catch { return null; }
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // Try extracting JSON from markdown code fence
+      const fenceMatch = raw.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+      if (fenceMatch) {
+        const extracted = fenceMatch[1]!.trim();
+        return JSON.parse(extracted);
+      }
+      // Try stripping leading markdown lines before first { or [
+      const firstBrace = raw.search(/[{[]/);
+      if (firstBrace >= 0) {
+        return JSON.parse(raw.slice(firstBrace));
+      }
+      return null;
+    }
+  } catch { return null; }
 }
 
 export async function readTextFileSafe(filePath: string, maxLines = 2000): Promise<string | null> {
@@ -165,11 +183,7 @@ export function normalizeArr(value: any): any[] {
   return [];
 }
 
-export function composeWritePaper(title: string, phase: string, data: {
-  reportMd: string | null; synthesisMd: string | null;
-  contradictions: any[]; solutions: any[]; trends: any[];
-  roadmap: any[]; trl: any; sCurve: any; references: any;
-}): string {
+export function composeWritePaper(title: string, phase: string, data: ResearchData): string {
   const out: string[] = [];
   out.push(`# ${title}`);
   out.push('');
@@ -185,110 +199,69 @@ export function composeWritePaper(title: string, phase: string, data: {
     `通过文献检索、S 曲线分析、技术成熟度评估（TRL）以及 TRIZ 矛盾矩阵与 40 条发明原理的应用，` +
     `识别核心技术瓶颈并提出创新方案。` +
     `研究覆盖从专利与论文检索、矛盾识别、原理映射到方案设计与实施路线图的全流程，` +
-    `为工程化应用提供理论与技术支撑。` +
-    (data.contradictions.length > 0
-      ? `本项目共识别 ${data.contradictions.length} 项核心技术矛盾，生成 ${data.solutions.length} 项候选方案，识别 ${data.trends.length} 项技术发展趋势。`
-      : '')
+    `为工程化应用提供理论与技术支撑。`
   );
   out.push('');
   out.push('**关键词：** TRIZ；技术矛盾；GDL；发明原理；技术成熟度评估');
   out.push('');
 
-  if (data.synthesisMd && data.synthesisMd.length > 0) {
+  if (data.synthesisMd) {
     out.push('## 1 引言');
     out.push('');
-    const intro = data.synthesisMd.split('\n').filter((l: string) => l.trim().length > 0).slice(0, 5).join(' ');
-    out.push(intro || `${title} 是当前工程与学术研究的关键问题之一。`);
+    out.push(data.synthesisMd);
     out.push('');
   }
 
-  if (data.contradictions.length > 0) {
+  if (data.contradictions) {
     out.push('## 2 技术矛盾分析');
     out.push('');
-    out.push(`基于 TRIZ 39 项工程参数 × 40 条发明原理的映射关系，本研究共识别 ${data.contradictions.length} 项核心技术矛盾。`);
+    out.push(data.contradictions);
     out.push('');
-    data.contradictions.slice(0, 10).forEach((c: any, i: number) => {
-      const desc = c.description || c.problem || c.title || JSON.stringify(c);
-      const improve = c.improvingParameter || c.improving || c.improving_parameter || 'N/A';
-      const worsen = c.worseningParameter || c.worsening || c.worsening_parameter || 'N/A';
-      out.push(`### 矛盾 ${i + 1}`);
-      out.push(`- **改善参数:** ${improve}`);
-      out.push(`- **恶化参数:** ${worsen}`);
-      out.push(`- **描述:** ${desc}`);
-      out.push('');
-    });
   }
 
-  if (data.solutions.length > 0) {
+  if (data.solutions) {
     out.push('## 3 解决方案设计');
     out.push('');
-    out.push(`基于上述矛盾分析，应用 TRIZ 40 条发明原理及物-场分析与 76 个标准解，得到 ${data.solutions.length} 项候选方案。`);
+    out.push(data.solutions);
     out.push('');
-    data.solutions.slice(0, 5).forEach((s: any, i: number) => {
-      const name = s.title || s.name || s.solution || `方案 ${i + 1}`;
-      const principles = Array.isArray(s.appliedPrinciples)
-        ? s.appliedPrinciples.map((p: any) => p?.index ?? p).join(', ')
-        : (s.principles || '');
-      const desc = s.description || s.summary || '';
-      out.push(`### 方案 ${i + 1}: ${name}`);
-      if (principles) out.push(`- **应用原理:** ${principles}`);
-      if (desc) out.push(`- **描述:** ${desc}`);
-      out.push('');
-    });
   }
 
-  if (data.trends.length > 0) {
+  if (data.trends) {
     out.push('## 4 技术发展趋势');
     out.push('');
-    data.trends.slice(0, 8).forEach((t: any, i: number) => {
-      const trend = t.trend || t.name || `趋势 ${i + 1}`;
-      const horizon = t.horizon || t.timing || 'N/A';
-      const drivers = Array.isArray(t.drivers) ? t.drivers.join('; ') : (t.drivers || t.description || '');
-      out.push(`### 趋势 ${i + 1}: ${trend}`);
-      out.push(`- **时间窗口:** ${horizon}`);
-      if (drivers) out.push(`- **驱动因素:** ${drivers}`);
-      out.push('');
-    });
+    out.push(data.trends);
+    out.push('');
   }
 
-  if (data.roadmap.length > 0) {
+  if (data.roadmap) {
     out.push('## 5 实施路线图');
     out.push('');
-    data.roadmap.slice(0, 6).forEach((p: any, i: number) => {
-      const phaseName = p.phase || p.name || `阶段 ${i + 1}`;
-      const focus = p.focus || p.objective || '';
-      const actions = Array.isArray(p.actions) ? p.actions.join('; ') : (p.actions || '');
-      out.push(`### 阶段 ${i + 1}: ${phaseName}`);
-      if (focus) out.push(`- **核心目标:** ${focus}`);
-      if (actions) out.push(`- **关键行动:** ${actions}`);
-      out.push('');
-    });
+    out.push(data.roadmap);
+    out.push('');
   }
 
   if (data.trl) {
     out.push('## 6 技术成熟度评估');
     out.push('');
-    const lvl = data.trl.trlLevel || data.trl.level || data.trl.trl || 'N/A';
-    out.push(`**当前 TRL 等级:** ${lvl}`);
-    if (Array.isArray(data.trl.trlLevelBreakdown) && data.trl.trlLevelBreakdown.length > 0) {
-      out.push('');
-      out.push('各子维度评估:');
-      data.trl.trlLevelBreakdown.forEach((b: any) => {
-        out.push(`- ${b.dimension || b.name || b.aspect}: ${b.level ?? b.value ?? 'N/A'}`);
-      });
-    }
+    out.push(data.trl);
     out.push('');
   }
 
-  if (data.reportMd && data.reportMd.length > 0) {
-    out.push('## 7 综合分析');
+  if (data.sCurve) {
+    out.push('## 7 S-Curve 分析');
     out.push('');
-    const summary = data.reportMd.split('\n').filter((l: string) => l.trim().length > 0).slice(0, 20).join('\n');
-    out.push(summary);
+    out.push(data.sCurve);
     out.push('');
   }
 
-  out.push('## 8 结论与展望');
+  if (data.reportMd) {
+    out.push('## 8 综合分析');
+    out.push('');
+    out.push(data.reportMd);
+    out.push('');
+  }
+
+  out.push('## 9 结论与展望');
   out.push('');
   out.push(
     `本研究通过 TRIZ 方法论系统分析了 "${title}" 的核心技术问题，` +
@@ -300,7 +273,7 @@ export function composeWritePaper(title: string, phase: string, data: {
   if (data.references) {
     out.push('## 参考文献');
     out.push('');
-    if (Array.isArray(data.references.entries)) {
+    if (Array.isArray(data.references?.entries)) {
       data.references.entries.forEach((e: any, i: number) => {
         out.push(`[${i + 1}] ${e.title || e.citation || JSON.stringify(e)}`);
       });
@@ -317,18 +290,23 @@ export async function executeWriteCommand(cmd: WriteCommand, workspaceRoot: stri
   const data = await loadResearchData(cmd, workspaceRoot);
   const content = composeWritePaper(cmd.title, cmd.phase, data);
   await writePaperToFile(content, cmd.writePath, workspaceRoot);
-  return `已写入 \`${cmd.writePath}\`（${content.length} 字符）。包含 ${data.contradictions.length} 项矛盾、${data.solutions.length} 项方案、${data.trends.length} 项趋势。`;
+  const parts = [];
+  if (data.contradictions) parts.push('矛盾分析');
+  if (data.solutions) parts.push('方案');
+  if (data.trends) parts.push('趋势');
+  const summary = parts.length > 0 ? `包含${parts.join('、')}` : '';
+  return `已写入 \`${cmd.writePath}\`（${content.length} 字符）。${summary}`;
 }
 
 export interface ResearchData {
   reportMd: string | null;
   synthesisMd: string | null;
-  contradictions: any[];
-  solutions: any[];
-  trends: any[];
-  roadmap: any[];
-  trl: any;
-  sCurve: any;
+  contradictions: string | null;
+  solutions: string | null;
+  trends: string | null;
+  roadmap: string | null;
+  trl: string | null;
+  sCurve: string | null;
   references: any;
 }
 
@@ -338,12 +316,12 @@ export async function loadResearchData(cmd: WriteCommand, workspaceRoot: string)
   const [reportMd, synthesisMd, contradictions, solutions, trends, roadmap, trl, sCurve, references] = await Promise.all([
     readTextFileSafe(path.join(phaseDir, 'report.md'), 3000),
     readTextFileSafe(path.join(workspaceRoot, '04_Synthesize', 'synthesis_report.md'), 1000),
-    normalizeArr(await readJsonFileSafe(path.join(workspaceRoot, '03_Analyze', 'contradictions.json'))),
-    normalizeArr(await readJsonFileSafe(path.join(workspaceRoot, '04_Synthesize', 'solutions.json'))),
-    normalizeArr(await readJsonFileSafe(path.join(workspaceRoot, '04_Synthesize', 'trends.json'))),
-    normalizeArr(await readJsonFileSafe(path.join(workspaceRoot, '04_Synthesize', 'roadmap.json'))),
-    readJsonFileSafe(path.join(workspaceRoot, '02_TRL', 'trl_assessment.json')),
-    readJsonFileSafe(path.join(workspaceRoot, '02_TRL', 's_curve.json')),
+    readTextFileSafe(path.join(workspaceRoot, '03_Analyze', 'contradictions.md'), 500),
+    readTextFileSafe(path.join(workspaceRoot, '04_Synthesize', 'solutions.md'), 500),
+    readTextFileSafe(path.join(workspaceRoot, '04_Synthesize', 'trends.md'), 500),
+    readTextFileSafe(path.join(workspaceRoot, '04_Synthesize', 'roadmap.md'), 500),
+    readTextFileSafe(path.join(workspaceRoot, '02_TRL', 'trl_assessment.md'), 200),
+    readTextFileSafe(path.join(workspaceRoot, '02_TRL', 's_curve.md'), 200),
     readJsonFileSafe(path.join(workspaceRoot, '06_References', 'library.json')),
   ]);
 
@@ -373,69 +351,34 @@ export function buildPaperPrompt(title: string, data: ResearchData): string {
     sections.push('## 综合研究报告\n' + data.synthesisMd + '\n');
   }
 
-  if (data.contradictions.length > 0) {
+  if (data.contradictions) {
     sections.push('## 技术矛盾分析\n');
-    sections.push(`共识别 ${data.contradictions.length} 项核心技术矛盾：\n`);
-    data.contradictions.forEach((c: any, i: number) => {
-      sections.push(`${i + 1}. 矛盾描述: ${c.description || c.problem || c.title || 'N/A'}`);
-      sections.push(`   改善参数: ${c.improvingParameter || c.improving || 'N/A'}`);
-      sections.push(`   恶化参数: ${c.worseningParameter || c.worsening || 'N/A'}`);
-      if (c.principles && Array.isArray(c.principles)) {
-        const principleNames = c.principles.map((p: any) => p.name || `原则#${p.index || 'N/A'}`).join(', ');
-        sections.push(`   推荐原理: ${principleNames}`);
-      }
-      sections.push('');
-    });
+    sections.push(data.contradictions);
+    sections.push('\n');
   }
 
-  if (data.solutions.length > 0) {
+  if (data.solutions) {
     sections.push('## 解决方案\n');
-    sections.push(`共 ${data.solutions.length} 项候选方案：\n`);
-    data.solutions.forEach((s: any, i: number) => {
-      sections.push(`${i + 1}. ${s.title || s.name || `方案${i + 1}`}`);
-      sections.push(`   描述: ${s.description || s.summary || 'N/A'}`);
-      if (s.appliedPrinciples && Array.isArray(s.appliedPrinciples)) {
-        const principles = s.appliedPrinciples.map((p: any) => {
-          if (typeof p === 'string') return p;
-          return p.index ? `原则#${p.index}: ${p.name || ''}` : (p.name || JSON.stringify(p));
-        }).join('; ');
-        sections.push(`   应用原理: ${principles}`);
-      }
-      sections.push(`   可行性: ${s.feasibility || 'N/A'}, 影响度: ${s.impact || 'N/A'}`);
-      sections.push('');
-    });
+    sections.push(data.solutions);
+    sections.push('\n');
   }
 
-  if (data.trends.length > 0) {
+  if (data.trends) {
     sections.push('## 技术发展趋势\n');
-    data.trends.forEach((t: any, i: number) => {
-      sections.push(`${i + 1}. ${t.trend || t.name || `趋势${i + 1}`}`);
-      sections.push(`   时间窗口: ${t.horizon || t.timing || 'N/A'}`);
-      sections.push(`   驱动因素: ${Array.isArray(t.drivers) ? t.drivers.join('; ') : (t.drivers || t.description || 'N/A')}`);
-      sections.push('');
-    });
+    sections.push(data.trends);
+    sections.push('\n');
   }
 
-  if (data.roadmap.length > 0) {
+  if (data.roadmap) {
     sections.push('## 实施路线图\n');
-    data.roadmap.forEach((p: any, i: number) => {
-      sections.push(`${i + 1}. ${p.phase || p.name || `阶段${i + 1}`}`);
-      sections.push(`   核心目标: ${p.focus || p.objective || 'N/A'}`);
-      sections.push(`   关键行动: ${Array.isArray(p.actions) ? p.actions.join('; ') : (p.actions || 'N/A')}`);
-      sections.push('');
-    });
+    sections.push(data.roadmap);
+    sections.push('\n');
   }
 
   if (data.trl) {
     sections.push('## 技术成熟度评估\n');
-    const lvl = data.trl.trlLevel || data.trl.level || data.trl.trl || 'N/A';
-    sections.push(`当前TRL等级: ${lvl}\n`);
-    if (Array.isArray(data.trl.trlLevelBreakdown) && data.trl.trlLevelBreakdown.length > 0) {
-      data.trl.trlLevelBreakdown.forEach((b: any) => {
-        sections.push(`- ${b.dimension || b.name || b.aspect}: ${b.level ?? b.value ?? 'N/A'}`);
-      });
-    }
-    sections.push('');
+    sections.push(data.trl);
+    sections.push('\n');
   }
 
   if (data.reportMd) {

@@ -232,13 +232,10 @@ suite('E2E: Write Paper (GDL/Zn-air) Using Demo Data', () => {
 			const synth = await callTool('read_file', { filePath: '04_Synthesize/synthesis_report.md', startLine: 1, endLine: 100 });
 			assert.ok(!synth.rawResult.startsWith('Error:'), `read_file synthesis_report.md should succeed: ${synth.rawResult}`);
 
-			const contradictionsRaw = await callTool('read_file', { filePath: '03_Analyze/contradictions.json', startLine: 1, endLine: 500 });
-			assert.ok(!contradictionsRaw.rawResult.startsWith('Error:'), `read_file contradictions.json should succeed: ${contradictionsRaw.rawResult}`);
-			const strippedContent = contradictionsRaw.parsed.data.content.split('\n').map((l: string) => l.replace(/^\d+:\s?/, '')).join('\n');
-			const contradictions = JSON.parse(strippedContent);
-			const contraList = Array.isArray(contradictions) ? contradictions : (contradictions.contradictions || []);
-			assert.ok(Array.isArray(contraList) && contraList.length > 0, 'contradictions.json has entries');
-			assert.ok(contraList[0]?.improvingParameterIndex !== undefined || contraList[0]?.description, 'contradiction entries have shape');
+			const contradictionsRaw = await callTool('read_file', { filePath: '03_Analyze/contradictions.md', startLine: 1, endLine: 500 });
+			assert.ok(!contradictionsRaw.rawResult.startsWith('Error:'), `read_file contradictions.md should succeed: ${contradictionsRaw.rawResult}`);
+			const contraContent = contradictionsRaw.parsed.data.content;
+			assert.ok(contraContent.length > 0, 'contradictions.md has content');
 
 			const titleMatch = USER_REQUEST.match(/write paper:\s*([^,]+)/);
 			assert.ok(titleMatch, 'user request contains a title');
@@ -266,17 +263,15 @@ suite('E2E: Write Paper (GDL/Zn-air) Using Demo Data', () => {
 				``,
 				`## 2 文献综述`,
 				``,
-				`(基于 demo/01_Survey 中的搜索结果，共 ${contraList.length} 项核心矛盾已记录。)`,
+				`(基于 contradictions.md 中的矛盾分析内容。)`,
 				``,
 				`## 3 技术矛盾与瓶颈`,
 				``,
-				contraList.slice(0, 3).map((c: any, i: number) =>
-					`- 矛盾 ${i + 1}: ${c.description || c.improvingParameter || '(无描述)'}`
-				).join('\n'),
+				`(从 contradictions.md 提取的核心矛盾)`,
 				``,
 				`## 4 GDL 方案设计`,
 				``,
-				`(基于 demo/04_Synthesize/solutions.json 与 trends.json 生成。)`,
+				`(基于 demo/04_Synthesize/solutions.md 与 trends.md 生成。)`,
 				``,
 				`## 参考文献`,
 				``,
@@ -381,6 +376,7 @@ suite('E2E: Write Paper (GDL/Zn-air) Using Demo Data', () => {
 
 suite('E2E: Write-Paper Pre-Processor', () => {
 	const { parseWriteCommand, composeWritePaper, executeWriteCommand } = require('../../chat/write_paper') as typeof import('../../chat/write_paper');
+	type ResearchData = import('../../chat/write_paper').ResearchData;
 
 	test('parseWriteCommand: English "write paper: <title>"', () => {
 		const cmd = parseWriteCommand('write paper: 分级孔隙GDL设计');
@@ -435,25 +431,14 @@ suite('E2E: Write-Paper Pre-Processor', () => {
 	});
 
 	test('composeWritePaper: generates full paper structure', () => {
-		const data = {
-			reportMd: '# Report\nThis is a report.',
-			synthesisMd: '# Synthesis\nSynthesis content here.',
-			contradictions: [
-				{ improvingParameter: '强度', worseningParameter: '重量', description: '高强度导致重量增加' },
-				{ improving: '速度', worsening: '成本', problem: '高速增加成本' },
-			],
-			solutions: [
-				{ title: '多孔复合材料', appliedPrinciples: [{ index: 1 }, { index: 35 }], description: '采用多孔结构降低重量' },
-				{ name: '梯度孔隙', principles: '31, 40', summary: '梯度孔隙优化传质' },
-			],
-			trends: [
-				{ trend: '微纳结构化', horizon: '2025-2030', drivers: ['制造工艺进步', '仿真能力提升'] },
-				{ name: 'AI辅助设计', timing: '2024-2028', description: '机器学习优化' },
-			],
-			roadmap: [
-				{ phase: 'Phase 1', focus: '材料筛选', actions: ['文献调研', '初步筛选'] },
-			],
-			trl: { trlLevel: 4, trlLevelBreakdown: [{ dimension: '材料', level: 5 }, { dimension: '工艺', level: 3 }] },
+		const data: ResearchData = {
+			reportMd: '综合分析报告内容',
+			synthesisMd: '引言综合研究报告',
+			contradictions: '- 矛盾 1: 提高强度会增加重量\n  - 改善参数: 强度\n  - 恶化参数: 重量\n- 矛盾 2: 高传质效率需要复杂结构',
+			solutions: '### 方案 1: 多孔复合材料\n采用多孔结构降低重量\n### 方案 2: 梯度孔隙\n梯度孔隙优化传质',
+			trends: '### 微纳结构化 (2025-2030)\n制造工艺进步、仿真能力提升\n### AI辅助设计 (2024-2028)\n机器学习优化',
+			roadmap: '### Phase 1: 材料筛选\n文献调研、初步筛选',
+			trl: '**当前 TRL 等级:** 4\n- 材料: 5\n- 工艺: 3',
 			sCurve: null,
 			references: { entries: [{ title: 'Paper A' }, { title: 'Paper B' }] },
 		};
@@ -468,28 +453,26 @@ suite('E2E: Write-Paper Pre-Processor', () => {
 		assert.ok(paper.includes('## 4 技术发展趋势'));
 		assert.ok(paper.includes('## 5 实施路线图'));
 		assert.ok(paper.includes('## 6 技术成熟度评估'));
-		assert.ok(paper.includes('## 7 综合分析'));
-		assert.ok(paper.includes('## 8 结论与展望'));
+		assert.ok(paper.includes('## 8 综合分析'));
+		assert.ok(paper.includes('## 9 结论与展望'));
 		assert.ok(paper.includes('## 参考文献'));
-		assert.ok(paper.includes('改善参数') && paper.includes('强度'));
-		assert.ok(paper.includes('恶化参数') && paper.includes('重量'));
+		assert.ok(paper.includes('提高强度会增加重量'));
 		assert.ok(paper.includes('多孔复合材料'));
 		assert.ok(paper.includes('微纳结构化'));
 		assert.ok(paper.includes('Phase 1'));
 		assert.ok(paper.includes('TRL') && paper.includes('4'));
-		assert.ok(paper.includes('材料') && paper.includes('5'));
 		assert.ok(paper.includes('[1] Paper A'));
 	});
 
 	test('composeWritePaper: empty data produces minimal paper', () => {
 		const paper = composeWritePaper('Test', '05_Deliver', {
-			reportMd: null, synthesisMd: null, contradictions: [],
-			solutions: [], trends: [], roadmap: [], trl: null,
+			reportMd: null, synthesisMd: null, contradictions: null,
+			solutions: null, trends: null, roadmap: null, trl: null,
 			sCurve: null, references: null,
 		});
 		assert.ok(paper.startsWith('# Test'));
 		assert.ok(paper.includes('## 摘要'));
-		assert.ok(paper.includes('## 8 结论与展望'));
+		assert.ok(paper.includes('## 9 结论与展望'));
 		assert.ok(!paper.includes('## 2 技术矛盾分析'));
 		assert.ok(!paper.includes('## 3 解决方案设计'));
 		assert.ok(!paper.includes('## 参考文献'));

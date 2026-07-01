@@ -26,9 +26,9 @@ Trinno guides you through a structured 7-phase TRIZ innovation analysis — from
 | Phase | What you do | Output |
 |---|---|---|
 | **01_Discover** | Search patents, papers, technical solutions | `patents.json`, `papers.json` |
-| **02_TRL** | Assess technology maturity & S-curve | `s_curve.json`, `trl_assessment.json` |
-| **03_Analyze** | Identify contradictions & ideality gaps | `contradictions.json`, `su_field_analysis.json` |
-| **04_Synthesize** | Apply 40 TRIZ inventive principles | `solutions.json`, `roadmap.json` |
+| **02_TRL** | Assess technology maturity & S-curve | `s_curve.md`, `trl_assessment.md` |
+| **03_Analyze** | Identify contradictions & ideality gaps | `contradictions.md`, `su_field_analysis.md` |
+| **04_Synthesize** | Apply 40 TRIZ inventive principles | `solutions.md`, `roadmap.md` |
 | **05_Deliver** | Write research paper | `paper.md` |
 | **06_References** | Download & organize references | PDFs, `library.json` |
 | **07_Patent** | Incrementally draft patent | `patent.md` |
