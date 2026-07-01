@@ -30,6 +30,7 @@ export interface LoadResult {
   ok: boolean;
   content?: string;
   error?: string;
+  filePath?: string;
   cacheDir?: string;
   subdirs?: string[];
 }
@@ -415,7 +416,7 @@ export async function loadRemoteSkill(
     const fp = path.join(targetDir, file);
     if (fs.existsSync(fp)) {
       try {
-        return {ok: true, content: fs.readFileSync(fp, 'utf-8'), cacheDir};
+        return {ok: true, content: fs.readFileSync(fp, 'utf-8'), filePath: fp, cacheDir};
       } catch (e: any) {
         return {ok: false, error: `read ${file} failed: ${e.message}`, cacheDir};
       }

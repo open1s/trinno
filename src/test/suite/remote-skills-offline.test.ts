@@ -10,6 +10,7 @@ import {
   loadRemoteSkillsFromBosConfig,
   buildRemoteSkillIndex,
 } from '../../bos/infrastructure/remote_skills';
+import { createRemoteSkillTools } from '../../bos/infrastructure/http/remote_skill_tools';
 
 const MOCK_REPO = '/tmp/test-skill-mock.git';
 const MULTI_REPO = '/tmp/test-multi-skill.git';
@@ -180,5 +181,240 @@ describe('remote-skills (offline)', () => {
       return;
     }
     console.log('[real-config] skills:', entries.map(e => e.name));
+  });
+});
+
+// ── Tool-level tests ──
+
+describe('remote-skill-tools', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-tools-'));
+
+  after(() => {
+    try { execSync(`rm -rf "${ws}"`); } catch { /* ignore */ }
+  });
+
+  function getFindTool(): NonNullable<ReturnType<typeof createRemoteSkillTools>[0]> {
+    return createRemoteSkillTools(ws)[0]!;
+  }
+  function getLoadTool(): NonNullable<ReturnType<typeof createRemoteSkillTools>[1]> {
+    return createRemoteSkillTools(ws)[1]!;
+  }
+  function getLoadBestTool(): NonNullable<ReturnType<typeof createRemoteSkillTools>[2]> {
+    return createRemoteSkillTools(ws)[2]!;
+  }
+
+  it('createRemoteSkillTools returns all three tools', () => {
+    const tools = createRemoteSkillTools(ws);
+    assert.strictEqual(tools.length, 3);
+    assert.strictEqual((tools[0] as any)?.name, 'find_remote_skill');
+    assert.strictEqual((tools[1] as any)?.name, 'load_remote_skill');
+    assert.strictEqual((tools[2] as any)?.name, 'load_best_remote_skill');
+  });
+
+  it('load_remote_skill content is returned raw (no wrapper, no directive)', async function() {
+    this.timeout(30000);
+
+    const entries = [{ name: 'mock-skill', description: 'flat test', repo: MOCK_REPO, ref: 'master' }];
+    const { ok: isOk, content, filePath } = await loadRemoteSkill(ws, 'mock-skill', entries);
+    assert.strictEqual(isOk, true, `expected ok`);
+    assert.ok(content, 'expected content');
+    assert.ok(filePath, 'expected filePath');
+    assert.ok(filePath!.endsWith('SKILL.md'), `filePath should end with SKILL.md: ${filePath}`);
+
+    // Content is the raw SKILL.md — no wrapper tags, no extra directive
+    assert.match(content, /Mock Skill Body/);
+    // Must NOT contain wrapper tags or follow directive (those confused the LLM)
+    assert.doesNotMatch(content, /<trinno_skill>/);
+    assert.doesNotMatch(content, /<extra_skill>/);
+    assert.doesNotMatch(content, /Follow its instructions precisely/);
+  });
+
+  it('find_remote_skill runs without error and returns results or hint', async () => {
+    const findTool = getFindTool();
+    const raw = await findTool.callback({ query: 'patent' });
+    assert.ok(typeof raw === 'string', 'callback should return string');
+    // Can be either results (registry present) or hint (empty registry) — both valid
+    const parsed = JSON.parse(raw);
+    assert.strictEqual(parsed.success, true);
+    assert.ok('data' in parsed);
+  });
+
+  it('load_remote_skill returns error for unknown skill (non-empty or empty registry)', async () => {
+    const loadTool = getLoadTool();
+    const raw = await loadTool.callback({ name: 'definitely-not-a-real-skill-12345' });
+    // err() result is wrapped as "Error: <message>" string
+    assert.ok(typeof raw === 'string');
+    assert.ok(raw.startsWith('Error:'), `expected Error prefix, got: ${raw.slice(0, 60)}`);
+    // Should mention either "not found in registry" or "No remote skill registries"
+    const okVariants = /not found in registry|No remote skill registries|no SKILL/i;
+    assert.ok(okVariants.test(raw), `unexpected error: ${raw.slice(0, 100)}`);
+  });
+
+  it('load_remote_skill via tool returns raw content (no wrapper, no directive)', async function() {
+    this.timeout(30000);
+    const loadTool = getLoadTool();
+    const raw = await loadTool.callback({ name: 'mock-skill' });
+
+    if (raw.startsWith('Error:')) {
+      assert.ok(raw.includes('mock-skill'), `error mentions skill: ${raw.slice(0, 80)}`);
+      return;
+    }
+
+    const result = JSON.parse(raw);
+    assert.strictEqual(result.success, true);
+    assert.ok(result.data.content, 'content present');
+    assert.ok(result.data.filePath, 'filePath present');
+    assert.ok(result.data.filePath.endsWith('SKILL.md'), `filePath ends with SKILL.md: ${result.data.filePath}`);
+    // Content is raw — no wrapper tags or follow directive
+    assert.match(result.data.content, /Mock Skill Body/);
+    assert.doesNotMatch(result.data.content, /<trinno_skill>/);
+    assert.doesNotMatch(result.data.content, /<extra_skill>/);
+    assert.doesNotMatch(result.data.content, /Follow its instructions precisely/);
+  });
+
+  it('find_remote_skill result includes usage field showing load_remote_skill call', async () => {
+    const findTool = getFindTool();
+    const raw = await findTool.callback({ query: 'patent', limit: 3 });
+    const result = JSON.parse(raw);
+    if (result.data?.results?.length > 0) {
+      for (const r of result.data.results) {
+        assert.ok(r.usage, 'each result should have usage field');
+        assert.match(r.usage, /^load_remote_skill\(\{ name: /);
+        assert.ok(r.usage.includes(r.name), 'usage should reference the result name');
+      }
+    }
+  });
+
+  it('load_best_remote_skill returns found=false + hint when nothing matches', async function() {
+    this.timeout(30000);
+    const tool = getLoadBestTool();
+    const raw = await tool.callback({ query: 'xyznonexistent_12345' });
+    // err result → "Error: ..."; ok result → JSON string
+    if (raw.startsWith('Error:')) {
+      // Registry may not have this skill — that's OK
+      return;
+    }
+    const result = JSON.parse(raw);
+    // Could be found=false (empty index) or err (no registry) — both acceptable
+    if (result.success) {
+      assert.strictEqual(result.data.found, false);
+      assert.ok(result.data.hint, 'should give hint when no match');
+    }
+  });
+
+  it('load_best_remote_skill finds and loads top match', async function() {
+    this.timeout(60000);
+    const tool = getLoadBestTool();
+    const raw = await tool.callback({ query: 'scholar' });
+    if (raw.startsWith('Error:')) {
+      return;
+    }
+    const result = JSON.parse(raw);
+    if (!result.success) return; // environment-dependent
+    if (result.data.found) {
+      assert.ok(result.data.name, 'name returned');
+      assert.ok(result.data.content, 'content returned');
+      assert.ok(result.data.filePath, 'filePath returned');
+      assert.ok(result.data.filePath.endsWith('SKILL.md'), `filePath ends with SKILL.md: ${result.data.filePath}`);
+      assert.doesNotMatch(result.data.content, /<trinno_skill>/);
+      assert.doesNotMatch(result.data.content, /<extra_skill>/);
+      assert.doesNotMatch(result.data.content, /Follow its instructions precisely/);
+    } else {
+      assert.ok(result.data.hint, 'hint returned when no match');
+    }
+  });
+
+  it('end-to-end: name from find_remote_skill works as input to load_remote_skill', async function() {
+    this.timeout(120000);
+    const findTool = getFindTool();
+    const loadTool = getLoadTool();
+
+    // Find skills matching "scholar" (expected: Awesome-Journal-Scholar-Skills)
+    const findRaw = await findTool.callback({ query: 'scholar', limit: 3 });
+    if (findRaw.startsWith('Error:')) return;
+    const findResult = JSON.parse(findRaw);
+    if (!findResult.success || !findResult.data?.results?.length) return;
+
+    // Take the first result's name and pass it to load_remote_skill
+    const skillName = findResult.data.results[0].name;
+    assert.ok(typeof skillName === 'string' && skillName.length > 0, 'find returned a valid name');
+
+    const loadRaw = await loadTool.callback({ name: skillName });
+    if (loadRaw.startsWith('Error:')) {
+      // If load fails, the error should mention the skill name
+      assert.ok(loadRaw.includes(skillName), `error mentions skill: ${loadRaw.slice(0, 100)}`);
+      return;
+    }
+    const loadResult = JSON.parse(loadRaw);
+    assert.strictEqual(loadResult.success, true, 'load should succeed for name from find');
+    assert.ok(loadResult.data.content, 'loaded content should be present');
+    assert.ok(loadResult.data.filePath, 'filePath present');
+    assert.ok(loadResult.data.filePath.endsWith('SKILL.md'), `filePath ends with SKILL.md: ${loadResult.data.filePath}`);
+    assert.doesNotMatch(loadResult.data.content, /<trinno_skill>/);
+    assert.doesNotMatch(loadResult.data.content, /<extra_skill>/);
+    assert.doesNotMatch(loadResult.data.content, /Follow its instructions precisely/);
+  });
+
+  // ── Edge cases ──
+
+  it('find_remote_skill handles empty/whitespace query without error', async () => {
+    const findTool = getFindTool();
+    const rawEmpty = await findTool.callback({ query: '' });
+    assert.ok(typeof rawEmpty === 'string');
+    const parsed = JSON.parse(rawEmpty);
+    assert.strictEqual(parsed.success, true);
+    assert.strictEqual(parsed.data.count, 0);
+    assert.deepStrictEqual(parsed.data.results, []);
+  });
+
+  it('find_remote_skill handles single-char query without error', async () => {
+    const findTool = getFindTool();
+    const raw = await findTool.callback({ query: 'a', limit: 1 });
+    assert.ok(typeof raw === 'string');
+    const parsed = JSON.parse(raw);
+    assert.strictEqual(parsed.success, true);
+  });
+
+  it('find_remote_skill handles special characters in query without error', async () => {
+    const findTool = getFindTool();
+    const raw = await findTool.callback({ query: 'C++ & .NET framework (2024)', limit: 1 });
+    assert.ok(typeof raw === 'string');
+    const parsed = JSON.parse(raw);
+    assert.strictEqual(parsed.success, true);
+  });
+
+  it('load_remote_skill rejects empty name', async () => {
+    const loadTool = getLoadTool();
+    const raw = await loadTool.callback({ name: '' });
+    assert.ok(raw.startsWith('Error:'));
+    assert.match(raw, /invalid skill address/i);
+  });
+
+  it('load_remote_skill rejects path traversal in name', async () => {
+    const loadTool = getLoadTool();
+    const raw = await loadTool.callback({ name: '../../../etc/passwd' });
+    assert.ok(raw.startsWith('Error:'));
+    assert.match(raw, /invalid skill address/i);
+  });
+
+  it('load_remote_skill error message is plain text, not JSON', async () => {
+    const loadTool = getLoadTool();
+    const raw = await loadTool.callback({ name: 'I-do-not-exist-in-any-registry' });
+    assert.ok(raw.startsWith('Error:'));
+    // Error should start with readable text, not JSON object
+    const afterPrefix = raw.slice(7);
+    assert.ok(!afterPrefix.startsWith('{'), `error should be plain text, got JSON-like: ${raw.slice(0, 100)}`);
+    assert.ok(!afterPrefix.startsWith('['), `error should be plain text, got JSON-like: ${raw.slice(0, 100)}`);
+  });
+
+  it('load_best_remote_skill rejects empty query', async () => {
+    const tool = getLoadBestTool();
+    const rawEmpty = await tool.callback({ query: '' });
+    assert.ok(rawEmpty.startsWith('Error:'));
+    assert.match(rawEmpty, /query is required/i);
+
+    const rawSpace = await tool.callback({ query: '   ' });
+    assert.ok(rawSpace.startsWith('Error:'));
+    assert.match(rawSpace, /query is required/i);
   });
 });

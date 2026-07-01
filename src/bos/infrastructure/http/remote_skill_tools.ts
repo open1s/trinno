@@ -17,6 +17,16 @@ export function createRemoteSkillTools(workspaceRoot: string) {
       try {
         const limit = Math.min(Math.max(args.limit ?? 10, 1), 20);
         const registry = loadRemoteSkillsFromBosConfig();
+        if (registry.length === 0) {
+          return ok({
+            query: args.query,
+            count: 0,
+            scannedRepos: 0,
+            totalSkills: 0,
+            results: [],
+            hint: 'No remote skill registries configured (bos.config.json missing or empty). Use load_skill for local skills, or ask the user to configure remote skill repos.',
+          });
+        }
         const index = await buildRemoteSkillIndex(workspaceRoot, registry);
         const hits = await searchRemoteSkills(args.query as string, index, limit);
         return ok({
@@ -30,6 +40,7 @@ export function createRemoteSkillTools(workspaceRoot: string) {
             ...(h.ref !== undefined ? { ref: h.ref } : {}),
             ...(h.tags !== undefined ? { tags: h.tags } : {}),
             score: h.score,
+            usage: `load_remote_skill({ name: ${JSON.stringify(h.name)} })`,
           })),
         });
       } catch (e: any) {
@@ -46,21 +57,71 @@ export function createRemoteSkillTools(workspaceRoot: string) {
       try {
         const name = args.name as string;
         const registry = loadRemoteSkillsFromBosConfig();
+        if (registry.length === 0) {
+          return err(`No remote skill registries configured. Cannot load "${name}". Ask the user to set up bos.config.json with skills_registry.skills, or use load_skill for local skills.`);
+        }
         const result = await loadRemoteSkill(workspaceRoot, name, registry);
         if (result.ok) {
-          return ok({name, content: result.content, cacheDir: result.cacheDir});
+          return ok({
+            name,
+            filePath: result.filePath,
+            cacheDir: result.cacheDir,
+            content: result.content,
+          });
         }
-        const payload: Record<string, unknown> = {name, error: result.error || 'load failed'};
-        if (result.cacheDir) payload.cacheDir = result.cacheDir;
+        let msg = `Cannot load skill "${name}": ${result.error || 'load failed'}`;
+        if (result.cacheDir) msg += ` (cached at ${result.cacheDir})`;
         if (result.subdirs && result.subdirs.length > 0) {
-          payload.subdirs = result.subdirs;
-          payload.hint = 'These are subdirectories at the target path. The address is the parent folder of a SKILL.md file.';
+          msg += `. Subdirectories found: ${result.subdirs.slice(0, 10).join(', ')}. The address must point to the parent folder of a SKILL.md file — use one of these subdirectory names as part of the address (e.g. "${name}/<subdir>").`;
         }
-        return err(JSON.stringify(payload));
+        return err(msg);
       } catch (e: any) {
         return err(e.message || String(e));
       }
     });
 
-  return [findRemoteSkill, loadRemoteSkillTool];
+  const loadBestRemoteSkill = defineTool(
+    'load_best_remote_skill',
+    'Find and load the best matching remote skill in one step. Searches registered skill repos by keyword, picks the highest-scoring match, loads its SKILL.md content, and returns it. Use this when you want to get skill instructions directly — avoiding the two-step find → load process.',
+  )
+    .required('query', 'string', 'Search keywords to find the most relevant skill')
+    .handle(async (args) => {
+      try {
+        const query = args.query as string;
+        if (!query || query.trim().length === 0) {
+          return err('Query is required');
+        }
+        const registry = loadRemoteSkillsFromBosConfig();
+        if (registry.length === 0) {
+          return err('No remote skill registries configured. Use load_skill for local skills, or ask the user to configure bos.config.json with skills_registry.skills.');
+        }
+        const index = await buildRemoteSkillIndex(workspaceRoot, registry);
+        const hits = await searchRemoteSkills(query, index, 1);
+        if (hits.length === 0) {
+          return ok({
+            found: false,
+            query,
+            hint: `No skills found matching "${query}". Try different keywords, or use find_remote_skill to browse available skills.`,
+          });
+        }
+        const best = hits[0]!;
+        const result = await loadRemoteSkill(workspaceRoot, best.name, registry);
+        if (result.ok) {
+          return ok({
+            found: true,
+            name: best.name,
+            description: best.description,
+            score: best.score,
+            filePath: result.filePath,
+            cacheDir: result.cacheDir,
+            content: result.content,
+          });
+        }
+        return err(`Found skill "${best.name}" but failed to load: ${result.error || 'unknown error'}`);
+      } catch (e: any) {
+        return err(e.message || String(e));
+      }
+    });
+
+  return [findRemoteSkill, loadRemoteSkillTool, loadBestRemoteSkill];
 }
