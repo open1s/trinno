@@ -209,6 +209,7 @@ const staticSlashCommands = [
   { name: 'get', description: 'Search OpenAlex and auto-download the top match (or top 3 with "all")' },
   { name: 'papers', description: 'List downloaded papers in the output directory' },
   { name: 'help', description: 'Show all available commands' },
+  { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
 ];
 
 const allSlashCommands = [...staticSlashCommands, ...loadSkillSlashs.map(s => ({ name: s.name, description: s.description }))];
@@ -1390,6 +1391,38 @@ function handleRateLimitedRetry(): void {
 
 let _autoCompactInProgress = false;
 
+interface ModelProfile {
+  maxInput?: number;
+  workingLimit?: number;
+}
+
+function getEffectiveModelName(): string {
+  const config = getChatConfig();
+  return (selectedModelConfig?.model || config.model.name) ?? '';
+}
+
+let _modelProfilesCache: Record<string, ModelProfile> | null = null;
+
+function getModelProfile(modelName: string): ModelProfile | null {
+  if (!_modelProfilesCache) {
+    try {
+      const cachePath = path.join(os.homedir(), '.trinno', 'model-profiles.json');
+      _modelProfilesCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8')) as Record<string, ModelProfile>;
+    } catch {
+      _modelProfilesCache = {};
+    }
+  }
+  return _modelProfilesCache[modelName] ?? null;
+}
+
+function getAutoCompactThreshold(modelName: string): number {
+  const profile = getModelProfile(modelName);
+  if (!profile) return 0;
+  const limit = profile.workingLimit || profile.maxInput || 0;
+  if (limit <= 0) return 0;
+  return Math.round(limit * 0.9);
+}
+
 function isTrpWorkspaceRoot(p: string): boolean {
   const phaseDirs = ['01_Discover', '02_TRL', '03_Analyze', '04_Synthesize', '05_Deliver', '06_References', '07_Patent'];
   let hits = 0;
@@ -1584,6 +1617,89 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
     selectedModelConfig || globalModelConfig,
     workspaceRoot,
   );
+}
+
+async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
+  const session = currentSession;
+  const view = chatView;
+  if (_autoCompactInProgress || !session || !view) return;
+  _autoCompactInProgress = true;
+
+  const compactMsg = createAssistantMessage();
+  currentStreamingId = compactMsg.id;
+  currentStreamingMsg = compactMsg;
+  isGenerating = true;
+  view.webview.postMessage({ type: 'streaming-start', messageId: compactMsg.id } as any);
+  view.webview.postMessage({
+    type: 'error',
+    messageId: currentStreamingId ?? '',
+    error: 'Token threshold reached — auto-compacting and retrying...',
+  } as ExtToWebViewMessage);
+
+  const compactMsgs: CompactMessage[] = session.messages.map(m => ({
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+  }));
+
+  return new Promise<void>((resolve, reject) => {
+    sendCompactRequest(
+      compactMsgs,
+      session.compactedSummary || undefined,
+      (tokenMsg) => { chatView?.webview.postMessage(tokenMsg); },
+      async () => {
+        if (!currentSession || !currentStreamingMsg) return;
+        const llmSummary = currentStreamingMsg.content.trim();
+        const messagesCount = currentSession.messages.length;
+        currentSession.compactedSummary = llmSummary;
+        currentSession.isCompacted = true;
+        currentSession.totalInputTokens = 0;
+        currentSession.totalOutputTokens = 0;
+        const compactSummaryMsg = createAssistantMessage();
+        compactSummaryMsg.content = `## Session Compacted\n\n**${messagesCount}** messages summarized:\n\n${llmSummary}`;
+        compactSummaryMsg.status = 'complete';
+        currentSession.messages = [compactSummaryMsg];
+        updateSessionTimestamp(currentSession);
+        await saveSession(currentSession);
+        if (sessionStore) {
+          const metaIndex = sessionStore.sessions.findIndex(s => s.id === currentSession!.id);
+          if (metaIndex >= 0) {
+            sessionStore.sessions[metaIndex] = sessionToMetadata(currentSession);
+          }
+          saveSessionStore(sessionStore).catch(() => { });
+        }
+        sendClearSession(currentSession.id);
+        sendCompactResult(currentSession.id, llmSummary);
+        currentStreamingMsg = null;
+        isGenerating = false;
+        currentStreamingId = null;
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'clearHistory' } as any);
+          const summaryMsg = createAssistantMessage();
+          summaryMsg.content = `## Session Compacted\n\n**${messagesCount}** messages summarized:\n\n${llmSummary}`;
+          summaryMsg.status = 'complete';
+          chatView.webview.postMessage({ type: 'history-message', message: summaryMsg } as any);
+          chatView.webview.postMessage({
+            type: 'session-updated',
+            sessionId: currentSession.id,
+            sessionTitle: currentSession.title,
+            sessions: sessionStore?.sessions ?? [],
+            isCompacted: true,
+          } as any);
+          chatView.webview.postMessage({ type: 'done', messageId: compactMsg.id } as any);
+        }
+        await new Promise(r => setTimeout(r, 500));
+        await handleUserMessage(retryText);
+        _autoCompactInProgress = false;
+        resolve();
+      },
+      (compactErr) => {
+        _autoCompactInProgress = false;
+        if (chatView) chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
+        reject(compactErr);
+      },
+      selectedModelConfig || globalModelConfig,
+    );
+  });
 }
 
 async function handleUserMessage(text: string): Promise<void> {
@@ -1817,6 +1933,7 @@ async function handleUserMessage(text: string): Promise<void> {
       },
       () => {
         if (chatView) chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
+        if (text.trim() === '/ping') _modelProfilesCache = null;
         finalizeCurrentMessage();
         processQueue();
       },
@@ -1946,10 +2063,10 @@ async function handleUserMessage(text: string): Promise<void> {
       if (currentQueueId) markQueueCompleted(currentQueueId);
       currentQueueId = null;
       dequeuedItemText = null;
+      const inputTokens = doneData?.inputTokens ?? 0;
+      const outputTokens = doneData?.outputTokens ?? 0;
       if (chatView) {
         chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
-        let inputTokens = doneData?.inputTokens ?? 0;
-        let outputTokens = doneData?.outputTokens ?? 0;
         log.trace({ sessionId: currentSession?.id, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] panel: stream done');
         chatView.webview.postMessage({
           type: 'token-usage',
@@ -1961,6 +2078,25 @@ async function handleUserMessage(text: string): Promise<void> {
         } as any);
       }
       finalizeCurrentMessage();
+
+      // Accumulate per-message token usage into session
+      if (currentSession) {
+        currentSession.totalInputTokens = (currentSession.totalInputTokens ?? 0) + inputTokens;
+        currentSession.totalOutputTokens = (currentSession.totalOutputTokens ?? 0) + outputTokens;
+      }
+
+      // Proactive auto-compact: fire when accumulated tokens approach model's limit
+      if (currentSession && !_autoCompactInProgress && currentSession.messages.length >= 6 && !currentQueueId) {
+        const accTotal = (currentSession.totalInputTokens ?? 0) + (currentSession.totalOutputTokens ?? 0);
+        if (accTotal > 0) {
+          const threshold = getAutoCompactThreshold(getEffectiveModelName());
+          if (threshold > 0 && accTotal >= threshold) {
+            triggerAutoCompactOnThreshold(lastUserMessageText || '').catch(() => {});
+            return;
+          }
+        }
+      }
+
       // Auto-drain next queued message
       processQueue();
     },

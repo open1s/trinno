@@ -106,6 +106,7 @@
     { name: 'get', description: 'Search OpenAlex and auto-download the top match (or top 3 with "all")' },
     { name: 'papers', description: 'List downloaded papers in the output directory' },
     { name: 'help', description: 'Show all available commands' },
+    { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
   ];
   let pendingApproval = null;
 

@@ -12,6 +12,8 @@ export interface Session {
   compactedSummary?: string;
   isCompacted: boolean;
   brainOsSession?: string;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
 }
 
 export interface SessionMetadata {

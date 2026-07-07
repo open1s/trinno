@@ -31,6 +31,7 @@ import {
   principlesCommand,
   suFieldCommand,
   initCommand,
+  pingCommand,
 } from './slash-commands/index.js';
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
@@ -106,6 +107,7 @@ slashRegistry.register(idealityCommand, ['i', 'ideal']);
 slashRegistry.register(principlesCommand, ['p', 'princ']);
 slashRegistry.register(suFieldCommand, ['sf', 'sufield']);
 slashRegistry.register(initCommand, ['setup', 'new']);
+slashRegistry.register(pingCommand);
 
 let pendingSlashOutput: string | null = null;
 
@@ -1216,6 +1218,11 @@ process.stdin.on('data', (chunk: Buffer) => {
               (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
               chdirToWorkspace();
             }
+            (globalThis as any).__SLASH_MODEL_CONFIG = {
+              model: msg.model,
+              baseUrl: msg.baseUrl,
+              apiKey: msg.apiKey,
+            };
             currentJobId++;
             const slashJobId = String(currentJobId);
             if (msg.usePubSub) {
