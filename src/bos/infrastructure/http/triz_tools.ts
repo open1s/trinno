@@ -1,4 +1,6 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
+import * as path from 'path';
+import * as fs from 'fs';
 import { ContradictionMatrix } from '../../domain/contradiction/matrix.js';
 import { PrincipleEngine } from '../../domain/principle/services.js';
 import { SuFieldAnalysisService } from '../../domain/solution/su_field_service.js';
@@ -365,6 +367,72 @@ export function createTrizTools(
       });
     });
 
+  const updateGoal = defineTool(
+    'update_goal',
+    'Update the goal status. Agent can ONLY set "complete" or "blocked" — pause/resume/budget-limit are system operations. For "complete": only after independently verifying every requirement with auditable evidence. For "blocked": only after 3 consecutive turns with the same blocking reason.',
+  )
+    .required('status', 'string', 'Only "complete" or "blocked" — other statuses are system-managed and will be rejected')
+    .param('reasoning', 'string', 'For "complete": summarize verified evidence per requirement. For "blocked": describe the blocker in detail.')
+    .handle((args) => {
+      const root: string = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+      const fp = path.join(root, '.trinno', 'goal.json');
+      let goal: any = {};
+      let previousStatus: string | undefined;
+      try {
+        goal = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+        previousStatus = goal.status;
+      } catch {
+        return err('No goal is currently set. Use /goal <text> to create one first.');
+      }
+
+      // HARD GATE: agent can ONLY set complete or blocked
+      if (args.status !== 'complete' && args.status !== 'blocked') {
+        return err('Agent can only set "complete" or "blocked". Pause/resume/budget-limit are system operations. Rejected: "' + args.status + '".');
+      }
+
+      // Blocked audit: track consecutive reasons
+      if (args.status === 'blocked') {
+        if (!args.reasoning) return err('"blocked" requires reasoning describing the blocker.');
+        if (!Array.isArray(goal.blockedReasons)) goal.blockedReasons = [];
+        const lastReason = goal.blockedReasons.length > 0 ? goal.blockedReasons[goal.blockedReasons.length - 1] : null;
+        goal.blockedReasons.push(args.reasoning);
+
+        // Check consecutive: 3+ turns with same blocking reason needed
+        const sameCount = lastReason === args.reasoning ? (goal.blockedCount ?? 0) + 1 : 1;
+        goal.blockedCount = sameCount;
+        goal.status = 'blocked';
+
+        if (sameCount < 3) {
+          // Write to disk but return a HARD FAIL — agent is blocked from calling this too early
+          goal.updatedAt = Date.now();
+          const dir = path.dirname(fp);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(fp, JSON.stringify(goal, null, 2));
+          return err(`Blocked audit: only ${sameCount}/3 consecutive blocked reasons with same blocker. Agent must verify this blocker persists for 3 consecutive goal turns before calling update_goal(status="blocked"). Do NOT call update_goal blocked again this turn — continue working.`);
+        }
+        // 3+ consecutive → allow
+      }
+
+      goal.status = args.status;
+      goal.updatedAt = Date.now();
+      if (args.reasoning) goal.lastReasoning = args.reasoning;
+      goal.blockedCount = 0; // Reset for next use
+
+      const dir = path.dirname(fp);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(fp, JSON.stringify(goal, null, 2));
+
+      return ok({
+        previousStatus: previousStatus ?? 'none',
+        newStatus: args.status,
+        goalText: goal.text,
+        reasoning: args.reasoning,
+        tokensUsed: goal.tokensUsed ?? 0,
+        tokenBudget: goal.tokenBudget,
+        createdAt: goal.createdAt,
+      });
+    });
+
   return [
     principles,
     parameters,
@@ -375,5 +443,6 @@ export function createTrizTools(
     sCurve,
     search,
     currentDatetime,
+    updateGoal,
   ];
 }

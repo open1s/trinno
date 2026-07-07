@@ -210,6 +210,7 @@ const staticSlashCommands = [
   { name: 'papers', description: 'List downloaded papers in the output directory' },
   { name: 'help', description: 'Show all available commands' },
   { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
+  { name: 'goal', description: 'Set, view, pause, resume, or clear a persistent research goal' },
 ];
 
 const allSlashCommands = [...staticSlashCommands, ...loadSkillSlashs.map(s => ({ name: s.name, description: s.description }))];
@@ -477,6 +478,7 @@ async function createNewSession(title?: string): Promise<void> {
       sessions: sessionStore.sessions,
       isCompacted: false,
     } as ExtToWebViewMessage);
+    sendGoalStatus();
   }
 }
 
@@ -534,6 +536,7 @@ async function switchSession(sessionId: string): Promise<void> {
         sessions: sessionStore.sessions,
         isCompacted: session.isCompacted,
       } as any);
+      sendGoalStatus();
       // Send full queue snapshot
       chatView.webview.postMessage({
         type: 'queue-state',
@@ -1476,6 +1479,39 @@ function getDefaultWorkspaceRoot(): string | undefined {
   return getTrpWorkspaceRoot();
 }
 
+function readGoalForPanel(): { text: string; status: string } | null {
+  const root = getDefaultWorkspaceRoot();
+  if (!root) return null;
+  try {
+    const fp = path.join(root, '.trinno', 'goal.json');
+    const data = fs.readFileSync(fp, 'utf-8');
+    const parsed = JSON.parse(data);
+    if (parsed && typeof parsed.text === 'string' && typeof parsed.status === 'string') {
+      return { text: parsed.text, status: parsed.status };
+    }
+  } catch { /* no goal set */ }
+  return null;
+}
+
+let _lastGoalStatus: string | null = null;
+
+function sendGoalStatus(): void {
+  if (!chatView) return;
+  const goal = readGoalForPanel();
+  if (!goal || !goal.text) {
+    _lastGoalStatus = null;
+    chatView.webview.postMessage({ type: 'goal-block', goal: null } as any);
+    return;
+  }
+  const statusKey = `${goal.status}:${goal.text}`;
+  if (statusKey === _lastGoalStatus) return;
+  _lastGoalStatus = statusKey;
+  chatView.webview.postMessage({
+    type: 'goal-block',
+    goal: { text: goal.text, status: goal.status },
+  } as any);
+}
+
 async function sendFileList(workspaceRoot: string): Promise<void> {
   const MAX_FILES = 500;
   const excludedDirs = ['node_modules', '.git', 'dist', 'out', 'build', '.next', '.cache', 'coverage', '.vscode', '.idea'];
@@ -1904,6 +1940,19 @@ async function handleUserMessage(text: string): Promise<void> {
     return;
   }
 
+  // /goal: cancel active stream first to prevent duplicate listeners
+  const goalMatch = text.match(/^\/(goal|g)\b(.*)$/i);
+  if (goalMatch) {
+    if (isGenerating) {
+      cancelGeneration();
+      finalizeCurrentMessage();
+      isGenerating = false;
+      currentStreamingId = null;
+      currentStreamingMsg = null;
+    }
+    // fall through to unknownSlash dispatch below
+  }
+
   const unknownSlash = text.match(/^\/([a-zA-Z][\w-]*)(\s+.*)?$/);
   if (unknownSlash) {
     const userMsg = createUserMessage(text);
@@ -1935,6 +1984,21 @@ async function handleUserMessage(text: string): Promise<void> {
         if (chatView) chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         if (text.trim() === '/ping') _modelProfilesCache = null;
         finalizeCurrentMessage();
+        sendGoalStatus();
+
+        // Codex: when /goal <text> sets a new goal, auto-start working immediately
+        // Skip for: /goal alone (view), /goal pause/resume/clear
+        const isNewGoal = text.match(/^\/goal\s+(.+)$/i) && !text.match(/^\/goal\s+(pause|resume|clear)\s*$/i);
+        if (isNewGoal) {
+          const goal = readGoalForPanel();
+          if (goal && goal.status === 'active') {
+            processQueue();
+            setImmediate(() => {
+              handleUserMessage(`Decompose this goal into sub-tasks and acceptance criteria. Use todowrite to track each sub-task with embedded acceptance criteria. For each sub-task, define what observable artifact proves it done (file written, test passes, code compiles, output matches spec). Then execute one sub-task per turn, verifying each criterion before marking it verified. Only call update_goal complete when EVERY sub-task is verified.\n\nGoal: ${goal.text}`).catch(() => {});
+            });
+            return;
+          }
+        }
         processQueue();
       },
       (err) => {
@@ -2078,6 +2142,7 @@ async function handleUserMessage(text: string): Promise<void> {
         } as any);
       }
       finalizeCurrentMessage();
+      sendGoalStatus();
 
       // Accumulate per-message token usage into session
       if (currentSession) {

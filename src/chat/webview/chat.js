@@ -107,6 +107,7 @@
     { name: 'papers', description: 'List downloaded papers in the output directory' },
     { name: 'help', description: 'Show all available commands' },
     { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
+    { name: 'goal', description: 'Set, view, pause, resume, or clear a persistent research goal' },
   ];
   let pendingApproval = null;
 
@@ -1576,6 +1577,10 @@
         showSessionMenu();
         break;
 
+      case 'goal-block':
+        renderGoalBlock(msg.goal);
+        break;
+
       case 'session-updated':
         currentSessionId = msg.sessionId;
         currentSessionTitle = msg.sessionTitle;
@@ -1777,6 +1782,52 @@
     
     // Render mermaid diagrams in history messages
     renderMermaidDiagrams(el).catch(() => {});
+  }
+
+  let goalBlockEl = null;
+
+  function renderGoalBlock(goal) {
+    if (!goal || !goal.text) {
+      if (goalBlockEl) { goalBlockEl.remove(); goalBlockEl = null; }
+      return;
+    }
+    const statusLabel = goal.status === 'active' ? 'Pursuing'
+      : goal.status === 'paused' ? 'Paused'
+      : goal.status === 'complete' ? 'Complete'
+      : goal.status === 'blocked' ? 'Blocked'
+      : goal.status || 'Unknown';
+    const statusClass = goal.status === 'active' ? 'goal-active'
+      : goal.status === 'complete' ? 'goal-complete'
+      : goal.status === 'blocked' ? 'goal-blocked'
+      : goal.status === 'paused' ? 'goal-paused'
+      : 'goal-inactive';
+
+    // Update existing element or create new one
+    if (!goalBlockEl) {
+      goalBlockEl = document.createElement('div');
+      goalBlockEl.className = 'message assistant';
+      goalBlockEl.dataset.goalId = 'goal-block';
+      messagesContainer.appendChild(goalBlockEl);
+    }
+
+    goalBlockEl.innerHTML = `<div class="tool-section">
+      <div class="tool-summary">
+        <span class="tool-count goal-block-label">
+          <span class="goal-badge ${statusClass}">${statusLabel}</span>
+          ${escapeHtml(goal.text.length > 80 ? goal.text.slice(0, 80) + '…' : goal.text)}
+        </span>
+        <span class="tool-toggle">▼</span>
+      </div>
+      <div class="tool-list collapsed">
+        <div class="mcp-dropdown-item">
+          <span>Objective: ${escapeHtml(goal.text)}</span>
+        </div>
+        <div class="mcp-dropdown-item">
+          <span>Status: ${statusLabel}</span>
+        </div>
+      </div>
+    </div>`;
+    scrollToBottom();
   }
 
   function renderToolLog(tools) {

@@ -9,3 +9,4 @@ export { principlesCommand } from './principles.js';
 export { suFieldCommand } from './su-field.js';
 export { initCommand } from './init.js';
 export { pingCommand } from './ping.js';
+export { goalCommand, readGoalForWorker, writeGoalForWorker, isGoalActive, isGoalTerminal } from './goal.js';
