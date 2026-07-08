@@ -37,6 +37,8 @@ import {
   writeGoalForWorker,
   isGoalActive,
   isGoalTerminal,
+  appendGoalHistory,
+  updateGoalProgress,
 } from './slash-commands/index.js';
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
@@ -407,7 +409,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   // Inject active goal
   const goal = readGoalForWorker();
   if (goal && goal.status === 'active') {
-    systemPrompt += `\n\n## Current Research Goal\n\n${goal.text}\n\n**Goal rules (exact Codex state machine):**\n- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.\n- **"complete"**: only after completion audit proves every requirement satisfied.\n- **"blocked"**: only after 3 consecutive goal turns with same blocking condition.\n\n**Fidelity:**\n- Keep the full objective intact. Do not shrink or redefine success.\n- Optimize each turn for movement toward the requested end state, not for the easiest passing change.\n- Temporary rough edges are acceptable while moving in the right direction.\n\n**Completion audit:**\nBefore calling update_goal complete, verify each requirement against current-state evidence. Do not rely on intent, partial progress, or memory. Only mark complete when ALL requirements are proven with auditable evidence.\n\n**Blocked audit:**\nDo NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count. Never use blocked for "hard/slow/uncertain/incomplete" reasons.\n\n**Decomposition & acceptance criteria (mandatory first step):**\nOn your FIRST turn for a new goal, decompose the objective into sub-tasks AND acceptance criteria. Track every sub-task via todowrite with embedded acceptance criteria. Required workflow:\n1. Decompose the goal into concrete, independently-executable sub-tasks. Each sub-task must be small enough to finish in one turn.\n2. For each sub-task, define acceptance criteria: WHAT observable artifact/output proves the sub-task is done. Examples: file written to a specific path, test passes, data fetched, code compiles, output matches spec.\n3. Use todowrite with status: pending / in_progress / completed / verified.\n4. EXECUTE one sub-task per turn. Before marking a sub-task completed: re-read the acceptance criteria, inspect current state (file contents, command outputs), and confirm EVERY criterion is satisfied. Only then set status=verified.\n5. Do not move to next sub-task until current one has ALL criteria verified.\n6. Aggregate sub-task verification across the whole goal. Only call update_goal complete when EVERY sub-task has status=verified with all acceptance criteria satisfied.`;
+    systemPrompt += `\n\n## Current Research Goal\n\n${goal.text}\n${goal.note ? `\n**User note:** ${goal.note}\n` : ''}\n**Goal rules (exact Codex state machine):**\n- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.\n- **"complete"**: only after completion audit proves every requirement satisfied.\n- **"blocked"**: only after 3 consecutive goal turns with same blocking condition.\n\n**Fidelity:**\n- Keep the full objective intact. Do not shrink or redefine success.\n- Optimize each turn for movement toward the requested end state, not for the easiest passing change.\n- Temporary rough edges are acceptable while moving in the right direction.\n\n**Completion audit:**\nBefore calling update_goal complete, verify each requirement against current-state evidence. Do not rely on intent, partial progress, or memory. Only mark complete when ALL requirements are proven with auditable evidence — each criterion must be matched to a concrete artifact: file at path with expected content, command stdout, passing test name, or measured metric value. Subjective statements (\"looks good\", \"I checked\") do NOT count as evidence.\n\n**Blocked audit:**\nDo NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count. Never use blocked for "hard/slow/uncertain/incomplete" reasons.\n\n**Decomposition & acceptance criteria (mandatory first step):**\nOn your FIRST turn for a new goal, decompose the objective into sub-tasks AND quantify acceptance criteria. Track every sub-task via todowrite with embedded acceptance criteria. Required workflow:\n1. Decompose the goal into concrete, independently-executable sub-tasks. Each sub-task must be small enough to finish in one turn.\n2. For each sub-task, define MEASURABLE acceptance criteria — not subjective statements. Each criterion MUST be one of:\n   - **File artifact:** exact path + expected content/structure (e.g. \"06_References/drone.pdf exists and starts with %PDF-1.4\")\n   - **Command output:** exact command + expected stdout pattern (e.g. \"npm run compile exits 0 with no errors\")\n   - **Test pass:** named test case passes (e.g. \"test 'extracts year from YYYY-MM-DD' in publication-trends.test.js is green\")\n   - **Numerical threshold:** metric value within range (e.g. \"TRL score = 7\", \"ideality ratio > 1.5\")\n   - **Structural conformance:** spec match (e.g. \"output .typ file contains sections: Problem, Context, Evidence, Modeling, TRIZ, Validation, Execution\")\n   FORBIDDEN as criteria: \"I reviewed it\", \"looks correct\", \"seems complete\", \"the code is good\". These are subjective and unmeasurable.\n3. Use todowrite with status: pending / in_progress / completed. Embed acceptance criteria in each todo's content field.\n4. EXECUTE one sub-task per turn. Before marking a sub-task completed: RUN the verification (execute the command, read the file, run the test, check the metric), and PASTE the actual output as evidence in your response. Only then mark status=completed.\n5. Do not move to next sub-task until current one has ALL criteria verified with pasted evidence.\n6. Aggregate sub-task verification across the whole goal. Only call update_goal complete when EVERY sub-task has status=completed, and your update_goal reasoning lists each criterion alongside its evidence (command output / file content / test result).`;
   }
 
   let effectiveMcp = mcpServers;
@@ -772,6 +774,14 @@ function emitTodoUpdate(): void {
   const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
   const todos = readExistingTodos(wsRoot);
   emit('todo-update', { todos: todos || [] });
+  // If a goal is active, sync sub-task progress to goal.json and emit goal-progress
+  if (todos && todos.length > 0) {
+    const total = todos.length;
+    const completed = todos.filter(t => t.status === 'completed').length;
+    const items = todos.map(t => t.content);
+    updateGoalProgress({ completed, total, items });
+    emit('goal-progress', { completed, total, items });
+  }
   drainEmitQueueSync();
 }
 
@@ -1396,7 +1406,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   // Inject active goal
   const goal = readGoalForWorker();
   if (goal && goal.status === 'active') {
-    systemPrompt += `\n\n## Current Research Goal\n\n${goal.text}\n\n**Goal rules (exact Codex state machine):**\n- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.\n- **"complete"**: only after completion audit proves every requirement satisfied.\n- **"blocked"**: only after 3 consecutive goal turns with same blocking condition.\n\n**Fidelity:**\n- Keep the full objective intact. Do not shrink or redefine success.\n- Optimize each turn for movement toward the requested end state, not for the easiest passing change.\n- Temporary rough edges are acceptable while moving in the right direction.\n\n**Completion audit:**\nBefore calling update_goal complete, verify each requirement against current-state evidence. Do not rely on intent, partial progress, or memory. Only mark complete when ALL requirements are proven with auditable evidence.\n\n**Blocked audit:**\nDo NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count. Never use blocked for "hard/slow/uncertain/incomplete" reasons.\n\n**Decomposition & acceptance criteria (mandatory first step):**\nOn your FIRST turn for a new goal, decompose the objective into sub-tasks AND acceptance criteria. Track every sub-task via todowrite with embedded acceptance criteria. Required workflow:\n1. Decompose the goal into concrete, independently-executable sub-tasks. Each sub-task must be small enough to finish in one turn.\n2. For each sub-task, define acceptance criteria: WHAT observable artifact/output proves the sub-task is done. Examples: file written to a specific path, test passes, data fetched, code compiles, output matches spec.\n3. Use todowrite with status: pending / in_progress / completed / verified.\n4. EXECUTE one sub-task per turn. Before marking a sub-task completed: re-read the acceptance criteria, inspect current state (file contents, command outputs), and confirm EVERY criterion is satisfied. Only then set status=verified.\n5. Do not move to next sub-task until current one has ALL criteria verified.\n6. Aggregate sub-task verification across the whole goal. Only call update_goal complete when EVERY sub-task has status=verified with all acceptance criteria satisfied.`;
+    systemPrompt += `\n\n## Current Research Goal\n\n${goal.text}\n${goal.note ? `\n**User note:** ${goal.note}\n` : ''}\n**Goal rules (exact Codex state machine):**\n- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.\n- **"complete"**: only after completion audit proves every requirement satisfied.\n- **"blocked"**: only after 3 consecutive goal turns with same blocking condition.\n\n**Fidelity:**\n- Keep the full objective intact. Do not shrink or redefine success.\n- Optimize each turn for movement toward the requested end state, not for the easiest passing change.\n- Temporary rough edges are acceptable while moving in the right direction.\n\n**Completion audit:**\nBefore calling update_goal complete, verify each requirement against current-state evidence. Do not rely on intent, partial progress, or memory. Only mark complete when ALL requirements are proven with auditable evidence — each criterion must be matched to a concrete artifact: file at path with expected content, command stdout, passing test name, or measured metric value. Subjective statements (\"looks good\", \"I checked\") do NOT count as evidence.\n\n**Blocked audit:**\nDo NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count. Never use blocked for "hard/slow/uncertain/incomplete" reasons.\n\n**Decomposition & acceptance criteria (mandatory first step):**\nOn your FIRST turn for a new goal, decompose the objective into sub-tasks AND quantify acceptance criteria. Track every sub-task via todowrite with embedded acceptance criteria. Required workflow:\n1. Decompose the goal into concrete, independently-executable sub-tasks. Each sub-task must be small enough to finish in one turn.\n2. For each sub-task, define MEASURABLE acceptance criteria — not subjective statements. Each criterion MUST be one of:\n   - **File artifact:** exact path + expected content/structure (e.g. \"06_References/drone.pdf exists and starts with %PDF-1.4\")\n   - **Command output:** exact command + expected stdout pattern (e.g. \"npm run compile exits 0 with no errors\")\n   - **Test pass:** named test case passes (e.g. \"test 'extracts year from YYYY-MM-DD' in publication-trends.test.js is green\")\n   - **Numerical threshold:** metric value within range (e.g. \"TRL score = 7\", \"ideality ratio > 1.5\")\n   - **Structural conformance:** spec match (e.g. \"output .typ file contains sections: Problem, Context, Evidence, Modeling, TRIZ, Validation, Execution\")\n   FORBIDDEN as criteria: \"I reviewed it\", \"looks correct\", \"seems complete\", \"the code is good\". These are subjective and unmeasurable.\n3. Use todowrite with status: pending / in_progress / completed. Embed acceptance criteria in each todo's content field.\n4. EXECUTE one sub-task per turn. Before marking a sub-task completed: RUN the verification (execute the command, read the file, run the test, check the metric), and PASTE the actual output as evidence in your response. Only then mark status=completed.\n5. Do not move to next sub-task until current one has ALL criteria verified with pasted evidence.\n6. Aggregate sub-task verification across the whole goal. Only call update_goal complete when EVERY sub-task has status=completed, and your update_goal reasoning lists each criterion alongside its evidence (command output / file content / test result).`;
   }
 
   let effectiveMcp = mcpServers;
@@ -1509,6 +1519,16 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     }
   }
 
+  // Inject objective_updated notification if goal was recently edited
+  const preGoal = readGoalForWorker();
+  if (preGoal && preGoal.editedAt && preGoal.previousText) {
+    const prevText = preGoal.previousText;
+    userMessage = `## Objective Updated\n\nThe research objective was just updated. The previous text was:\n\n> ${prevText}\n\nDrop any sub-tasks and in-progress work that only served the previous objective. Re-decompose the new objective from scratch with measurable acceptance criteria before proceeding.\n\n## Current Research Goal\n\n${preGoal.text}\n\n---\n\n${userMessage}`;
+    delete preGoal.editedAt;
+    delete preGoal.previousText;
+    writeGoalForWorker(preGoal);
+  }
+
   currentAgent = started;
   currentSessionIdForCancel = sessionId || null;
 
@@ -1521,9 +1541,11 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     let roundIndex = 0;
     let lastRoundContent = '';
     let stuckCount = 0;
+    let progressStallCount = 0;
 
     while (roundIndex < rounds.length && !signal.aborted) {
       const msg = rounds[roundIndex]!;
+      let todowriteCalledThisRound = false;
 
       let roundText = '';
 
@@ -1571,6 +1593,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
               break;
             case 'ToolResult':
               if (toolCallNames.get(token.id ?? '') === 'todowrite') {
+                todowriteCalledThisRound = true;
+                progressStallCount = 0;
                 emitTodoUpdate();
               }
               if (shouldEmitToolResult(token.id, token.name)) {
@@ -1622,7 +1646,63 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       });
 
       // After each round, store output for stuck detection
+      const prevRoundContent = lastRoundContent;
       lastRoundContent = roundText;
+
+      // Stuck detection: if this round's output matches the previous round's output (first 800 chars), increment
+      // 3 consecutive identical-output rounds → halt goal by writing status='budget_limited'
+      const SIG_LEN = 800;
+      const prevSig = prevRoundContent.slice(0, SIG_LEN);
+      const curSig = roundText.slice(0, SIG_LEN);
+      if (prevSig.length > 0 && curSig.length > 0 && prevSig === curSig) {
+        // Only count as stuck if no todowrite was called — todowrite indicates active progress
+        if (!todowriteCalledThisRound) {
+          stuckCount++;
+          log.warn({ sessionId, stuckCount, roundIndex }, '[GOAL] stuck: identical output detected');
+          if (stuckCount >= 3) {
+            const stuckGoal = readGoalForWorker();
+            if (stuckGoal && isGoalActive(stuckGoal.status)) {
+              stuckGoal.status = 'budget_limited';
+              stuckGoal.updatedAt = Date.now();
+              appendGoalHistory('active', 'budget_limited', `stuck detection: ${stuckCount} consecutive identical-output rounds`);
+              writeGoalForWorker(stuckGoal);
+              log.warn({ sessionId, stuckCount }, '[GOAL] stuck threshold reached — halting via budget_limited');
+              localEmit('token', { tokenType: 'Text', text: `\n\n## Goal Stalled\n\n> ${stuckGoal.text}\n\n_Agent produced identical output for ${stuckCount} consecutive rounds. Halting to prevent runaway. Use \`/goal resume\` to retry._\n` });
+              break;
+            }
+          } else {
+            // Inject a nudge: tell agent it's stuck and to try a different approach
+            rounds.push(`[System notice] Your previous turn produced effectively identical output to the turn before. You appear stuck. Take a different approach: re-read the objective, inspect current state from scratch, choose a different sub-task or method. Do NOT repeat the same actions.`);
+          }
+        } else {
+          // Output looks identical, but todowrite was called — agent IS making progress (e.g. running tool-side without text output)
+          stuckCount = 0;
+        }
+      } else {
+        stuckCount = 0;
+      }
+
+      // Progress reporting check: if todowrite was NOT called this round, count as stall
+      if (!todowriteCalledThisRound && !signal.aborted) {
+        progressStallCount++;
+        log.warn({ sessionId, progressStallCount, roundIndex }, '[GOAL] no todowrite this round');
+        if (progressStallCount >= 3) {
+          const stallGoal = readGoalForWorker();
+          if (stallGoal && isGoalActive(stallGoal.status)) {
+            stallGoal.status = 'budget_limited';
+            stallGoal.updatedAt = Date.now();
+            appendGoalHistory('active', 'budget_limited', `no todowrite for ${progressStallCount} consecutive rounds`);
+            writeGoalForWorker(stallGoal);
+            log.warn({ sessionId, progressStallCount }, '[GOAL] progress stalled — halting via budget_limited');
+            localEmit('token', { tokenType: 'Text', text: `\n\n## Goal Stalled\n\n> ${stallGoal.text}\n\n_No todowrite calls for ${progressStallCount} consecutive rounds — progress reporting is mandatory every round. Use \`/goal resume\` to retry._\n` });
+            break;
+          }
+        } else {
+          rounds.push(`[System notice] You did not call todowrite this round. Progress reporting is mandatory every round. Before continuing, call todowrite to update your sub-task statuses (mark in_progress, completed, or pending). Do not skip this step.`);
+        }
+      } else {
+        progressStallCount = 0;
+      }
 
       roundIndex++;
 
@@ -1652,14 +1732,14 @@ Work from evidence:
 Use the current worktree and external state as authoritative. Previous conversation context can help locate relevant work, but inspect the current state before relying on it. Improve, replace, or remove existing work as needed to satisfy the actual objective.
 
 Progress visibility:
-If todowrite is available and the next work is meaningfully multi-step, use it to show a concise plan tied to the real objective. Keep the plan current as steps complete or the next best action changes. Skip planning overhead for trivial one-step progress, and do not treat a plan update as a substitute for doing the work.
+You MUST call the todowrite tool at least once every round to update sub-task statuses (in_progress / completed / pending). Skipping todowrite for 3 consecutive rounds will halt the goal as stalled. A concise progress update (1-2 lines) tied to the real objective is expected every round. Do not treat a plan update as a substitute for doing the work.
 
 Acceptance criteria tracking:
-- Each sub-task in todowrite must carry explicit acceptance criteria: WHAT observable artifact proves it done (file at path, test pass, command output match, spec conformance).
-- Execute one sub-task per turn. Before marking a sub-task verified: re-read its acceptance criteria, inspect current state, and prove every criterion. Only then set status=verified.
-- Do not mark a sub-task verified based on intent, partial progress, or memory. Inspect the artifact.
-- Do not move to the next sub-task until the current one is fully verified.
-- The goal's completion audit must aggregate all sub-task verifications. update_goal complete requires EVERY sub-task status=verified with all criteria satisfied.
+- Each sub-task in todowrite must carry MEASURABLE acceptance criteria: file path + expected content, command + expected output, named test case, numerical threshold, or structural spec. Subjective criteria ("looks correct", "reviewed it") are forbidden.
+- Execute one sub-task per turn. Before marking a sub-task completed: RUN the verification (execute command, read file, run test, check metric), PASTE the actual output as evidence in your response. Only then mark status=completed.
+- Do not mark a sub-task completed based on intent, partial progress, or memory. The evidence must be from the CURRENT round's actual command output / file read / test run, not recalled from earlier.
+- Do not move to the next sub-task until the current one is fully completed with pasted evidence.
+- The goal's completion audit must aggregate all sub-task verifications. update_goal complete requires EVERY sub-task status=completed, and the reasoning must list each criterion alongside its pasted evidence (command output / file content / test result).
 
 Fidelity:
 - Optimize each turn for movement toward the requested end state, not for the smallest stable-looking subset or easiest passing change.

@@ -210,7 +210,7 @@ const staticSlashCommands = [
   { name: 'papers', description: 'List downloaded papers in the output directory' },
   { name: 'help', description: 'Show all available commands' },
   { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
-  { name: 'goal', description: 'Set, view, pause, resume, or clear a persistent research goal' },
+  { name: 'goal', description: 'Set, view, edit, pause, resume, annotate, log, or clear a persistent research goal' },
 ];
 
 const allSlashCommands = [...staticSlashCommands, ...loadSkillSlashs.map(s => ({ name: s.name, description: s.description }))];
@@ -248,6 +248,13 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
     agentEvents.on(AgentEvent.TodoUpdate, (todos: Array<{ content: string; status: string; priority: string }>) => {
       if (chatView) {
         chatView.webview.postMessage({ type: 'todo-update', todos } as any);
+      }
+    });
+
+    agentEvents.on(AgentEvent.GoalProgress, (msg: { completed: number; total: number; items?: string[] }) => {
+      if (chatView) {
+        chatView.webview.postMessage({ type: 'goal-progress', completed: msg.completed, total: msg.total, items: msg.items } as any);
+        sendGoalStatus();
       }
     });
 
@@ -1479,7 +1486,7 @@ function getDefaultWorkspaceRoot(): string | undefined {
   return getTrpWorkspaceRoot();
 }
 
-function readGoalForPanel(): { text: string; status: string } | null {
+function readGoalForPanel(): { text: string; status: string; note?: string; progress?: { completed: number; total: number } } | null {
   const root = getDefaultWorkspaceRoot();
   if (!root) return null;
   try {
@@ -1487,7 +1494,12 @@ function readGoalForPanel(): { text: string; status: string } | null {
     const data = fs.readFileSync(fp, 'utf-8');
     const parsed = JSON.parse(data);
     if (parsed && typeof parsed.text === 'string' && typeof parsed.status === 'string') {
-      return { text: parsed.text, status: parsed.status };
+      const out: { text: string; status: string; note?: string; progress?: { completed: number; total: number } } = { text: parsed.text, status: parsed.status };
+      if (typeof parsed.note === 'string') out.note = parsed.note;
+      if (parsed.progress && typeof parsed.progress.completed === 'number' && typeof parsed.progress.total === 'number') {
+        out.progress = { completed: parsed.progress.completed, total: parsed.progress.total };
+      }
+      return out;
     }
   } catch { /* no goal set */ }
   return null;
@@ -1503,13 +1515,13 @@ function sendGoalStatus(): void {
     chatView.webview.postMessage({ type: 'goal-block', goal: null } as any);
     return;
   }
-  const statusKey = `${goal.status}:${goal.text}`;
+  const statusKey = `${goal.status}:${goal.text}:${goal.note ?? ''}:${goal.progress ? `${goal.progress.completed}/${goal.progress.total}` : ''}`;
   if (statusKey === _lastGoalStatus) return;
-  _lastGoalStatus = statusKey;
   chatView.webview.postMessage({
     type: 'goal-block',
-    goal: { text: goal.text, status: goal.status },
+    goal,
   } as any);
+  _lastGoalStatus = statusKey;
 }
 
 async function sendFileList(workspaceRoot: string): Promise<void> {
@@ -1988,7 +2000,7 @@ async function handleUserMessage(text: string): Promise<void> {
 
         // Codex: when /goal <text> sets a new goal, auto-start working immediately
         // Skip for: /goal alone (view), /goal pause/resume/clear
-        const isNewGoal = text.match(/^\/goal\s+(.+)$/i) && !text.match(/^\/goal\s+(pause|resume|clear)\s*$/i);
+        const isNewGoal = text.match(/^\/goal\s+(.+)$/i) && !text.match(/^\/goal\s+(pause|resume|clear|log|edit\s|status\s)/i);
         if (isNewGoal) {
           const goal = readGoalForPanel();
           if (goal && goal.status === 'active') {

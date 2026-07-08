@@ -369,10 +369,10 @@ export function createTrizTools(
 
   const updateGoal = defineTool(
     'update_goal',
-    'Update the goal status. Agent can ONLY set "complete" or "blocked" — pause/resume/budget-limit are system operations. For "complete": only after independently verifying every requirement with auditable evidence. For "blocked": only after 3 consecutive turns with the same blocking reason.',
+    'Update the goal status. Agent can ONLY set "complete" or "blocked" — pause/resume/budget-limit are system operations (use /goal pause, /goal resume, /goal status <note>, /goal log). For "complete": only after every acceptance criterion is measured against current-state evidence (file content, command output, test result, metric value). For "blocked": only after 3 consecutive turns with the same blocking reason, and you have attempted multiple verification approaches.',
   )
     .required('status', 'string', 'Only "complete" or "blocked" — other statuses are system-managed and will be rejected')
-    .param('reasoning', 'string', 'For "complete": summarize verified evidence per requirement. For "blocked": describe the blocker in detail.')
+    .param('reasoning', 'string', 'REQUIRED. For "complete": list EACH acceptance criterion alongside its measured evidence (e.g. "criterion: file X exists → evidence: ls shows X at 1204 bytes; criterion: tests pass → evidence: npm test output shows 7 passing"). For "blocked": describe the blocker AND what verification commands you already ran (full command + output).')
     .handle((args) => {
       const root: string = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
       const fp = path.join(root, '.trinno', 'goal.json');
@@ -405,6 +405,8 @@ export function createTrizTools(
         if (sameCount < 3) {
           // Write to disk but return a HARD FAIL — agent is blocked from calling this too early
           goal.updatedAt = Date.now();
+          if (!Array.isArray(goal.history)) goal.history = [];
+          goal.history.push({ at: Date.now(), from: previousStatus ?? 'none', to: 'blocked', note: `attempt ${sameCount}/3: ${args.reasoning}` });
           const dir = path.dirname(fp);
           if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(fp, JSON.stringify(goal, null, 2));
@@ -413,10 +415,26 @@ export function createTrizTools(
         // 3+ consecutive → allow
       }
 
+      // Evidence gate for 'complete': reject subjective reasoning
+      if (args.status === 'complete') {
+        if (!args.reasoning || args.reasoning.trim().length < 80) {
+          return err('complete requires reasoning with evidence per criterion (min 80 chars). List each acceptance criterion alongside its measured evidence (file content / command output / test result / metric value). Rejected: reasoning too short.');
+        }
+        const lowered = args.reasoning.toLowerCase();
+        const forbidden = ['looks good', 'looks correct', 'seems complete', 'i reviewed', 'i checked', 'appears correct', 'should be done'];
+        for (const phrase of forbidden) {
+          if (lowered.includes(phrase)) {
+            return err(`complete requires MEASURABLE evidence, not subjective statements. Reasoning contains forbidden phrase "${phrase}". List each criterion with its concrete evidence: file path + content, command + stdout, test name + pass, metric + value.`);
+          }
+        }
+      }
+
       goal.status = args.status;
       goal.updatedAt = Date.now();
       if (args.reasoning) goal.lastReasoning = args.reasoning;
       goal.blockedCount = 0; // Reset for next use
+      if (!Array.isArray(goal.history)) goal.history = [];
+      goal.history.push({ at: Date.now(), from: previousStatus ?? 'none', to: args.status, note: args.reasoning });
 
       const dir = path.dirname(fp);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

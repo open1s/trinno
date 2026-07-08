@@ -107,7 +107,7 @@
     { name: 'papers', description: 'List downloaded papers in the output directory' },
     { name: 'help', description: 'Show all available commands' },
     { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
-    { name: 'goal', description: 'Set, view, pause, resume, or clear a persistent research goal' },
+    { name: 'goal', description: 'Set, view, edit, pause, resume, annotate, log, or clear a persistent research goal' },
   ];
   let pendingApproval = null;
 
@@ -1646,6 +1646,14 @@
         renderTodoBadges();
         break;
 
+      case 'goal-progress':
+        if (goalBlockEl) {
+          goalBlockEl.dataset.completed = String(msg.completed ?? '');
+          goalBlockEl.dataset.total = String(msg.total ?? '');
+          refreshGoalBlockFromDatasets();
+        }
+        break;
+
       case 'tool-approval-needed':
         showToolApproval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
         break;
@@ -1785,21 +1793,26 @@
   }
 
   let goalBlockEl = null;
+  let lastGoalData = null;
 
   function renderGoalBlock(goal) {
     if (!goal || !goal.text) {
       if (goalBlockEl) { goalBlockEl.remove(); goalBlockEl = null; }
+      lastGoalData = null;
       return;
     }
+    lastGoalData = goal;
     const statusLabel = goal.status === 'active' ? 'Pursuing'
       : goal.status === 'paused' ? 'Paused'
       : goal.status === 'complete' ? 'Complete'
       : goal.status === 'blocked' ? 'Blocked'
+      : goal.status === 'budget_limited' ? 'Stalled'
       : goal.status || 'Unknown';
     const statusClass = goal.status === 'active' ? 'goal-active'
       : goal.status === 'complete' ? 'goal-complete'
       : goal.status === 'blocked' ? 'goal-blocked'
       : goal.status === 'paused' ? 'goal-paused'
+      : goal.status === 'budget_limited' ? 'goal-stalled'
       : 'goal-inactive';
 
     // Update existing element or create new one
@@ -1810,11 +1823,48 @@
       messagesContainer.appendChild(goalBlockEl);
     }
 
+    // Sync datasets from goal-progress messages
+    if (goal.progress) {
+      goalBlockEl.dataset.completed = String(goal.progress.completed ?? '');
+      goalBlockEl.dataset.total = String(goal.progress.total ?? '');
+    }
+
+    refreshGoalBlockInner(statusLabel, statusClass, goal);
+    scrollToBottom();
+  }
+
+  function refreshGoalBlockFromDatasets() {
+    if (!goalBlockEl || !lastGoalData) return;
+    const goal = lastGoalData;
+    const statusLabel = goal.status === 'active' ? 'Pursuing'
+      : goal.status === 'paused' ? 'Paused'
+      : goal.status === 'complete' ? 'Complete'
+      : goal.status === 'blocked' ? 'Blocked'
+      : goal.status === 'budget_limited' ? 'Stalled'
+      : goal.status || 'Unknown';
+    const statusClass = goal.status === 'active' ? 'goal-active'
+      : goal.status === 'complete' ? 'goal-complete'
+      : goal.status === 'blocked' ? 'goal-blocked'
+      : goal.status === 'paused' ? 'goal-paused'
+      : goal.status === 'budget_limited' ? 'goal-stalled'
+      : 'goal-inactive';
+    refreshGoalBlockInner(statusLabel, statusClass, goal);
+  }
+
+  function refreshGoalBlockInner(statusLabel, statusClass, goal) {
+    const completed = goalBlockEl?.dataset?.completed;
+    const total = goalBlockEl?.dataset?.total;
+    const progressStr = (completed !== undefined && total !== undefined && total !== '')
+      ? ` · ${completed}/${total} sub-tasks` : '';
+    const noteHtml = goal.note ? `<div class="mcp-dropdown-item"><span>Note: ${escapeHtml(goal.note)}</span></div>` : '';
+    const progressHtml = (goal.progress || (completed !== undefined && total !== undefined && total !== ''))
+      ? `<div class="mcp-dropdown-item"><span>Sub-tasks: ${completed ?? (goal.progress?.completed ?? 0)}/${total ?? (goal.progress?.total ?? 0)}</span></div>`
+      : '';
     goalBlockEl.innerHTML = `<div class="tool-section">
       <div class="tool-summary">
         <span class="tool-count goal-block-label">
           <span class="goal-badge ${statusClass}">${statusLabel}</span>
-          ${escapeHtml(goal.text.length > 80 ? goal.text.slice(0, 80) + '…' : goal.text)}
+          ${escapeHtml(goal.text.length > 80 ? goal.text.slice(0, 80) + '…' : goal.text)}${progressStr}
         </span>
         <span class="tool-toggle">▼</span>
       </div>
@@ -1825,9 +1875,10 @@
         <div class="mcp-dropdown-item">
           <span>Status: ${statusLabel}</span>
         </div>
+        ${progressHtml}
+        ${noteHtml}
       </div>
     </div>`;
-    scrollToBottom();
   }
 
   function renderToolLog(tools) {

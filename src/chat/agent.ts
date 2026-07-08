@@ -27,6 +27,7 @@ export const AgentEvent = {
   McpStatus: 'mcp-status',
   LspStatus: 'lsp-status',
   TodoUpdate: 'todo-update',
+  GoalProgress: 'goal-progress',
 } as const;
 
 let workerProcess: childProcess.ChildProcess | null = null;
@@ -193,6 +194,9 @@ async function ensureWorker(): Promise<void> {
           if (msg.type === 'todo-update') {
             const todos = msg.todos || [];
             setImmediate(() => agentEvents.emit(AgentEvent.TodoUpdate, todos));
+          }
+          if (msg.type === 'goal-progress') {
+            setImmediate(() => agentEvents.emit(AgentEvent.GoalProgress, msg));
           }
         } catch { /* ignore non-JSON */ }
       }

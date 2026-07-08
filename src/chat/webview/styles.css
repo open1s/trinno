@@ -493,6 +493,11 @@ body {
   color: #fff;
 }
 
+.goal-badge.goal-stalled {
+  background: #7c3aed;
+  color: #fff;
+}
+
 .goal-badge.goal-inactive {
   background: #6b7280;
   color: #fff;
