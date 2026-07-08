@@ -132,7 +132,7 @@ export async function composeRoot(options: {
   const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
   const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
   const idealityHandler = new EvaluateIdealityHandler(locale);
-  const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver);
+  const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver, phaseWriter);
 
   const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
   const websearchTools = createWebsearchTools();

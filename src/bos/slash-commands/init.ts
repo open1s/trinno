@@ -11,7 +11,7 @@ const PHASE_DIRS = [
   '05_Deliver',
   '06_References',
   '07_Patent',
-  '08_TData',
+  '08_AutoResearch',
 ] as const;
 
 type PhaseDir = typeof PHASE_DIRS[number];
@@ -34,11 +34,11 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
       '使用 `scansci_pdf_search` / `triz_search` 检索相关文献',
       '使用 `papers_download` / `scansci_pdf_batch_download` 下载全文',
       '将下载的文献保存至 `../06_References/` 目录',
-      '更新 `../06_References/library.json` 记录元数据',
+      '更新 `../06_References/library.md` 记录元数据',
     ],
     outputFiles: [
-      '`papers.json` — 论文检索结果（含标题、作者、年份、DOI、重要性评分）',
-      '`patents.json` — 专利检索结果',
+      '`papers.md` — 论文检索结果（含标题、作者、年份、DOI、重要性评分）',
+      '`patents.md` — 专利检索结果',
       '`search_queries.md` — 本次检索使用的查询词（便于复现）',
     ],
     extraTitle: '重要性评分标准',
@@ -66,7 +66,7 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     ],
     outputFiles: [
       '`trl_assessment.md` — TRL 评估结果与依据',
-      '`s_curve.md` — S-curve 数据点与技术阶段标注',
+      '`s_curve.svg` — S-curve 数据点与技术阶段标注',
     ],
     extraTitle: 'TRL 定义速查',
     extraContent: [
@@ -164,7 +164,7 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
       '2. 文献综述（01_Discover 证据）',
       '3. 技术矛盾分析（03_Analyze）',
       '4. TRIZ 解决方案（04_Synthesize）',
-      '5. 实验验证（08_TData 数据）',
+      '5. 实验验证（08_AutoResearch 数据）',
       '6. 结论与展望',
     ],
     notes: [
@@ -179,15 +179,15 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     workflow: [
       '01_Discover 下载文献后自动存入此目录',
       '使用 `papers_list_downloaded` 查看已下载文献',
-      '定期更新 library.json 补充 importance 和 tags',
+      '定期更新 library.md 补充 importance 和 tags',
     ],
     outputFiles: [
-      '`library.json` — 文献索引（元数据 + 文件路径）',
+      '`library.md` — 文献索引（元数据 + 文件路径）',
       '`papers/` — 论文 PDF/DOCX/EPUB',
       '`patents/` — 专利 PDF',
       '`supplementary/` — 补充材料',
     ],
-    extraTitle: 'library.json 格式',
+    extraTitle: 'library.md 格式',
     extraContent: [
       '```json',
       '[',
@@ -242,32 +242,57 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
       '避免使用功能性描述，优先用结构/步骤限定',
     ],
   },
-  '08_TData': {
-    title: '08_TData — 实验数据与代码',
-    purpose: '存储验证实验数据、仿真代码、测试结果，支持 04_Synthesize 的解决方案验证。',
+  '08_AutoResearch': {
+    title: '08_AutoResearch — 实验数据与迭代研究',
+    purpose: '存储验证实验数据、AutoResearch 迭代日志、仿真代码、测试结果。支持 Karpathy-style 自研循环：Propose → Act → Evaluate → Ratchet。',
     workflow: [
+      '根据 scope.md 定义的研究范围和约束进行迭代实验',
+      '在 experiments/ 下记录每次迭代：假设、指标前后值、结论（keep/revert）',
+      'eval.md 定义固定的评估指标和验证流程——循环中不可修改',
+      'scope.md 记录当前研究范围和成功标准（类似 program.md）',
       '根据 04_Synthesize 的验证计划设计实验',
       '将实验代码保存在 `code/` 目录',
       '记录实验数据与结果到 `experiments/`',
       '撰写验证报告到 `validation/`',
+      '迭代结束后写入 summary.md 汇总',
     ],
     outputFiles: [
-      '`experiments/` — 实验记录与原始数据',
+      '`scope.md` — 研究范围、约束、成功标准（AutoResearch program.md 等价物）',
+      '`eval.md` — 固定评估指标和验证流程（循环中不可修改）',
+      '`experiments/log_{N}.md` — 每次迭代记录（假设、before/after、结论）',
+      '`experiments/summary.md` — 迭代结束后汇总',
       '`code/` — 仿真/分析代码',
       '`results/` — 处理后的结果',
       '`validation/` — 验证报告',
     ],
-    extraTitle: '数据记录规范',
+    extraTitle: 'AutoResearch 循环迭代记录格式',
     extraContent: [
-      '每条实验记录需包含：',
-      '- 实验目的（链接到 solutions.md 中的验证计划）',
-      '- 实验条件（参数设置、环境）',
-      '- 原始数据文件路径',
-      '- 分析结果与结论',
-      '- 与预期对比（PASS/FAIL）',
+      '```markdown',
+      '# Experiment Log N',
+      '## Hypothesis',
+      '简短描述本次要验证的假设',
+      '',
+      '## Scope (from scope.md)',
+      '- 研究范围: ...',
+      '- 约束: ...',
+      '- 成功标准: ...',
+      '',
+      '## Evaluation (from eval.md)',
+      '- 固定指标: ...',
+      '- 指标 before: ...',
+      '- 指标 after: ...',
+      '',
+      '## Verdict',
+      '- [ ] KEPT — 指标改善',
+      '- [ ] REVERTED — 未改善或退化',
+      '- 结论: ...',
+      '```',
     ],
     notes: [
-      '命名规范：`exp_{日期}_{序号}_{描述}.md`',
+      '命名规范：`log_{序号}_{日期}.md`',
+      'scope.md 和 eval.md 在每次新的迭代循环开始时由 AI 创建',
+      '实验记录需包含假设 → 行动 → 指标前后 → 结论的完整链路',
+      'ratchet 原则：只保留改善的变更，退化自动回退（jj undo）',
       '大型数据文件（如 CSV、JSON）单独存放，实验记录引用路径',
       '验证报告需量化对比改善参数与恶化参数',
     ],
@@ -331,6 +356,21 @@ export const initCommand: SlashCommand = {
         fs.writeFileSync(phaseReadmePath, buildPhaseReadme(phase, projectName, rootReadmeExisted), 'utf-8');
       }
       phaseReadmes.push({ phase, created: !phaseExisted });
+    }
+
+    // AutoResearch loop template files (08_AutoResearch)
+    const scopePath = path.join(root, '08_AutoResearch', 'scope.md');
+    if (!fs.existsSync(scopePath)) {
+      fs.writeFileSync(scopePath, buildScopeTemplate(projectName, today), 'utf-8');
+    }
+    const evalPath = path.join(root, '08_AutoResearch', 'eval.md');
+    if (!fs.existsSync(evalPath)) {
+      fs.writeFileSync(evalPath, buildEvalTemplate(projectName, today), 'utf-8');
+    }
+    fs.mkdirSync(path.join(root, '08_AutoResearch', 'experiments'), { recursive: true });
+    const logTemplatePath = path.join(root, '08_AutoResearch', 'experiments', 'log_template.md');
+    if (!fs.existsSync(logTemplatePath)) {
+      fs.writeFileSync(logTemplatePath, buildLogTemplate(projectName, today), 'utf-8');
     }
 
     const initRecord = {
@@ -416,7 +456,7 @@ function buildAgentsMd(name: string, today: string): string {
     '  05_Deliver/      # Selected concepts & deliverables',
     '  06_References/   # Downloaded papers & metadata',
     '  07_Patent/       # Patent drafts',
-    '  08_TData/        # Experiment data & code',
+    '  08_AutoResearch/ # Experiment data & iteration logs',
     '```',
     '',
     '## Agent Commands',
@@ -462,7 +502,7 @@ function buildRootReadme(name: string, goal: string, today: string, root: string
     '| `05_Deliver/` | Selected concepts, prototype plans. | [`05_Deliver/README.md`](05_Deliver/README.md) |',
     '| `06_References/` | Literature search results, downloaded papers. | [`06_References/README.md`](06_References/README.md) |',
     '| `07_Patent/` | Patent drafts. | [`07_Patent/README.md`](07_Patent/README.md) |',
-    '| `08_TData/` | 实验数据与代码. | [`08_TData/README.md`](08_TData/README.md) |',
+    '| `08_AutoResearch/` | 实验数据与迭代研究日志. | [`08_AutoResearch/README.md`](08_AutoResearch/README.md) |',
     '',
     '## Problem statement',
     '',
@@ -530,4 +570,122 @@ function buildPhaseReadme(phase: PhaseDir, projectName: string, rootReadmeExiste
     '',
   );
   return lines.join('\n');
+}
+
+function buildScopeTemplate(projectName: string, today: string): string {
+  return [
+    `# Scope — ${projectName}`,
+    '',
+    `> AutoResearch scope definition. Created ${today}.`,
+    '> Analogous to `program.md` in karpathy/autoresearch.',
+    '> **Rules:** AI reads this to understand constraints. Human edits to redirect. AI never modifies this file mid-loop.',
+    '',
+    '## Research Question',
+    '',
+    '_What specific question or problem are we trying to solve?_',
+    '',
+    '## Constraints',
+    '',
+    '- _Budget: (time, compute, cost)_',
+    '- _Scope boundaries: (what is IN and OUT of scope)_',
+    '- _Acceptable risk level:_',
+    '',
+    '## Success Criteria',
+    '',
+    '| # | Criterion | Metric | Target | Priority |',
+    '|---|-----------|--------|--------|----------|',
+    '| 1 | | | | High/Medium/Low |',
+    '',
+    '## Fixed Parameters (do not change mid-loop)',
+    '',
+    '- _e.g., evaluation metric, training budget, search depth_',
+    '',
+    '## Allowed Mutation Surface',
+    '',
+    '- _Which files are allowed to be modified during iterations?_',
+    '- _Everything else is read-only._',
+    '',
+    '## Termination Condition',
+    '',
+    '- _When do we stop? (metric saturated, budget exhausted, user interrupt)_',
+    '',
+  ].join('\n');
+}
+
+function buildEvalTemplate(projectName: string, today: string): string {
+  return [
+    `# Evaluation — ${projectName}`,
+    '',
+    `> Fixed evaluation procedure. Created ${today}.`,
+    '> **Rules:** This file defines WHAT success looks like and HOW to measure it.',
+    '> The AI MUST NOT modify this file during an iteration loop.',
+    '> If the evaluation needs to change, finish the current loop first, then the human updates this file.',
+    '',
+    '## Primary Metric',
+    '',
+    '- **Name:** _e.g., val_loss, accuracy, F1, cost reduction %_',
+    '- **Direction:** minimize / maximize',
+    '- **Measurement procedure:** _how is this computed? what command/script?_',
+    '',
+    '## Secondary Metrics',
+    '',
+    '| Name | Direction | Measurement | Notes |',
+    '|------|-----------|-------------|-------|',
+    '| | minimize/maximize | | |',
+    '',
+    '## Validation Protocol',
+    '',
+    '- _Split, cross-validation strategy, test set_',
+    '- _Statistical significance requirements_',
+    '- _Minimum detectable effect size_',
+    '',
+    '## Baseline',
+    '',
+    '- **Current best:** _value, date_',
+    '- **Baseline configuration:** _reference to experiment log or file_',
+    '',
+    '## Accept/Reject Criteria',
+    '',
+    '- **Accept (keep):** metric improves by >= X% OR meets threshold Y',
+    '- **Reject (revert):** metric degrades OR improvement is below noise floor',
+    '- **Inconclusive:** run additional iteration with modified hypothesis',
+    '',
+  ].join('\n');
+}
+
+function buildLogTemplate(projectName: string, today: string): string {
+  return [
+    `# Experiment Log N — ${projectName}`,
+    '',
+    '> _Replace N with iteration number._',
+    '',
+    '## Hypothesis',
+    '',
+    '_What change are we testing and why?_',
+    '',
+    '## Change Applied',
+    '',
+    '- **File(s) modified:**',
+    '- **Change description:**',
+    '',
+    '## Evaluation',
+    '',
+    '| Metric | Before | After | Δ | Verdict |',
+    '|--------|--------|-------|---|---------|',
+    '| | | | | KEPT/REVERTED |',
+    '',
+    '## Analysis',
+    '',
+    '_Why did it work/fail? Any side effects or unexpected observations?_',
+    '',
+    '## Verdict',
+    '',
+    '- [ ] **KEPT** — metric improved, change committed',
+    '- [ ] **REVERTED** — no improvement or degradation, change discarded',
+    '',
+    '## Next Steps',
+    '',
+    '- _What to try next based on this result?_',
+    '',
+  ].join('\n');
 }

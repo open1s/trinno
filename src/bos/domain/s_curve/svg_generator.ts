@@ -1,5 +1,5 @@
 import { SCurve } from './entity.js';
-import { SCurveStage, STAGE_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS, STAGE_DESCRIPTIONS, STAGE_STRATEGIES, CurvePoint, StageBoundary, Milestone, MILESTONE_COLORS, MILESTONE_ICONS } from './value_objects.js';
+import { SCurveStage, STAGE_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS, STAGE_DESCRIPTIONS, STAGE_STRATEGIES, CurvePoint, StageBoundary, Milestone, MILESTONE_COLORS, MILESTONE_ICONS, HypeCyclePhase, HYPE_CYCLE_PHASE_ORDER, HYPE_CYCLE_LABELS, HYPE_CYCLE_COLORS, HYPE_CYCLE_DESCRIPTIONS, SCURVE_TO_HYPE_CYCLE } from './value_objects.js';
 import { StageDetectionService } from './services.js';
 import { LocaleConfig, DEFAULT_LOCALE, stageLabel, svgLabel, milestoneLabel, t, stageStrategy } from '../../domain/shared/i18n.js';
 
@@ -110,6 +110,37 @@ export class SvgCurveGenerator {
       const x = xScale(year);
       svg += `<line x1="${x}" y1="${margin.top}" x2="${x}" y2="${margin.top + chartH}" stroke="#e0e0e0" stroke-width="0.5"/>`;
       svg += `<text x="${x}" y="${margin.top + chartH + 20}" text-anchor="middle" font-size="10" fill="#666">${Math.round(year)}</text>`;
+    }
+
+    // Hype Cycle phase overlay bar below chart
+    {
+      const barH = 24;
+      const barY = margin.top + chartH + 35;
+      const phaseCount = HYPE_CYCLE_PHASE_ORDER.length;
+      const phaseWidth = chartW / phaseCount;
+
+      svg += `<rect x="${margin.left}" y="${barY}" width="${chartW}" height="${barH}" fill="white" stroke="#e0e0e0" stroke-width="1" rx="4"/>`;
+
+      for (let i = 0; i < phaseCount; i++) {
+        const phase = HYPE_CYCLE_PHASE_ORDER[i]!;
+        const px = margin.left + i * phaseWidth;
+        const color = HYPE_CYCLE_COLORS[phase];
+        svg += `<rect x="${px}" y="${barY}" width="${phaseWidth}" height="${barH}" fill="${color}" opacity="0.15"/>`;
+        svg += `<text x="${px + phaseWidth / 2}" y="${barY + barH / 2 + 4}" text-anchor="middle" font-size="8" fill="#555" font-weight="bold">${HYPE_CYCLE_LABELS[phase]}</text>`;
+      }
+
+      // Label
+      svg += `<text x="${margin.left + chartW / 2}" y="${barY + barH + 16}" text-anchor="middle" font-size="9" fill="#888">${svgLabel('hypeCycle', lang)}</text>`;
+
+      // Current position marker — map sCurve.s1Stage to Hype Cycle phase
+      const currentHypeMapping = SCURVE_TO_HYPE_CYCLE.find(m => m.sCurveStage === sCurve.s1Stage);
+      if (currentHypeMapping) {
+        const hcIndex = HYPE_CYCLE_PHASE_ORDER.indexOf(currentHypeMapping.hypeCyclePhase);
+        if (hcIndex >= 0) {
+          const markerX = margin.left + (hcIndex + 0.5) * phaseWidth;
+          svg += `<polygon points="${markerX},${barY - 6} ${markerX - 5},${barY} ${markerX + 5},${barY}" fill="#FF5722"/>`;
+        }
+      }
     }
 
     svg += `<path d="${s1Path}" fill="url(#s1Grad)" stroke="none"/>`;

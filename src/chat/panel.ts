@@ -211,6 +211,8 @@ const staticSlashCommands = [
   { name: 'help', description: 'Show all available commands' },
   { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
   { name: 'goal', description: 'Set, view, edit, pause, resume, annotate, log, or clear a persistent research goal' },
+  { name: 'undo', description: 'Undo the last AI prompt — jj abandon the change created before that prompt' },
+  { name: 'auto', description: 'Start/continue an AutoResearch iteration loop: propose → act → evaluate → ratchet' },
   { name: 'recover', description: 'Recover from token limit: trim stale messages and large tool results. Use /recover keep <N>' },
 ];
 
@@ -2101,6 +2103,12 @@ async function handleUserMessage(text: string): Promise<void> {
       },
       () => {
         if (chatView) chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
+        if (chatView) {
+          chatView.webview.postMessage({
+            type: 'token-usage',
+            usage: computeTokenUsage(),
+          } as any);
+        }
         if (text.trim() === '/ping') _modelProfilesCache = null;
         finalizeCurrentMessage();
         sendGoalStatus();

@@ -73,6 +73,7 @@ const resources = {
       'svg.crossoverYear': 'Crossover Year',
       'svg.maxS1': 'Max S1',
       'svg.maxS2': 'Max S2',
+      'svg.hypeCycle': 'Gartner Hype Cycle Phase',
 
       // Report labels
       'report.title': 'TRIZ Research Report',
@@ -351,6 +352,7 @@ const resources = {
       'svg.crossoverYear': '交叉年份',
       'svg.maxS1': 'S1 最大值',
       'svg.maxS2': 'S2 最大值',
+      'svg.hypeCycle': 'Gartner 炒作周期阶段',
 
       // Report labels
       'report.title': 'TRIZ 研究报告',

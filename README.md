@@ -15,30 +15,31 @@
 
 ## Why Trinno?
 
-Trinno guides you through a structured 7-phase TRIZ innovation analysis — from discovering prior art to drafting a patent. It integrates an AI research assistant directly into your editor, so you never leave your workflow.
+Trinno guides you through a structured 8-phase TRIZ innovation analysis — from discovering prior art to drafting a patent to autonomous iterative research. It integrates an AI research assistant directly into your editor, so you never leave your workflow.
 
 ### Core workflow
 
 ```
-01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent
+01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent → 08_AutoResearch
 ```
 
 | Phase | What you do | Output |
 |---|---|---|
-| **01_Discover** | Search patents, papers, technical solutions | `patents.json`, `papers.json` |
-| **02_TRL** | Assess technology maturity & S-curve | `s_curve.md`, `trl_assessment.md` |
+| **01_Discover** | Search patents, papers, technical solutions | `patents.md`, `papers.md` |
+| **02_TRL** | Assess technology maturity & S-curve with Hype Cycle overlay | `s_curve.svg`, `trl_assessment.md` |
 | **03_Analyze** | Identify contradictions & ideality gaps | `contradictions.md`, `su_field_analysis.md` |
 | **04_Synthesize** | Apply 40 TRIZ inventive principles | `solutions.md`, `roadmap.md` |
 | **05_Deliver** | Write research paper | `paper.md` |
-| **06_References** | Download & organize references | PDFs, `library.json` |
+| **06_References** | Download & organize references | PDFs, `library.md`, `目录.md` |
 | **07_Patent** | Incrementally draft patent | `patent.md` |
+| **08_AutoResearch** | Autonomous iterative research (propose→act→evaluate→ratchet) | `scope.md`, `eval.md`, `experiments/log_N.md` |
 
 ---
 
 ## Quick Start
 
 1. **Install** from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research)
-2. **Open** a workspace folder — Trinno auto-detects or creates the 7-phase directory structure
+2. **Open** a workspace folder — Trinno auto-detects or creates the 8-phase directory structure
 3. **Set your API key** in VS Code settings: `chat.model.apiKey`
 4. **Open the panel** — click the Research Assistant icon in the activity bar or press `Cmd+Shift+C`
 5. **Start with `/init`** to scaffold your project, then `/search <topic>` to find prior art
@@ -112,17 +113,20 @@ Trinno guides you through a structured 7-phase TRIZ innovation analysis — from
 
 | Command | Description |
 |---|---|
-| `/init` | Scaffold 7-phase workspace |
+| `/init` | Scaffold 8-phase workspace |
 | `/search <query>` | Search patents, papers, and solutions |
 | `/contradiction` | TRIZ contradiction matrix analysis |
 | `/principles` | Browse 40 inventive principles |
-| `/s-curve` | Technology maturity assessment |
+| `/s-curve` | Technology maturity assessment with S-curve + Hype Cycle |
 | `/ideality` | Evaluate system ideality |
 | `/su-field` | Substance-Field model analysis |
 | `/patent <title>` | Incremental patent drafting (LLM-driven, section by section) |
 | `/download <DOI>` | Download a paper by DOI / arXiv ID / PMID / URL |
 | `/get <query>` | Search & auto-download top match |
 | `/papers` | List downloaded papers |
+| `/auto <hypothesis>` | Start AutoResearch iteration loop (propose→act→evaluate→ratchet) |
+| `/undo` | Undo the last AI prompt (jj-based, supports chained undo) |
+| `/goal` | Set, view, and track a persistent research goal |
 
 ### AI Research Assistant
 
@@ -137,6 +141,21 @@ Trinno guides you through a structured 7-phase TRIZ innovation analysis — from
 - **Incremental**: LLM writes section by section (marker-anchored), preventing context overflow
 - **Grounded**: uses TRIZ tools (`triz_contradiction`, `triz_principles`, etc.) to base content on real data
 - **Controllable**: up to 20 auto-write turns per document, abort at any time
+- **Reference enforcement**: every citation must correspond to a real file downloaded to `06_References/` — no phantom references
+
+### AutoResearch Loop (Karpathy Pattern)
+
+- **Iterative research**: propose a hypothesis → modify code/files → evaluate against fixed metric → ratchet (keep or revert)
+- **Scope & eval files**: `08_AutoResearch/scope.md` defines the research boundaries; `08_AutoResearch/eval.md` defines the locked evaluation metric
+- **Experiment logging**: every iteration is logged to `08_AutoResearch/experiments/log_{N}.md` with hypothesis, before/after metrics, and verdict
+- **jj-backed undo**: each iteration is snapshot with jj; failed experiments auto-revert
+- **Reference management**: `06_References/目录.md` serves as a living table of contents for all downloaded papers, patents, and datasets
+
+### S-Curve Enhancements
+
+- **Exit lifecycle stage**: technology lifecycle now includes `exit` phase after decline — complete obsolescence with archived knowledge
+- **Gartner Hype Cycle overlay**: SVG chart includes a Hype Cycle phase bar below the curve, mapping S-curve stages to Hype Cycle phases (Innovation Trigger → Peak → Trough → Slope → Plateau)
+- **PhaseWriter SVG output**: S-curve SVG is automatically saved to `02_TRL/` directory
 
 ---
 

@@ -26,6 +26,7 @@ npm run compile       # tsc -p ./ && rm -rf dist/chat/webview && cp -r src/chat/
 npm run watch         # tsc -watch -p ./
 npm run test          # node ./dist/test/runTest.js  — launches real VS Code via @vscode/test-electron
 npm run test:pipeline # npx mocha dist/test/suite/publication-trends-year-extraction.test.js — single-file mocha run
+npm run test:undo     # npx mocha --ui bdd --timeout 200000 dist/test/suite/undo-e2e.test.js — spawns worker + real jj repo (requires jj)
 npm run test:token    # TRINNO_RUN_TOKEN_TEST=1 npx mocha --timeout 180000 dist/test/suite/token-growth.test.js — verifies per-message token cost is linear (requires configured LLM model, makes real API calls)
 npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignores src/bos/)
 ```

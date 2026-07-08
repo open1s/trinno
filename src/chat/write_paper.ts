@@ -321,8 +321,8 @@ export async function loadResearchData(cmd: WriteCommand, workspaceRoot: string)
     readTextFileSafe(path.join(workspaceRoot, '04_Synthesize', 'trends.md'), 500),
     readTextFileSafe(path.join(workspaceRoot, '04_Synthesize', 'roadmap.md'), 500),
     readTextFileSafe(path.join(workspaceRoot, '02_TRL', 'trl_assessment.md'), 200),
-    readTextFileSafe(path.join(workspaceRoot, '02_TRL', 's_curve.md'), 200),
-    readJsonFileSafe(path.join(workspaceRoot, '06_References', 'library.json')),
+    readTextFileSafe(path.join(workspaceRoot, '02_TRL', 's_curve.svg'), 200),
+    readJsonFileSafe(path.join(workspaceRoot, '06_References', 'library.md')),
   ]);
 
   return { reportMd, synthesisMd, contradictions, solutions, trends, roadmap, trl, sCurve, references };

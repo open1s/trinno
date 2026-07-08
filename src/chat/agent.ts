@@ -338,6 +338,9 @@ export async function sendMessage(
     currentCallbacks = null;
   };
 
+  if (activeDataHandler) {
+    workerProcess.stdout?.removeListener('data', activeDataHandler);
+  }
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   log.trace({ traceId: payload.messageId, textLength: payload.text?.length, sessionId: payload.sessionId }, '[TRACE] agent→worker: forwarding chat message');
@@ -645,6 +648,9 @@ export async function sendSlashRequest(
     currentCallbacks = null;
   };
 
+  if (activeDataHandler) {
+    workerProcess.stdout?.removeListener('data', activeDataHandler);
+  }
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');

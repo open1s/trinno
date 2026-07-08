@@ -5,6 +5,7 @@ import { STAGE_LABELS, STAGE_DESCRIPTIONS, STAGE_STRATEGIES, formatTRL, formatTR
 import { TRLAssessor, TRLAssessmentInput } from '../../infrastructure/triz/trl_assessor.js';
 import { SCurveRepository } from '../../domain/s_curve/repository.js';
 import { RawFactsSaver } from '../../infrastructure/persistence/raw_facts_saver.js';
+import { PhaseWriter } from '../../infrastructure/persistence/phase_writer.js';
 import { LocaleConfig, DEFAULT_LOCALE, stageLabel, stageDesc, stageStrategy, trlTitle, t, svgLabel } from '../../domain/shared/i18n.js';
 
 export class AnalyzeSCurveHandler {
@@ -14,12 +15,14 @@ export class AnalyzeSCurveHandler {
   private locale: LocaleConfig = DEFAULT_LOCALE;
   private repository: SCurveRepository | undefined = undefined;
   private rawFactsSaver: RawFactsSaver | undefined = undefined;
+  private phaseWriter: PhaseWriter | undefined = undefined;
 
-  constructor(trlAssessor?: TRLAssessor, locale?: LocaleConfig, repository?: SCurveRepository, rawFactsSaver?: RawFactsSaver) {
+  constructor(trlAssessor?: TRLAssessor, locale?: LocaleConfig, repository?: SCurveRepository, rawFactsSaver?: RawFactsSaver, phaseWriter?: PhaseWriter) {
     this.trlAssessor = trlAssessor;
     this.locale = locale || DEFAULT_LOCALE;
     this.repository = repository;
     this.rawFactsSaver = rawFactsSaver;
+    this.phaseWriter = phaseWriter;
   }
 
   async execute(command: AnalyzeSCurveCommand): Promise<SCurveResult> {
@@ -90,6 +93,16 @@ export class AnalyzeSCurveHandler {
         command.rawResponse,
         command.searchSnippets,
       );
+    }
+
+    if (this.phaseWriter) {
+      this.phaseWriter.write({
+        phase: '02_TRL',
+        name: sCurve.technologyName,
+        suffix: 's_curve',
+        format: 'svg',
+        data: svg,
+      });
     }
 
     return {

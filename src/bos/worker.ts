@@ -33,6 +33,9 @@ import {
   initCommand,
   pingCommand,
   goalCommand,
+  undoCommand,
+  takeSnapshot,
+  autoCommand,
   readGoalForWorker,
   writeGoalForWorker,
   isGoalActive,
@@ -115,7 +118,9 @@ slashRegistry.register(principlesCommand, ['p', 'princ']);
 slashRegistry.register(suFieldCommand, ['sf', 'sufield']);
 slashRegistry.register(initCommand, ['setup', 'new']);
 slashRegistry.register(pingCommand);
+slashRegistry.register(undoCommand, ['u']);
 slashRegistry.register(goalCommand, ['g']);
+slashRegistry.register(autoCommand, ['a', 'autoresearch']);
 
 let pendingSlashOutput: string | null = null;
 
@@ -310,6 +315,11 @@ function formatUnknownSlash(text: string): string {
 async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: (type: string, data: any) => void): Promise<boolean> {
   const match = slashRegistry.match(text);
   if (!match) return false;
+
+  // Snapshot before dispatching (skip /undo itself)
+  if (match.command !== undoCommand) {
+    takeSnapshot(text);
+  }
 
   if (depsInitPromise) await depsInitPromise;
   if (!deps) {
@@ -822,9 +832,26 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- When uncertain, use websearch first',
     '- When need user clarification, ask specific, concise questions,give choices for selection. Avoid open-ended questions.',
     '',
+    '## AutoResearch Loop',
+    '- When performing iterative research/optimization, use this tight loop pattern:',
+    '- **1. Scope (program.md)**: The research question IS the goal (set via /goal or described in user message). Write constraints, success criteria, and metric to 08_AutoResearch/scope.md.',
+    '- **2. Lock the evaluator**: The evaluation metric and validation procedure are fixed — write them to 08_AutoResearch/eval.md. Do NOT change them mid-loop.',
+    '- **3. Narrow mutation surface**: Identify which file(s) the agent is allowed to modify during this loop. Everything else is read-only.',
+    '- **4. Propose → Act → Evaluate → Ratchet**:',
+    '   - Propose a specific hypothesis or change (1 line)',
+    '   - Execute: modify the target file, run the experiment (training, analysis, etc.)',
+    '   - Evaluate: measure against the fixed metric from eval.md',
+    '   - Ratchet: if improved → commit (save result to 08_AutoResearch/experiments/log_{N}.md), if not → revert (use jj undo / reset the file)',
+    '- **5. Fixed budget per iteration**: Keep each cycle tight — if a computation step takes >5 minutes, report partial results and continue.',
+    '- **6. Log every iteration**: Write to 08_AutoResearch/experiments/log_{N}.md with: hypothesis, metric before/after, verdict (kept/reverted), timestamp.',
+    '- **7. When budget exhausted or metric saturated**: Write summary to 08_AutoResearch/experiments/summary.md and report to user.',
+    '- Key insight: The agent IS the researcher. It does NOT wait for user approval between iterations unless the experiment requires a fundamentally new direction or new resource approval.',
+    '- **Starting a loop**: At the start of each chat, check if `08_AutoResearch/current_hypothesis.md` exists. If it does: read it, delete it, and execute the hypothesis as the current iteration goal.',
+    '',
     '## Phased Research Philosophy',
     '- Research is incremental. Complete one phase before moving to the next.',
-    '- 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent  → 08_TData.',
+    '- 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent  → 08_AutoResearch.',
+    '- **Auto-TRL**: Whenever user introduces a new technology or domain for research, use triz_s_curve (action: analyze) to generate the S-curve and TRL assessment. Write to 02_TRL/. This is the first analysis step before deeper TRIZ.',
     '- Each phase writes its output to the corresponding phase directory. Do not skip phases.',
     '- If context grows large, suggest compaction (/compact) instead of summarizing yourself.',
     '',
@@ -888,14 +915,20 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## Phase Dirs — Output Format',
     '- 01_Discover — search and discover references, download papers to 06_References',
-    '- 02_TRL — s_curve.md, trl_assessment.md',
+    '- 02_TRL — s_curve.svg, trl_assessment.md',
     '- 03_Analyze — contradictions.md, su_field_analysis.md, bottlenecks.md',
     '- 04_Synthesize — solutions.md, principles_applied.md, trends.md, roadmap.md',
     '- 05_Deliver — paper, report drafts (.typ or .md)',
     '- 06_References — downloaded papers + library.bib',
     '- 07_Patent — patent drafts (.typ or .md)',
-    '- 08_TData — experimental data, code snippets, etc.',
+    '- 08_AutoResearch — experimental data, iteration logs, code',
     'Always write results to files in the correct phase dir. Use markdown format (.md) for all analysis output files. Include importance weights and evidence scores in tables or structured sections.',
+    '',
+    '## 06_References(Mandatory)',
+    '- After downloading any paper/patent/dataset or saving any reference to 06_References/, you MUST update 06_References/目录.md with a new entry in the correct table.',
+    '- If 目录.md does not exist, create it with the template structure (papers table, patents table, datasets table, other table, search log).',
+    '- Each entry must include: title, authors, year, source, DOI/arXiv ID (if applicable), local file path relative to workspace root.',
+    '- Search logs: after each literature search in any source, append a row to the search log table with date, keywords, source, and result count.',
     '',
     '## Multilingual + PubScholar',
     '- For technical topics: run EN + ZH queries in parallel, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.',
@@ -909,6 +942,15 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- Target artifact: 7-phase paper with contradiction → solution mapping, importance-weighted KPIs, evidence scores, decision factors, risks, ≤3-day validation.',
     '- Verify each section before marking completed.',
     '- Aways build typst output file using \`typst compile\`, then fix errors',
+    '',
+    '## CRITICAL: References Must Be Real Downloaded Files',
+    '- AS SOON AS you decide to reference, cite, or use a paper/patent/dataset, DOWNLOAD IT FIRST: use papers_download to save to 06_References/. Do NOT write the reference down first and promise to download later.',
+    '- Every reference, citation, or bibliography entry in any paper/patent/draft MUST correspond to a real file physically downloaded to 06_References/ using the papers_download tool.',
+    '- NEVER cite a paper/patent/dataset that you have not downloaded and confirmed exists on disk.',
+    '- Workflow: for each potential reference → papers_download → on success → update 06_References/目录.md → then use it in the draft.',
+    '- If papers_download fails (paywalled, no open access), you may still cite it ONLY if you add a manual download note to 目录.md and provide the user with publisher/landing page URLs. Do NOT silently cite inaccessible references.',
+    '- Before marking a paper/patent draft complete: verify EVERY citation has a matching file in 06_References/ OR a manual-url note in 目录.md. Use list_dir or papers_list_downloaded to validate.',
+    '- This rule applies to ALL output: research notes, S-curve reports, contradiction analyses, patent drafts, papers, and any deliverable that references external work.',
     '',
     '## Remote Skills (If no proper skill available for the task,find if remote skill)',
     '- When user asks for a specialized methodology, framework, workflow, or domain task (e.g., systematic review, data analysis, coding pattern, journal formatting, literature search), FIRST extract keywords and call `find_remote_skill("<keywords>")` to search registered skill repos. NOTE: paper writing and patent drafting are NOT remote skills — they are handled locally via `/write paper` or `/patent` slash commands.',
@@ -1136,6 +1178,9 @@ process.stdin.on('data', (chunk: Buffer) => {
             }
             currentJobId++;
             const jobId = String(currentJobId);
+
+            // Snapshot working copy before handling any chat message
+            takeSnapshot(msg.text);
 
             if (msg.text.trim() === '/help' || msg.text.trim() === '/commands') {
               handleHelp();

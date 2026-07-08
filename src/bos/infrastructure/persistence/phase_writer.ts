@@ -13,7 +13,7 @@ export type PhaseDir =
   | '06_References'
   | '07_Patent';
 
-export type PhaseFormat = 'json' | 'markdown';
+export type PhaseFormat = 'json' | 'markdown' | 'svg';
 
 export interface PhaseWriteResult {
   phase: PhaseDir;
@@ -46,7 +46,7 @@ export class PhaseWriter {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const safeName = this.sanitize(opts.name);
     const safeSuffix = opts.suffix ? this.sanitize(opts.suffix) : '';
-    const ext = format === 'markdown' ? 'md' : 'json';
+    const ext = format === 'svg' ? 'svg' : format === 'markdown' ? 'md' : 'json';
     const base = safeSuffix ? `${safeName}_${safeSuffix}` : safeName;
     const filename = `${base}_${ts}.${ext}`;
     const dir = path.join(this.workspaceRoot!, opts.phase);
@@ -56,7 +56,7 @@ export class PhaseWriter {
         fs.mkdirSync(dir, { recursive: true });
       }
       const filePath = path.join(dir, filename);
-      const body = format === 'markdown'
+      const body = format === 'svg' ? (typeof opts.data === 'string' ? opts.data : String(opts.data)) : format === 'markdown'
         ? (typeof opts.data === 'string' ? opts.data : this.toMarkdown(opts.data))
         : JSON.stringify(opts.data, null, 2);
       fs.writeFileSync(filePath, body, 'utf-8');
