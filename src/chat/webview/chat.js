@@ -108,6 +108,7 @@
     { name: 'help', description: 'Show all available commands' },
     { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
     { name: 'goal', description: 'Set, view, edit, pause, resume, annotate, log, or clear a persistent research goal' },
+    { name: 'recover', description: 'Recover from token limit: trim stale messages and large tool results. Use /recover keep <N>' },
   ];
   let pendingApproval = null;
 
@@ -1530,6 +1531,9 @@
         if (msg.sandboxEnabled !== undefined) {
           sandboxEnabled = msg.sandboxEnabled;
           updateSandboxStatus();
+        }
+        if (msg.tokenUsage) {
+          tokenUsage = msg.tokenUsage;
         }
         updateStatusBar();
         showWelcome(msg.context);

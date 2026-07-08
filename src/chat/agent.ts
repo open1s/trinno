@@ -378,6 +378,12 @@ export function sendCompactResult(sessionId: string, summary: string): void {
   }
 }
 
+export function sendRecoverSession(sessionId: string, messages: { role: string; content: string }[]): void {
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'recover-session', sessionId, messages }) + '\n');
+  }
+}
+
 export async function sendSetWorkspaceRoot(workspaceRoot: string): Promise<void> {
   await ensureWorker();
   const proc = workerProcess;

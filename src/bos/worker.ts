@@ -1234,6 +1234,21 @@ process.stdin.on('data', (chunk: Buffer) => {
             }
           });
           break;
+        case 'recover-session':
+          enqueue('recover-session', async () => {
+            if (!msg.sessionId || !Array.isArray(msg.messages)) return;
+            const existing = activeAgents.get(msg.sessionId);
+            if (!existing?.started || !existing?.agent) {
+              log.warn({ sessionId: msg.sessionId }, '[RECOVER] no active agent for session — skipping session rebuild');
+              return;
+            }
+            try { existing.started.clearSession(); } catch { }
+            for (const m of msg.messages) {
+              try { existing.agent.session.addMessage(m.role, m.content); } catch { }
+            }
+            log.info({ sessionId: msg.sessionId, msgCount: msg.messages.length }, '[RECOVER] session rebuilt in place');
+          });
+          break;
         case 'slash':
           enqueue('slash', async () => {
             if (msg.workspaceRoot) {
@@ -1542,6 +1557,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     let lastRoundContent = '';
     let stuckCount = 0;
     let progressStallCount = 0;
+    let lastPromptTokens = 0;
+    let lastCompletionTokens = 0;
 
     while (roundIndex < rounds.length && !signal.aborted) {
       const msg = rounds[roundIndex]!;
@@ -1608,12 +1625,14 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
               break;
             case 'Usage':
               log.trace({ sessionId, rawToken: token }, '[USAGE-RAW] ezbos Usage token received');
+              if (typeof token.promptTokens === 'number') lastPromptTokens = token.promptTokens;
+              if (typeof token.completionTokens === 'number') lastCompletionTokens = token.completionTokens;
               localEmit('token', {
                 tokenType: 'Usage',
-                promptTokens: token.prompt_tokens,
-                completionTokens: token.completion_tokens,
-                totalTokens: token.total_tokens,
-                promptTokensDetails: token.prompt_tokens_details,
+                promptTokens: token.promptTokens,
+                completionTokens: token.completionTokens,
+                totalTokens: token.totalTokens,
+                promptTokensDetails: token.promptTokensDetails,
               });
               break;
             case 'Stop':
@@ -1781,21 +1800,13 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
       localEmit('token', { tokenType: 'Text', text: `\n\n## Goal Blocked\n\n> ${exitGoal.text}\n\n_Agent reported it cannot be completed${exitGoal.blockedReasons?.length ? ': ' + exitGoal.blockedReasons[exitGoal.blockedReasons.length - 1]! : ''}._\n` });
     }
 
-    // Single panel 'done' with cumulative token usage across all rounds
-    const finalMetrics = started.metrics;
-    const finalCumInput = finalMetrics?.totalInputTokens ?? 0;
-    const finalCumOutput = finalMetrics?.totalOutputTokens ?? 0;
-    const finalKey = sessionId ?? 'default';
-    const finalPrev = prevTokens.get(finalKey) ?? { input: 0, output: 0 };
-    const finalInputTokens = finalCumInput - finalPrev.input;
-    const finalOutputTokens = finalCumOutput - finalPrev.output;
-    prevTokens.set(finalKey, { input: finalCumInput, output: finalCumOutput });
-    log.trace({ sessionId, metrics: finalMetrics, finalInputTokens, finalOutputTokens, totalTokens: finalInputTokens + finalOutputTokens }, '[TOKEN] worker: all rounds done');
+    // Use raw token counts from the last 'Usage' event (directly from LLM API) — no delta/cumulative math
+    log.trace({ sessionId, lastPromptTokens, lastCompletionTokens, totalTokens: lastPromptTokens + lastCompletionTokens }, '[TOKEN] worker: all rounds done (raw usage)');
     localEmit('done', {
       sessionId,
       brainOsSession: undefined,
-      inputTokens: finalInputTokens,
-      outputTokens: finalOutputTokens,
+      inputTokens: lastPromptTokens,
+      outputTokens: lastCompletionTokens,
     });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

@@ -7,7 +7,7 @@ import { getChatConfig } from './settings';
 
 const log = createModuleLogger('chat-panel');
 import type { CompactMessage } from './agent';
-import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, setLastWorkspaceRoot } from './agent';
+import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, sendRecoverSession, setLastWorkspaceRoot } from './agent';
 import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus } from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
@@ -211,6 +211,7 @@ const staticSlashCommands = [
   { name: 'help', description: 'Show all available commands' },
   { name: 'ping', description: 'Probe LLM model token limits (context window, max output, working limit)' },
   { name: 'goal', description: 'Set, view, edit, pause, resume, annotate, log, or clear a persistent research goal' },
+  { name: 'recover', description: 'Recover from token limit: trim stale messages and large tool results. Use /recover keep <N>' },
 ];
 
 const allSlashCommands = [...staticSlashCommands, ...loadSkillSlashs.map(s => ({ name: s.name, description: s.description }))];
@@ -297,6 +298,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       sessions: sessionStore.sessions,
       isCompacted: currentSession.isCompacted,
       sandboxEnabled: getChatConfig().sandbox.enabled,
+      tokenUsage: computeTokenUsage(),
     } as any);
 
     chatView.webview.postMessage({
@@ -1965,6 +1967,111 @@ async function handleUserMessage(text: string): Promise<void> {
     // fall through to unknownSlash dispatch below
   }
 
+  const recoverMatch = text.match(/^\/recover\s*(.*)$/i);
+  if (recoverMatch) {
+    const arg = recoverMatch[1]?.trim() ?? '';
+    const userMsg = createUserMessage(text);
+    chatView.webview.postMessage({ type: 'user-message', message: userMsg } as any);
+
+    if (!arg) {
+      const count = currentSession.messages.length;
+      const estimatedTokens = Math.round(currentSession.messages.reduce((sum, m) => sum + m.content.length + m.reasoning.length, 0) / 4);
+      chatView.webview.postMessage({ type: 'history-message', message: createAssistantMessageForText(
+        `## Session Stats\n\n**Messages:** ${count}\n**Estimated tokens:** ~${estimatedTokens}\n\nUse \`/recover keep <N>\` to keep the last N message pairs and discard older ones.`,
+      ) } as any);
+      return;
+    }
+
+    const keepMatch = arg.match(/^keep\s+(\d+)$/i);
+    if (keepMatch) {
+      const keep = parseInt(keepMatch[1]!, 10);
+      if (keep <= 0) {
+        chatView.webview.postMessage({ type: 'history-message', message: createAssistantMessageForText('N must be a positive number.') } as any);
+        return;
+      }
+
+      const messages = currentSession.messages;
+
+      // Find cutoff: keep last N user-assistant pairs
+      let userCount = 0;
+      let cutIndex = 0;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === 'user') {
+          userCount++;
+          if (userCount === keep) {
+            cutIndex = i;
+            break;
+          }
+        }
+      }
+      const keptMessages = messages.slice(cutIndex);
+
+      // Trim large tool results (>= 1000 chars)
+      for (const msg of keptMessages) {
+        if (msg.toolCalls) {
+          for (const tool of msg.toolCalls) {
+            if (tool.result && tool.result.length >= 1000) {
+              tool.result = tool.result.slice(0, 1000) + '\n...[truncated by /recover]';
+            }
+          }
+        }
+      }
+
+      // Dedup exact-match tool results (remove if same as previous turn)
+      for (let i = 1; i < keptMessages.length; i++) {
+        const prev = keptMessages[i - 1];
+        const curr = keptMessages[i];
+        if (curr?.toolCalls && prev?.toolCalls) {
+          for (let j = 0; j < curr.toolCalls.length && j < prev.toolCalls.length; j++) {
+            if (curr.toolCalls[j]?.result && prev.toolCalls[j]?.result && curr.toolCalls[j]!.result === prev.toolCalls[j]!.result) {
+              curr.toolCalls[j]!.result = '[duplicate tool result removed by /recover]';
+            }
+          }
+        }
+      }
+
+      // Save truncated session
+      currentSession.messages = keptMessages;
+      updateSessionTimestamp(currentSession);
+      await saveSession(currentSession);
+      if (sessionStore) {
+        const metaIndex = sessionStore.sessions.findIndex(s => s.id === currentSession!.id);
+        if (metaIndex >= 0) {
+          sessionStore.sessions[metaIndex] = sessionToMetadata(currentSession);
+        }
+        saveSessionStore(sessionStore).catch(() => { });
+      }
+
+      // Re-render webview
+      chatView.webview.postMessage({ type: 'clearHistory' } as any);
+      for (const msg of keptMessages) {
+        chatView.webview.postMessage({ type: 'history-message', message: msg } as any);
+      }
+      chatView.webview.postMessage({ type: 'history-message', message: createAssistantMessageForText(`Session recovered. Kept last **${keep}** message pair${keep > 1 ? 's' : ''}. Tool results trimmed and duplicates removed.`) } as any);
+
+      // Send recovered session to worker
+      const recoverMsgs = keptMessages.map(m => ({ role: m.role, content: m.content }));
+      sendRecoverSession(currentSession.id, recoverMsgs);
+
+      // Update token display
+      chatView.webview.postMessage({
+        type: 'token-usage',
+        usage: computeTokenUsage(),
+      } as any);
+
+      // Update session metadata
+      chatView.webview.postMessage({
+        type: 'session-updated',
+        sessionId: currentSession.id,
+        sessionTitle: currentSession.title,
+        sessions: sessionStore?.sessions ?? [],
+        isCompacted: false,
+      } as any);
+
+      return;
+    }
+  }
+
   const unknownSlash = text.match(/^\/([a-zA-Z][\w-]*)(\s+.*)?$/);
   if (unknownSlash) {
     const userMsg = createUserMessage(text);
@@ -2141,26 +2248,23 @@ async function handleUserMessage(text: string): Promise<void> {
       dequeuedItemText = null;
       const inputTokens = doneData?.inputTokens ?? 0;
       const outputTokens = doneData?.outputTokens ?? 0;
+
+      // Accumulate per-message token usage into session BEFORE sending token-usage and saving
+      if (currentSession) {
+        currentSession.totalInputTokens = (currentSession.totalInputTokens ?? 0) + inputTokens;
+        currentSession.totalOutputTokens = (currentSession.totalOutputTokens ?? 0) + outputTokens;
+      }
+
       if (chatView) {
         chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         log.trace({ sessionId: currentSession?.id, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] panel: stream done');
         chatView.webview.postMessage({
           type: 'token-usage',
-          usage: {
-            input: inputTokens,
-            output: outputTokens,
-            total: inputTokens + outputTokens,
-          },
+          usage: computeTokenUsage(),
         } as any);
       }
       finalizeCurrentMessage();
       sendGoalStatus();
-
-      // Accumulate per-message token usage into session
-      if (currentSession) {
-        currentSession.totalInputTokens = (currentSession.totalInputTokens ?? 0) + inputTokens;
-        currentSession.totalOutputTokens = (currentSession.totalOutputTokens ?? 0) + outputTokens;
-      }
 
       // Proactive auto-compact: fire when accumulated tokens approach model's limit
       if (currentSession && !_autoCompactInProgress && currentSession.messages.length >= 6 && !currentQueueId) {
@@ -2325,6 +2429,30 @@ function finalizeCurrentMessage(): void {
       }
     }
   }
+}
+
+function computeTokenUsage(): { input: number; output: number; total: number } {
+  if (!currentSession) return { input: 0, output: 0, total: 0 };
+  const realInput = currentSession.totalInputTokens ?? 0;
+  const realOutput = currentSession.totalOutputTokens ?? 0;
+  if (realInput > 0 || realOutput > 0) {
+    return { input: realInput, output: realOutput, total: realInput + realOutput };
+  }
+  // Estimate from message content when real token data isn't accumulated yet
+  let estimatedInput = 0;
+  let estimatedOutput = 0;
+  for (const msg of currentSession.messages) {
+    if (msg.role === 'user') {
+      estimatedInput += Math.ceil(msg.content.length / 4);
+      if (msg.reasoning) estimatedOutput += Math.ceil(msg.reasoning.length / 4);
+    } else if (msg.role === 'assistant') {
+      estimatedOutput += Math.ceil(msg.content.length / 4) + Math.ceil((msg.reasoning ?? '').length / 4);
+    }
+  }
+  if (estimatedInput > 0 || estimatedOutput > 0) {
+    return { input: estimatedInput, output: estimatedOutput, total: estimatedInput + estimatedOutput };
+  }
+  return { input: 0, output: 0, total: 0 };
 }
 
 function getWebviewHtml(webview: vscode.Webview): string {
