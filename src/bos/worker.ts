@@ -834,19 +834,22 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## AutoResearch Loop',
     '- When performing iterative research/optimization, use this tight loop pattern:',
-    '- **1. Scope (program.md)**: The research question IS the goal (set via /goal or described in user message). Write constraints, success criteria, and metric to 08_AutoResearch/scope.md.',
+    '- **1. Scope (program.md)**: Write constraints, success criteria, and metric to 08_AutoResearch/scope.md.',
     '- **2. Lock the evaluator**: The evaluation metric and validation procedure are fixed — write them to 08_AutoResearch/eval.md. Do NOT change them mid-loop.',
     '- **3. Narrow mutation surface**: Identify which file(s) the agent is allowed to modify during this loop. Everything else is read-only.',
     '- **4. Propose → Act → Evaluate → Ratchet**:',
     '   - Propose a specific hypothesis or change (1 line)',
-    '   - Execute: modify the target file, run the experiment (training, analysis, etc.)',
+    '   - Execute: modify the target file, run the experiment',
     '   - Evaluate: measure against the fixed metric from eval.md',
-    '   - Ratchet: if improved → commit (save result to 08_AutoResearch/experiments/log_{N}.md), if not → revert (use jj undo / reset the file)',
-    '- **5. Fixed budget per iteration**: Keep each cycle tight — if a computation step takes >5 minutes, report partial results and continue.',
-    '- **6. Log every iteration**: Write to 08_AutoResearch/experiments/log_{N}.md with: hypothesis, metric before/after, verdict (kept/reverted), timestamp.',
-    '- **7. When budget exhausted or metric saturated**: Write summary to 08_AutoResearch/experiments/summary.md and report to user.',
-    '- Key insight: The agent IS the researcher. It does NOT wait for user approval between iterations unless the experiment requires a fundamentally new direction or new resource approval.',
-    '- **Starting a loop**: At the start of each chat, check if `08_AutoResearch/current_hypothesis.md` exists. If it does: read it, delete it, and execute the hypothesis as the current iteration goal.',
+    '   - Ratchet: if improved → commit (save to 08_AutoResearch/experiments/log_{N}.md), if not → revert (jj undo)',
+    '- **5. Log every iteration**: Write to 08_AutoResearch/experiments/log_{N}.md with: hypothesis, metric before/after, verdict (kept/reverted), timestamp.',
+    '- **6. Auto-chain**: After writing log_{N}.md, write `08_AutoResearch/auto_state.json` with incremented iteration and updated hypothesis, then **immediately continue to next iteration** — do NOT wait for user input.',
+    '- **7. Stop only when**: the research objective is achieved (summary.md) OR you are truly blocked (3 consecutive same-reason failures). When stopping, write summary.md and delete auto_state.json.',
+    '- **8. auto_state.json format**:',
+    '   ```json',
+    '   { "hypothesis": "...", "iteration": N+1 }',
+    '   ```',
+    '- Execute all iterations autonomously in a single conversation chain. Never pause for user input mid-loop.',
     '',
     '## Phased Research Philosophy',
     '- Research is incremental. Complete one phase before moving to the next.',
@@ -1587,6 +1590,41 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     delete preGoal.editedAt;
     delete preGoal.previousText;
     writeGoalForWorker(preGoal);
+  }
+
+  // Inject pending AutoResearch hypothesis into agent context (set by /auto)
+  // Read state from disk (survives worker restart) with globalThis as fallback
+  let pendingAuto = (globalThis as any).__AUTO_PENDING;
+  if (!pendingAuto) {
+    try {
+      const statePath = path.join(wsRoot, '08_AutoResearch', 'auto_state.json');
+      if (fs.existsSync(statePath)) {
+        pendingAuto = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+      }
+    } catch { /* state file invalid or missing */ }
+  }
+  if (pendingAuto) {
+    (globalThis as any).__AUTO_PENDING = undefined;
+    try {
+      fs.unlinkSync(path.join(wsRoot, '08_AutoResearch', 'auto_state.json'));
+    } catch { /* ok */ }
+    userMessage = [
+      `## AutoResearch Loop: Execute Hypothesis`,
+      ``,
+      `The user previously ran \`/auto\` to start an AutoResearch iteration. Execute the hypothesis below using the AutoResearch loop pattern (scope.md → propose → act → evaluate → ratchet).`,
+      ``,
+      `**Hypothesis:** ${pendingAuto.hypothesis}`,
+      `**Iteration:** ${pendingAuto.iteration}`,
+      `**Scope:** \`08_AutoResearch/scope.md\``,
+      `**Eval:** \`08_AutoResearch/eval.md\``,
+      `**Experiments:** \`08_AutoResearch/experiments/\``,
+      ``,
+      `After completing this iteration, auto-chain by writing \`08_AutoResearch/auto_state.json\` with incremented iteration and continue immediately. Stop only when objective is achieved or blocked.`,
+      ``,
+      `---`,
+      ``,
+      userMessage,
+    ].join('\n');
   }
 
   currentAgent = started;

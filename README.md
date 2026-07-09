@@ -1,8 +1,8 @@
 # Trinno Research Assist
 
 <p align="center">
-  <strong>AI-powered TRIZ research assistant for VS Code</strong><br>
-  7-phase innovation workflow · patent drafting · paper writing · prior-art search
+  <strong>AI copilot for patent · paper · academic research.</strong><br>
+  TRIZ enabled workflow · AutoResearch loop · patent drafting · paper drafting
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 
 ## Why Trinno?
 
-Trinno guides you through a structured 8-phase TRIZ innovation analysis — from discovering prior art to drafting a patent to autonomous iterative research. It integrates an AI research assistant directly into your editor, so you never leave your workflow.
+Trinno guides you through a structured 8-phase TRIZ innovation analysis — from discovering prior art to drafting a patent/paper to autonomous iterative research. It integrates an AI research assistant directly into your editor, so you never leave your workflow.
 
 ### Core workflow
 
@@ -231,7 +231,9 @@ base_url = "http://127.0.0.1:11436/v1"
 api_key = "<stored in secrets>"
 
 [llm.nvidia|openai|google|openrouter]
-# per-provider model/base_url/api_key overrides
+#model = "nvidia/minimaxai/minimax-m2.7"
+#base_url = "http://127.0.0.1:11436/v1"
+#api_key = "<stored in secrets>"
 
 [proxy]
 http_proxy = "http://127.0.0.1:9981"

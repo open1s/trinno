@@ -368,6 +368,9 @@ export const initCommand: SlashCommand = {
       fs.writeFileSync(evalPath, buildEvalTemplate(projectName, today), 'utf-8');
     }
     fs.mkdirSync(path.join(root, '08_AutoResearch', 'experiments'), { recursive: true });
+    fs.mkdirSync(path.join(root, '08_AutoResearch', 'code'), { recursive: true });
+    fs.mkdirSync(path.join(root, '08_AutoResearch', 'results'), { recursive: true });
+    fs.mkdirSync(path.join(root, '08_AutoResearch', 'validation'), { recursive: true });
     const logTemplatePath = path.join(root, '08_AutoResearch', 'experiments', 'log_template.md');
     if (!fs.existsSync(logTemplatePath)) {
       fs.writeFileSync(logTemplatePath, buildLogTemplate(projectName, today), 'utf-8');
