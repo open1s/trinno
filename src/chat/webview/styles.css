@@ -448,6 +448,22 @@ body {
   align-items: center;
   gap: 6px;
   color: var(--fg);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tool-running-list {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border, rgba(127,127,127,0.3));
+  color: var(--fg-muted, rgba(127,127,127,0.9));
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .tool-toggle {

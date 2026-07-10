@@ -98,8 +98,9 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
         return HookDecision.Abort;
       }
 
-      const id = `approval_${++approvalCounter}`;
-      log.trace({ toolName, id }, 'tool-call (ask)');
+      const originalId = data.tool_id || data.toolId || '';
+      const id = originalId || `approval_${++approvalCounter}`;
+      log.trace({ toolName, id, originalId }, 'tool-call (ask)');
 
       const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
       const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;

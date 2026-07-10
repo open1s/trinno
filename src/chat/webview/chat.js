@@ -1887,6 +1887,18 @@
     </div>`;
   }
 
+  function runningToolsSummary(tools, max) {
+    const limit = typeof max === 'number' ? max : 3;
+    const running = tools.filter(t => t.status === 'running' || t.status === 'waiting' || t.status === 'called');
+    if (running.length === 0) return '';
+    const labels = running.map(t => formatToolCommand(t.name, t.args));
+    const shown = labels.slice(0, limit);
+    const overflow = labels.length - shown.length;
+    let text = shown.map(l => shortenToolLabel(l, 60)).join(' · ');
+    if (overflow > 0) text += ` · +${overflow} more`;
+    return ` <span class="tool-running-list">${escapeHtml(text)}</span>`;
+  }
+
   function renderToolLog(tools) {
     if (!tools || tools.length === 0) return '';
     const doneCount = tools.filter(t => t.status === 'done' || t.status === 'result').length;
@@ -1899,6 +1911,8 @@
     html += `<span class="tool-count">`;
     if (runningCount > 0) html += `<span class="tool-spinner-inline"></span> `;
     html += `${doneCount}/${totalCount} tools`;
+    if (runningCount > 0) html += ` (${runningCount} running)`;
+    html += runningToolsSummary(tools, 3);
     if (errorCount > 0) html += ` (${errorCount} failed)`;
     html += `</span><span class="tool-toggle">▼</span></div>`;
     html += `<div class="tool-list collapsed">`;
@@ -2005,16 +2019,30 @@
         const toolName = text.trim();
         if (!toolName) break;
 
-        const existingTool = messageState.tools.find(t => {
+        let existingTool = messageState.tools.find(t => {
           if (!(t.name === toolName && (t.status === 'running' || t.status === 'waiting'))) return false;
           if (msgToolId) return t.id === msgToolId;
           return true;
         });
-        if (existingTool) {
-          if (msgArgs !== undefined && existingTool.args === undefined) {
-            existingTool.args = msgArgs;
+
+        if (!existingTool && msgToolId) {
+          const sameNameRunning = messageState.tools.filter(t =>
+            t.name === toolName && (t.status === 'running' || t.status === 'waiting')
+          );
+          if (sameNameRunning.length === 1) {
+            existingTool = sameNameRunning[0]; // same tool, different id source
           }
+        }
+
+        if (existingTool) {
+          if (msgArgs !== undefined) existingTool.args = msgArgs;
           if (msgToolId && !existingTool.id) existingTool.id = msgToolId;
+          const logEntry = messageState.toolLog.find(l =>
+            l.name === toolName && l.status === 'running' && !l.id
+          );
+          if (logEntry && msgArgs !== undefined && logEntry.args === undefined) {
+            logEntry.args = msgArgs;
+          }
           renderToolBadges();
           break;
         }
@@ -2029,25 +2057,33 @@
         break;
 
       case 'ToolResult':
-        const lastRunning = [...messageState.tools].reverse().find(t => {
+        let lastRunning = [...messageState.tools].reverse().find(t => {
           if (t.status !== 'running') return false;
           if (msgToolId) return t.id === msgToolId;
           return true;
         });
+        if (!lastRunning && msgToolId) {
+          lastRunning = [...messageState.tools].reverse().find(t => t.status === 'running');
+        }
         if (lastRunning) {
           const isDenied = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
           lastRunning.status = isDenied ? 'error' : 'done';
           lastRunning.result = text || '';
+          if (msgToolId && !lastRunning.id) lastRunning.id = msgToolId;
         }
-        const lastLog = [...messageState.toolLog].reverse().find(t => {
+        let lastLog = [...messageState.toolLog].reverse().find(t => {
           if (t.status !== 'running') return false;
           if (msgToolId) return t.id === msgToolId;
           return true;
         });
+        if (!lastLog && msgToolId) {
+          lastLog = [...messageState.toolLog].reverse().find(t => t.status === 'running');
+        }
         if (lastLog) {
           const isDenied2 = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
           lastLog.status = isDenied2 ? 'error' : 'done';
           lastLog.result = text || '';
+          if (msgToolId && !lastLog.id) lastLog.id = msgToolId;
         }
         renderToolBadges();
         hasVisibleContent = true;
@@ -2089,11 +2125,10 @@
 
     let html = `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-list').classList.toggle('collapsed')">`;
     html += `<span class="tool-count">`;
-    if (runningCount > 0) {
-      html += `<span class="tool-spinner-inline"></span> `;
-    }
+    if (runningCount > 0) html += `<span class="tool-spinner-inline"></span> `;
     html += `${doneCount}/${totalCount} tools`;
     if (runningCount > 0) html += ` (${runningCount} running)`;
+    html += runningToolsSummary(messageState.tools, 3);
     if (errorCount > 0) html += `, ${errorCount} failed`;
     html += `</span><span class="tool-toggle">▼</span></div>`;
 
@@ -2106,15 +2141,73 @@
     toolsSection.innerHTML = html;
   }
 
+  function shortenToolLabel(label, maxLen) {
+    if (typeof label !== 'string') return '';
+    const flat = label.replace(/\s+/g, ' ').trim();
+    if (flat.length <= maxLen) return flat;
+    if (maxLen <= 1) return flat.slice(0, maxLen);
+    const head = Math.ceil((maxLen - 1) / 2);
+    const tail = Math.floor((maxLen - 1) / 2);
+    return flat.slice(0, head) + '…' + flat.slice(flat.length - tail);
+  }
+
   function formatToolCommand(toolName, args) {
     let parsed = args;
     if (typeof parsed === 'string') {
       try { parsed = JSON.parse(parsed); } catch { parsed = null; }
     }
 
-    if (toolName === 'bash' && parsed && typeof parsed === 'object') {
-      const cmd = parsed.command || parsed.cmd;
-      if (typeof cmd === 'string' && cmd.length > 0) return cmd;
+    const argValue = (key) => {
+      if (!parsed || typeof parsed !== 'object') return undefined;
+      const v = parsed[key];
+      if (v === null || v === undefined) return undefined;
+      if (typeof v === 'string') return v;
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+      return undefined;
+    };
+    const argArray = (key) => {
+      if (!parsed || typeof parsed !== 'object') return undefined;
+      const v = parsed[key];
+      return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))) : undefined;
+    };
+
+    if (toolName === 'bash') {
+      const cmd = argValue('command') ?? argValue('cmd');
+      if (cmd) return `bash ${shortenToolLabel(cmd, 80)}`;
+    }
+    if (toolName === 'exec_tool') {
+      const cmd = argValue('command');
+      const arr = argArray('args');
+      const parts = [cmd, ...(arr ?? [])].filter(Boolean).map((s) => shortenToolLabel(s, 40));
+      if (parts.length > 0) return `exec_tool ${parts.join(' ')}`;
+    }
+    const singlePathArgs = ['filePath', 'filepath', 'path', 'file', 'target', 'target_file'];
+    for (const k of singlePathArgs) {
+      const v = argValue(k);
+      if (v) return `${toolName} ${shortenToolLabel(v, 80)}`;
+    }
+    if (toolName === 'grep_search') {
+      const p = argValue('pattern'), q = argValue('query'), d = argValue('dir') ?? argValue('dirPath');
+      if (p || q) return `${toolName} ${shortenToolLabel(p ?? q, 60)} ${d ? `in ${shortenToolLabel(d, 30)}` : ''}`.trim();
+    }
+    if (toolName === 'glob_files') {
+      const p = argValue('pattern');
+      if (p) return `${toolName} ${shortenToolLabel(p, 60)}`;
+    }
+    if (toolName === 'ast_grep' || toolName === 'ast_edit') {
+      const p = argValue('pattern');
+      if (p) return `${toolName} ${shortenToolLabel(p, 60)}`;
+    }
+    if (toolName === 'apply_patch') {
+      const p = argValue('patch') ?? argValue('diff') ?? argValue('content');
+      if (p) return `${toolName} ${shortenToolLabel(String(p).split('\n')[0], 80)}`;
+    }
+    if (toolName === 'websearch' || toolName === 'web_search') {
+      const q = argValue('query');
+      if (q) return `${toolName} ${shortenToolLabel(q, 60)}`;
+    }
+    if (toolName === 'todowrite') {
+      return `${toolName}`;
     }
 
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -2123,7 +2216,7 @@
         if (k.startsWith('_')) continue;
         if (v === null || v === undefined) continue;
         if (typeof v === 'object') continue;
-        parts.push(`${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`);
+        parts.push(`${k}=${typeof v === 'string' ? shortenToolLabel(v, 40) : JSON.stringify(v)}`);
       }
       if (parts.length > 0) return `${toolName} ${parts.join(' ')}`;
     }
