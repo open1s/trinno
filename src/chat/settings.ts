@@ -67,7 +67,7 @@ export const DEFAULT_CONFIG: ChatConfig = {
     permissions: DEFAULT_TOOL_PERMISSIONS,
   },
   sandbox: {
-    enabled: false,
+    enabled: true,
   },
   mcp: {
     servers: [],
@@ -108,7 +108,7 @@ export function getChatConfig(): ChatConfig {
       permissions: cfg.get<ToolPermissionConfig>('tools.permissions', DEFAULT_CONFIG.tools.permissions),
     },
     sandbox: {
-      enabled: cfg.get<boolean>('tools.terminal.sandbox.enabled', false),
+      enabled: cfg.get<boolean>('tools.terminal.sandbox.enabled', true),
     },
     mcp: {
       servers: cfg.get<McpServerConfig[]>('mcp.servers', DEFAULT_CONFIG.mcp.servers),

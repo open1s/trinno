@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+const isWin = process.platform === 'win32';
+
 const DANGEROUS_PATTERNS = [
   /^rm\s+-rf?\s+\/$/,
   /^rm\s+-rf?\s+\//,
@@ -17,6 +19,12 @@ const DANGEROUS_PATTERNS = [
   /^python[23]?\s+-c\s+['"].*import.*os.*system/,
   /^eval\s+/,
   /^source\s+\/dev\/stdin/,
+  // Windows destructive patterns
+  /^(del|rmdir|rd)\s+\/[\w]*[sfq]+\s+[a-zA-Z]:\\/,
+  /^format\s+[a-zA-Z]:/,
+  /^diskpart/,
+  /^reg\s+(delete|add)\s+/,
+  /^takeown\s+\/f\s+[a-zA-Z]:\\/,
 ];
 
 const SECRET_PATTERNS = [
@@ -43,8 +51,11 @@ export function isSecretPath(filePath: string): boolean {
 
 export function isWorkspacePath(filePath: string, workspaceRoot: string): boolean {
   const resolved = path.resolve(workspaceRoot, filePath);
-  const normalizedRoot = path.resolve(workspaceRoot) + path.sep;
-  return resolved === path.resolve(workspaceRoot) || resolved.startsWith(normalizedRoot);
+  const root = path.resolve(workspaceRoot) + path.sep;
+  const resolvedStr = isWin ? resolved.toLowerCase() : resolved;
+  const rootStr = isWin ? root.toLowerCase() : root;
+  const rootPlain = isWin ? path.resolve(workspaceRoot).toLowerCase() : path.resolve(workspaceRoot);
+  return resolvedStr === rootPlain || resolvedStr.startsWith(rootStr);
 }
 
 export function resolveInWorkspace(
@@ -59,8 +70,11 @@ export function resolveInWorkspace(
 
     const resolved = resolveRealSafe(absPath);
     const normalizedRoot = wsRoot + path.sep;
+    const resolvedStr = isWin ? resolved.toLowerCase() : resolved;
+    const rootStr = isWin ? normalizedRoot.toLowerCase() : normalizedRoot;
+    const rootPlain = isWin ? wsRoot.toLowerCase() : wsRoot;
 
-    if (resolved === wsRoot || resolved.startsWith(normalizedRoot)) {
+    if (resolvedStr === rootPlain || resolvedStr.startsWith(rootStr)) {
       return { resolved, ok: true };
     }
 

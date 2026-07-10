@@ -23,13 +23,20 @@ export const sandboxCommand: SlashCommand = {
     ];
 
     if (!enabled) {
-      lines.push('Sandbox is disabled by configuration. Set `trinno.chat.sandbox.enabled: true` in VS Code settings to enable.');
+      lines.push('Sandbox is disabled by configuration. Enable in VS Code settings via `trinno.chat.sandbox.enabled`.');
     } else if (available === 'none') {
       lines.push('Sandbox is enabled but no sandbox tool found.');
-      if (os === 'darwin') lines.push('Install Xcode Command Line Tools for sandbox-exec, or disable with `sandboxEnabled: false`.');
-      if (os === 'linux') lines.push('Install bubblewrap (`apt install bubblewrap` or `dnf install bubblewrap`), or disable with `sandboxEnabled: false`.');
+      if (os === 'darwin') lines.push('Install Xcode Command Line Tools for sandbox-exec.');
+      if (os === 'linux') lines.push('Install bubblewrap (`apt install bubblewrap` or `dnf install bubblewrap`).');
+      if (os === 'win32') lines.push('Install Sysinternals PsExec (`psexec`) for basic sandbox, or use Windows Pro/Enterprise for AppContainer sandbox.');
+      lines.push('Without a sandbox tool, `bash`/`exec_tool` commands can still escape the workspace.');
+      lines.push('The tool wrapper (file path validation) is ALWAYS active regardless of sandbox status.');
     } else {
-      lines.push(`Sandbox is active via \`${available}\`. Shell commands are restricted to the workspace directory.`);
+      lines.push(`Sandbox is active via \`${available}\`. Shell commands are restricted.`);
+      if (os === 'win32' && available === 'psexec') {
+        lines.push('Note: psexec strips admin privileges but does NOT fully restrict filesystem paths.');
+        lines.push('The tool wrapper provides the primary file-access boundary on Windows.');
+      }
     }
 
     emit('token', { tokenType: 'Text', text: lines.join('\n') });

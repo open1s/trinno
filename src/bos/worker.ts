@@ -372,7 +372,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
-    if (sandboxEnabled) brainOptions.sandboxEnabled = sandboxEnabled;
+    brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
     initAgentFactory(deps.brain, {
@@ -1167,7 +1167,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 const brainOptions: any = { workspaceRoot: wsRoot };
                 if (msg.apiKey) brainOptions.apiKey = msg.apiKey;
                 if (msg.toolPermissions) brainOptions.toolPermissions = msg.toolPermissions;
-                if (msg.sandboxEnabled) brainOptions.sandboxEnabled = msg.sandboxEnabled;
+                brainOptions.sandboxEnabled = msg.sandboxEnabled !== false;
                 const d = await composeRoot(brainOptions);
                 deps = d;
                 await initApprovalBus(deps.brain);
@@ -1447,7 +1447,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
-    if (sandboxEnabled) brainOptions.sandboxEnabled = sandboxEnabled;
+    brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
     initAgentFactory(deps.brain, {

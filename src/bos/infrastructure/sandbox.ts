@@ -8,9 +8,11 @@ export interface SandboxOptions {
   workspaceRoot?: string;
 }
 
+type SandboxType = 'sandbox-exec' | 'bwrap' | 'psexec' | 'appcontainer' | 'none';
+
 interface SandboxWrapper {
   prefixArgs: string[];
-  wrapperType: 'sandbox-exec' | 'bwrap' | 'prlimit' | 'none';
+  wrapperType: SandboxType;
 }
 
 function detectOS(): 'macos' | 'linux' | 'windows' | 'other' {
@@ -30,6 +32,19 @@ function findWrapper(): SandboxWrapper {
     if (detectOS() === 'linux') {
       const result = execSync('which bwrap 2>/dev/null', { encoding: 'utf-8', stdio: 'pipe' }).trim();
       if (result) return { prefixArgs: [result], wrapperType: 'bwrap' };
+    }
+    if (detectOS() === 'windows') {
+      try {
+        const psResult = execSync(
+          'powershell -NoProfile -Command "if (Get-Command New-AppContainerProfile -ErrorAction SilentlyContinue) { \'appcontainer\' }"',
+          { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 },
+        ).trim();
+        if (psResult) return { prefixArgs: ['powershell'], wrapperType: 'appcontainer' };
+      } catch { }
+      try {
+        const psexecResult = execSync('where psexec 2>nul', { encoding: 'utf-8', stdio: 'pipe', timeout: 3000 }).trim();
+        if (psexecResult) return { prefixArgs: [psexecResult], wrapperType: 'psexec' };
+      } catch { }
     }
   } catch {
     // wrapper not found
@@ -83,6 +98,52 @@ function generateBubblewrapArgs(
   return args;
 }
 
+function wrapWindowsAppContainer(command: string, workspaceRoot: string): { command: string; timeout: number } {
+  const escapedWs = workspaceRoot.replace(/'/g, "''");
+  const escapedCmd = command.replace(/'/g, "''");
+  const lines = [
+    "$name = \"Trinno_$pid\"",
+    "$ws = '" + escapedWs + "'",
+    "$cmd = '" + escapedCmd + "'",
+    "try {",
+    "  $p = New-AppContainerProfile -Name $name -DisplayName \"Trinno Sandbox\" -Description \"Temporary\" -Capabilities @()",
+    "  $sid = $p.Sid",
+    "  $aclArg = \"*$sid`:(OI)(CI)(RX,WD,AD)\"",
+    "  icacls $ws /grant $aclArg 2`$null | Out-Null",
+    "  $psi = New-Object System.Diagnostics.ProcessStartInfo",
+    '  $psi.FileName = "cmd.exe"',
+    '  $psi.Arguments = "/c `"$cmd`""',
+    "  $psi.UseShellExecute = $false",
+    "  $psi.RedirectStandardOutput = $true",
+    "  $psi.RedirectStandardError = $true",
+    '  $psi.EnvironmentVariables["PATH"] = $env:PATH',
+    "  $psi.WorkingDirectory = $ws",
+    "  $p2 = [System.Diagnostics.Process]::Start($psi)",
+    "  $p2.WaitForExit()",
+    "  $stdout = $p2.StandardOutput.ReadToEnd()",
+    "  $stderr = $p2.StandardError.ReadToEnd()",
+    "  Write-Output $stdout",
+    "  if ($stderr) { Write-Error $stderr }",
+    "  exit $p2.ExitCode",
+    "} finally {",
+    "  Remove-AppContainerProfile -Name $name -ErrorAction SilentlyContinue",
+    "}",
+  ];
+  const ps1 = lines.join('\n');
+
+  const psPath = path.join(os.tmpdir(), 'trinno-ac-' + Date.now() + '.ps1');
+  try {
+    fs.writeFileSync(psPath, ps1, 'utf-8');
+    setTimeout(function () {
+      try { fs.unlinkSync(psPath); } catch { }
+    }, 60000);
+  } catch {
+    return { command, timeout: 30000 };
+  }
+
+  return { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + psPath + '"', timeout: 120000 };
+}
+
 export function getResourceLimits(): Record<string, number> {
   return {
     maxProcesses: 64,
@@ -91,15 +152,29 @@ export function getResourceLimits(): Record<string, number> {
   };
 }
 
-export function detectSandboxType(): 'sandbox-exec' | 'bwrap' | 'none' {
+export function detectSandboxType(): SandboxType {
+  const os = detectOS();
   try {
-    if (detectOS() === 'macos') {
+    if (os === 'macos') {
       const result = execSync('which sandbox-exec 2>/dev/null', { encoding: 'utf-8', stdio: 'pipe' }).trim();
       if (result) return 'sandbox-exec';
     }
-    if (detectOS() === 'linux') {
+    if (os === 'linux') {
       const result = execSync('which bwrap 2>/dev/null', { encoding: 'utf-8', stdio: 'pipe' }).trim();
       if (result) return 'bwrap';
+    }
+    if (os === 'windows') {
+      try {
+        const psResult = execSync(
+          'powershell -NoProfile -Command "if (Get-Command New-AppContainerProfile -ErrorAction SilentlyContinue) { \'appcontainer\' }"',
+          { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 },
+        ).trim();
+        if (psResult) return 'appcontainer';
+      } catch { }
+      try {
+        const psexecResult = execSync('where psexec 2>nul', { encoding: 'utf-8', stdio: 'pipe', timeout: 3000 }).trim();
+        if (psexecResult) return 'psexec';
+      } catch { }
     }
   } catch { }
   return 'none';
@@ -149,6 +224,17 @@ export class SandboxManager {
       const bwrapArgs = generateBubblewrapArgs(command, this.workspaceRoot);
       const wrapped = `bwrap ${bwrapArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
       return { command: wrapped, timeout: 60000 };
+    }
+
+    if (osType === 'windows') {
+      if (this.wrapper.wrapperType === 'appcontainer') {
+        return wrapWindowsAppContainer(command, this.workspaceRoot);
+      }
+      if (this.wrapper.wrapperType === 'psexec') {
+        const ws = this.workspaceRoot.replace(/"/g, '\\"');
+        const escCmd = command.replace(/"/g, '\\"');
+        return { command: `psexec -l cmd /c "pushd ${ws} && ${escCmd}"`, timeout: 60000 };
+      }
     }
 
     return { command, timeout: 30000 };
