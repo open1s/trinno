@@ -2035,7 +2035,6 @@
         }
 
         if (existingTool) {
-          console.debug('[tool-merge] existing:', existingTool.name, 'hasArgs:', !!existingTool.args, 'incomingArgs:', !!msgArgs);
           if (msgArgs !== undefined) existingTool.args = msgArgs;
           if (msgToolId && !existingTool.id) existingTool.id = msgToolId;
           const logEntry = messageState.toolLog.find(l =>
@@ -2067,7 +2066,6 @@
           lastRunning = [...messageState.tools].reverse().find(t => t.status === 'running');
         }
         if (lastRunning) {
-          console.debug('[tool-result] id:', msgToolId, 'found:', lastRunning.id, 'args:', JSON.stringify(lastRunning.args));
           const isDenied = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
           lastRunning.status = isDenied ? 'error' : 'done';
           lastRunning.result = text || '';
@@ -2176,6 +2174,11 @@
     if (toolName === 'bash') {
       const cmd = argValue('command') ?? argValue('cmd');
       if (cmd) return `${shortenToolLabel(cmd, 80)}`;
+      const backup = window.__lastApprovalArgs;
+      if (backup) {
+        const bkpCmd = (typeof backup === 'object' && backup !== null) ? (backup.command || backup.cmd) : undefined;
+        if (bkpCmd) return `${shortenToolLabel(bkpCmd, 80)}`;
+      }
     }
     if (toolName === 'exec_tool') {
       const cmd = argValue('command');
@@ -2337,6 +2340,7 @@
       currentMessageEl.insertBefore(toolsSection, currentContentEl);
     }
 
+    window.__lastApprovalArgs = args;
     const existingTool = messageState.tools.find(t => t.name === toolName && (t.status === 'running' || t.status === 'waiting'));
     if (!existingTool) {
       messageState.tools.push({ name: toolName, status: 'waiting', result: '', args });
@@ -2417,13 +2421,10 @@
     const el = document.getElementById(`approval-${id}`);
     if (el) el.remove();
     const approvalArgs = pendingApproval?.args;
-    console.debug('[approve] id:', id, 'remember:', remember, 'approvalArgs:', JSON.stringify(approvalArgs));
-    console.debug('[approve] tools before:', messageState.tools.map(t => ({ name: t.name, status: t.status, args: t.args })));
     pendingApproval = null;
     const tool = messageState.tools.find(t => t.status === 'waiting');
     if (tool) {
       tool.status = 'running';
-      console.debug('[approve] found waiting tool:', tool.name, 'args:', JSON.stringify(tool.args), 'approvalArgs:', approvalArgs);
       if (!tool.args && approvalArgs) tool.args = approvalArgs;
     }
     renderToolBadges();

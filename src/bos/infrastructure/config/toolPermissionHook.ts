@@ -85,8 +85,19 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
     }
 
     if (perm === 'ask') {
-      const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
-      const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;
+      let rawArgs = data.tool_args || data.args;
+      let args: Record<string, unknown>;
+      if (rawArgs && typeof rawArgs === 'object') {
+        args = rawArgs;
+      } else if (typeof rawArgs === 'string') {
+        args = tryParseJson(rawArgs);
+      } else {
+        args = {};
+      }
+      const cmd = data.command || data.cmd;
+      if (Object.keys(args).length === 0 && typeof cmd === 'string') {
+        args = { command: cmd };
+      }
 
       if (rememberedApprovals.has(makeRememberKey(toolName, args))) {
         log.trace({ toolName }, 'remembered approval, auto-approving');
@@ -139,8 +150,19 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
 const id = `auto_${++approvalCounter}`;
   log.trace({ toolName, id }, 'tool-call (auto)');
   ctx.data.toolId = id;
-  const rawArgs2 = data.tool_args || data.args || data.command || data.cmd || '';
-  const autoArgs = typeof rawArgs2 === 'string' ? tryParseJson(rawArgs2) : rawArgs2;
+  let rawArgs2 = data.tool_args || data.args;
+  let autoArgs: Record<string, unknown>;
+  if (rawArgs2 && typeof rawArgs2 === 'object') {
+    autoArgs = rawArgs2;
+  } else if (typeof rawArgs2 === 'string') {
+    autoArgs = tryParseJson(rawArgs2);
+  } else {
+    autoArgs = {};
+  }
+  const cmd2 = data.command || data.cmd;
+  if (Object.keys(autoArgs).length === 0 && typeof cmd2 === 'string') {
+    autoArgs = { command: cmd2 };
+  }
   if (onEmit && shouldEmitTool(toolName, 'call')) {
       onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: id, args: autoArgs });
     }

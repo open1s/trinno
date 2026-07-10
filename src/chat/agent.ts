@@ -271,7 +271,7 @@ export async function sendMessage(
       try {
         const msg = JSON.parse(line);
         if (msg.type === 'token') {
-          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
         }
       } catch { /* ignore non-JSON */ }
     }
@@ -290,7 +290,7 @@ export async function sendMessage(
             if (msg.tokenType === 'Text' && msg.text?.length > 0) {
               log.trace({ traceId: payload.messageId, tokenType: msg.tokenType, tokenLen: msg.text.length }, '[TRACE] agent←worker: streaming token');
             }
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
             break;
           case 'done':
             drainRemainingLines(dataBuffer);
@@ -532,7 +532,7 @@ export async function sendCompactRequest(
       try {
         const msg = JSON.parse(line);
         if (msg.type === 'token') {
-          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
         }
       } catch { /* ignore non-JSON */ }
     }
@@ -547,7 +547,7 @@ export async function sendCompactRequest(
         const msg = JSON.parse(line);
         switch (msg.type) {
           case 'token':
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
             break;
           case 'done':
             drainRemainingLines(compactBuffer);
@@ -625,7 +625,7 @@ export async function sendSlashRequest(
         const msg = JSON.parse(line);
         switch (msg.type) {
           case 'token':
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text });
+            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
             break;
           case 'done':
             cleanup();
