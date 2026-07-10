@@ -4,6 +4,7 @@ import type { PhaseWriter } from '../persistence/phase_writer.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { resolveInWorkspace } from '../config/workspaceGuard.js';
 
 export function createPapersTools(phaseWriter: PhaseWriter) {
   const downloadPaperTool = defineTool(
@@ -25,7 +26,14 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
     .required('identifier', 'string', 'DOI, arXiv ID, PMID, or any URL (https://...) of the paper to download')
     .param('outputDir', 'string', 'Override output directory (defaults to <workspace>/06_References/, falls back to ~/.trinno/papers/ if unwritable)')
     .handle(async (args) => {
-      const primary = args.outputDir?.trim() || defaultOutputDir(phaseWriter);
+      let primary: string;
+      if (args.outputDir?.trim()) {
+        const guard = resolveInWorkspace(args.outputDir.trim(), phaseWriter.getWorkspaceRoot() || process.cwd());
+        if (!guard.ok) return err(guard.error);
+        primary = guard.resolved;
+      } else {
+        primary = defaultOutputDir(phaseWriter);
+      }
       const candidates = uniqueDirs([primary, fallbackDir()]);
 
       const attempts: Array<{ dir: string; ok: boolean; error: string }> = [];
@@ -74,7 +82,14 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
   )
     .param('outputDir', 'string', 'Override output directory (defaults to <workspace>/06_References/)')
     .handle((args) => {
-      const primary = args.outputDir?.trim() || defaultOutputDir(phaseWriter);
+      let primary: string;
+      if (args.outputDir?.trim()) {
+        const guard = resolveInWorkspace(args.outputDir.trim(), phaseWriter.getWorkspaceRoot() || process.cwd());
+        if (!guard.ok) return err(guard.error);
+        primary = guard.resolved;
+      } else {
+        primary = defaultOutputDir(phaseWriter);
+      }
       const dirs = uniqueDirs([primary, fallbackDir()]);
       const seen = new Set<string>();
       const all: Array<{ filePath: string; size: number; mtime: number }> = [];

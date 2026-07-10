@@ -80,7 +80,7 @@ export async function composeRoot(options: {
   const locale = options.locale || DEFAULT_LOCALE;
   const workspaceRoot = options.workspaceRoot || process.cwd();
   const toolPermissions = options.toolPermissions || DEFAULT_TOOL_PERMISSIONS;
-  const sandboxEnabled = options.sandboxEnabled || false;
+  const sandboxEnabled = options.sandboxEnabled !== false;
 
   const brainOptions: any = {};
   if (options.apiKey) brainOptions.apiKey = options.apiKey;
@@ -137,7 +137,7 @@ export async function composeRoot(options: {
   const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
   const websearchTools = createWebsearchTools();
   const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools, ...todoTools, ...typstTools, ...websearchTools, ...remoteSkillTools];
-  const tools = wrapAllTools(allTools, toolPermissions);
+  const tools = wrapAllTools(allTools, toolPermissions, workspaceRoot);
 
   initAgentFactory(brain, {
     defaultTools: tools,

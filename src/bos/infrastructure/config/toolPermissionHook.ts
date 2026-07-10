@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ToolPermissionConfig, getToolMetadata, getBashIntent } from './toolPermissions.js';
 import { createModuleLogger } from '../logging/logger.js';
+import { resolveInWorkspace, isSecretPath, TOOL_FILE_PARAMS } from './workspaceGuard.js';
 
 const log = createModuleLogger('tool-permission');
 
@@ -233,8 +234,29 @@ const id = `auto_${++approvalCounter}`;
   return { beforeHook, afterHook };
 }
 
-export function wrapAllTools(tools: any[], _permissions: ToolPermissionConfig): any[] {
-  return tools;
+export function wrapAllTools(tools: any[], _permissions: ToolPermissionConfig, workspaceRoot?: string): any[] {
+  const ws = workspaceRoot || (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
+  return tools.map(tool => {
+    const fileParams = TOOL_FILE_PARAMS[tool.name];
+    if (!fileParams || fileParams.length === 0) return tool;
+    const origCallback = tool.callback;
+    return {
+      ...tool,
+      callback(args: Record<string, unknown>) {
+        const newArgs = { ...args };
+        for (const paramName of fileParams) {
+          const val = newArgs[paramName];
+          if (typeof val !== 'string' || !val.trim()) continue;
+          const result = resolveInWorkspace(val.trim(), ws);
+          if (!result.ok) {
+            return `PERMISSION_DENIED: Tool "${tool.name}" ${result.error}`;
+          }
+          newArgs[paramName] = result.resolved;
+        }
+        return origCallback(newArgs);
+      },
+    };
+  });
 }
 
 export function cancelPendingApproval(id: string): void {

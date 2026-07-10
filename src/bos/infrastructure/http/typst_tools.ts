@@ -4,6 +4,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { getTypstLspClient, LspDiagnostic } from '../lsp/typst_lsp.js';
 import { createModuleLogger } from '../logging/logger.js';
+import { resolveInWorkspace } from '../config/workspaceGuard.js';
 
 const log = createModuleLogger('typst-tools');
 
@@ -15,9 +16,11 @@ export function createTypstTools(workspaceRoot: string) {
     .required('filePath', 'string', 'Path to the .typ file to lint')
     .handle(async (args) => {
       const filePath = args.filePath as string;
-      const resolvedPath = path.isAbsolute(filePath)
-        ? filePath
-        : path.join(workspaceRoot, filePath);
+      const guard = resolveInWorkspace(filePath, workspaceRoot);
+      if (!guard.ok) {
+        return err(guard.error);
+      }
+      const resolvedPath = guard.resolved;
 
       if (!fs.existsSync(resolvedPath)) {
         return err(`File not found: ${resolvedPath}`);

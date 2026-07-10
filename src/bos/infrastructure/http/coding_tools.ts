@@ -4,55 +4,10 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import * as readline from 'readline';
 import { SandboxManager } from '../sandbox.js';
-
-const DANGEROUS_PATTERNS = [
-  /^rm\s+-rf?\s+\/$/,
-  /^rm\s+-rf?\s+\//,
-  /^rm\s+-[rf]+\s+\//,
-  /^rm\s+-[rf]+\s+\/$/,
-  /^dd\s+if=/,
-  /^mkfs/,
-  /^:(){:|:&};:/,
-  /^>\s*\/dev\/(sda|sdb|sdc|nvme|mmcblk)/,
-  /^chmod\s+-R\s+777\s+\/$/,
-  /^chmod\s+-R?\s+777\s+\//,
-  /^(sudo|doas)\s+/,
-  /^(curl|wget)\s+.+[\|;]\s*(sh|bash|zsh)\b/,
-  /^python[23]?\s+-c\s+['"].*import.*os.*system/,
-  /^eval\s+/,
-  /^source\s+\/dev\/stdin/,
-];
-
-const SECRET_PATTERNS = [
-  /[/\\]\.ssh[/\\]/,
-  /[/\\]\.aws[/\\]/,
-  /[/\\]\.config[/\\]gcloud[/\\]/,
-  /[/\\]\.config[/\\]gh[/\\]/,
-  /[/\\](?:^|[\\/])\.env(?:\.[a-zA-Z]+)?$/,
-  /[/\\]id_rsa$/,
-  /[/\\]id_ed25519$/,
-  /[/\\]known_hosts$/,
-  /[/\\]credentials?$/,
-];
-
-function isWorkspacePath(filePath: string, workspaceRoot: string): boolean {
-  const resolved = path.resolve(workspaceRoot, filePath);
-  const normalizedRoot = path.resolve(workspaceRoot) + path.sep;
-  return resolved === path.resolve(workspaceRoot) || resolved.startsWith(normalizedRoot);
-}
-
-function isSecretPath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, '/');
-  return SECRET_PATTERNS.some(pattern => pattern.test(normalized));
-}
-
-function isDangerousCommand(cmd: string): boolean {
-  const trimmed = cmd.trim();
-  return DANGEROUS_PATTERNS.some(pattern => pattern.test(trimmed));
-}
+import { isWorkspacePath, isSecretPath, isDangerousCommand } from '../config/workspaceGuard.js';
 
 export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolean) {
-  const sandbox = new SandboxManager({ enabled: sandboxEnabled ?? false, workspaceRoot });
+  const sandbox = new SandboxManager({ enabled: sandboxEnabled !== false, workspaceRoot });
   const readFile = defineTool(
     'read_file',
     'Read partial or full contents of a file with line numbers. Defaults to reading up to 1000 lines.',
