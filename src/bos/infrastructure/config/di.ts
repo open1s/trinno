@@ -21,6 +21,7 @@ import { createWebsearchTools } from '../http/websearch_tools.js';
 import { createRemoteSkillTools } from '../http/remote_skill_tools.js';
 import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
 import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
+import { detectSandboxType } from '../sandbox.js';
 import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
 import { ContradictionAnalysisService } from '../../domain/contradiction/services.js';
 import { AnalyzeContradictionHandler } from '../../application/analyze_contradiction/handler.js';
@@ -138,6 +139,13 @@ export async function composeRoot(options: {
   const websearchTools = createWebsearchTools();
   const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools, ...todoTools, ...typstTools, ...websearchTools, ...remoteSkillTools];
   const tools = wrapAllTools(allTools, toolPermissions, workspaceRoot);
+
+  const sandboxType = detectSandboxType();
+  (globalThis as any).__SANDBOX_CONFIG = {
+    enabled: sandboxEnabled,
+    available: sandboxType,
+    os: process.platform,
+  };
 
   initAgentFactory(brain, {
     defaultTools: tools,

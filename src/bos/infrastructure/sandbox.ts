@@ -91,6 +91,20 @@ export function getResourceLimits(): Record<string, number> {
   };
 }
 
+export function detectSandboxType(): 'sandbox-exec' | 'bwrap' | 'none' {
+  try {
+    if (detectOS() === 'macos') {
+      const result = execSync('which sandbox-exec 2>/dev/null', { encoding: 'utf-8', stdio: 'pipe' }).trim();
+      if (result) return 'sandbox-exec';
+    }
+    if (detectOS() === 'linux') {
+      const result = execSync('which bwrap 2>/dev/null', { encoding: 'utf-8', stdio: 'pipe' }).trim();
+      if (result) return 'bwrap';
+    }
+  } catch { }
+  return 'none';
+}
+
 export class SandboxManager {
   private enabled: boolean;
   private wrapper: SandboxWrapper;

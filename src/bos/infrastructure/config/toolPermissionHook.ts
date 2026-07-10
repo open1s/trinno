@@ -15,12 +15,8 @@ let busInitialized = false;
 const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeout?: NodeJS.Timeout; id: string; toolName: string; args: Record<string, unknown> }>();
 const rememberedApprovals = new Set<string>();
 
-function makeRememberKey(toolName: string, args: Record<string, unknown>): string {
+function makeRememberKey(toolName: string, _args: Record<string, unknown>): string {
   const ws = (globalThis as any).__TRP_WORKSPACE_ROOT || '';
-  if (toolName === 'bash' || toolName === 'exec_tool') {
-    const cmd = typeof args?.command === 'string' ? args.command.trim() : '';
-    return `${ws}::${toolName}::cmd=${cmd}`;
-  }
   return `${ws}::${toolName}`;
 }
 

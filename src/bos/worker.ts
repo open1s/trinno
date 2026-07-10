@@ -36,6 +36,7 @@ import {
   undoCommand,
   takeSnapshot,
   autoCommand,
+  sandboxCommand,
   readGoalForWorker,
   writeGoalForWorker,
   isGoalActive,
@@ -120,7 +121,8 @@ slashRegistry.register(initCommand, ['setup', 'new']);
 slashRegistry.register(pingCommand);
 slashRegistry.register(undoCommand, ['u']);
 slashRegistry.register(goalCommand, ['g']);
-slashRegistry.register(autoCommand, ['a', 'autoresearch']);
+  slashRegistry.register(autoCommand, ['a', 'autoresearch']);
+  slashRegistry.register(sandboxCommand, ['sb']);
 
 let pendingSlashOutput: string | null = null;
 
