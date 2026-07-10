@@ -567,10 +567,12 @@ body {
 }
 
 .tool-item-prompt {
-  color: var(--accent);
-  font-weight: bold;
+  color: #2ecc40;
+  font-weight: 600;
   flex-shrink: 0;
   user-select: none;
+  font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+  font-size: 13px;
 }
 
 .tool-item-cmd {
@@ -580,6 +582,8 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg);
+  font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+  font-size: 13px;
 }
 
 .tool-item-status {

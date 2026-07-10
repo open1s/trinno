@@ -11,11 +11,15 @@ let approvalPublisher: any = null;
 let approvalSubscriber: any = null;
 let busInitialized = false;
 
-const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeout?: NodeJS.Timeout; id: string; toolName: string }>();
+const pendingApprovals = new Map<string, { resolve: (v: boolean) => void; timeout?: NodeJS.Timeout; id: string; toolName: string; args: Record<string, unknown> }>();
 const rememberedApprovals = new Set<string>();
 
-function wsToolKey(toolName: string): string {
+function makeRememberKey(toolName: string, args: Record<string, unknown>): string {
   const ws = (globalThis as any).__TRP_WORKSPACE_ROOT || '';
+  if (toolName === 'bash' || toolName === 'exec_tool') {
+    const cmd = typeof args?.command === 'string' ? args.command.trim() : '';
+    return `${ws}::${toolName}::cmd=${cmd}`;
+  }
   return `${ws}::${toolName}`;
 }
 
@@ -81,9 +85,16 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
     }
 
     if (perm === 'ask') {
-      // Skip dialog if remembered for this project
-      if (rememberedApprovals.has(wsToolKey(toolName))) {
+      const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
+      const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;
+
+      if (rememberedApprovals.has(makeRememberKey(toolName, args))) {
         log.trace({ toolName }, 'remembered approval, auto-approving');
+        const rId = `auto_${++approvalCounter}`;
+        ctx.data.toolId = rId;
+        if (onEmit) {
+          onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: rId, args });
+        }
         return HookDecision.Continue;
       }
 
@@ -102,8 +113,6 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       const id = originalId || `approval_${++approvalCounter}`;
       log.trace({ toolName, id, originalId }, 'tool-call (ask)');
 
-      const rawArgs = data.tool_args || data.args || data.command || data.cmd || '';
-      const args = typeof rawArgs === 'string' ? tryParseJson(rawArgs) : rawArgs;
       const metadata = getToolMetadata(toolName);
       const bashIntent = toolName === 'bash' ? getBashIntent(args) : null;
 
@@ -120,7 +129,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
 
       log.trace({ id, toolName, pendingCount: pendingApprovals.size }, 'waiting for approval');
       const approved = await new Promise<boolean>((resolve) => {
-        pendingApprovals.set(id, { resolve, timeout: undefined as unknown as NodeJS.Timeout, id, toolName });
+        pendingApprovals.set(id, { resolve, timeout: undefined as unknown as NodeJS.Timeout, id, toolName, args });
       });
       log.trace({ id, approved }, 'got approval result');
 
@@ -230,8 +239,8 @@ export async function sendApprovalResponse(id: string, approved: boolean, rememb
     pendingApprovals.delete(id);
     entry.resolve(approved);
     if (approved && remember) {
-      rememberedApprovals.add(wsToolKey(entry.toolName));
-      log.trace({ toolName: entry.toolName }, 'remembered for this workspace');
+      rememberedApprovals.add(makeRememberKey(entry.toolName, entry.args));
+      log.trace({ toolName: entry.toolName, args: entry.args }, 'remembered for this workspace');
     }
   } else {
     log.warn({ id, pendingCount: pendingApprovals.size }, 'NO pending entry found');
@@ -247,7 +256,7 @@ export async function sendApprovalResponse(id: string, approved: boolean, rememb
 
 export function getPendingApproval(): { id: string; toolName: string; args: Record<string, unknown> } | null {
   for (const [, entry] of pendingApprovals) {
-    return { id: entry.id, toolName: entry.toolName, args: {} };
+    return { id: entry.id, toolName: entry.toolName, args: entry.args };
   }
   return null;
 }

@@ -2035,6 +2035,7 @@
         }
 
         if (existingTool) {
+          console.debug('[tool-merge] existing:', existingTool.name, 'hasArgs:', !!existingTool.args, 'incomingArgs:', !!msgArgs);
           if (msgArgs !== undefined) existingTool.args = msgArgs;
           if (msgToolId && !existingTool.id) existingTool.id = msgToolId;
           const logEntry = messageState.toolLog.find(l =>
@@ -2066,6 +2067,7 @@
           lastRunning = [...messageState.tools].reverse().find(t => t.status === 'running');
         }
         if (lastRunning) {
+          console.debug('[tool-result] id:', msgToolId, 'found:', lastRunning.id, 'args:', JSON.stringify(lastRunning.args));
           const isDenied = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
           lastRunning.status = isDenied ? 'error' : 'done';
           lastRunning.result = text || '';
@@ -2173,13 +2175,13 @@
 
     if (toolName === 'bash') {
       const cmd = argValue('command') ?? argValue('cmd');
-      if (cmd) return `bash ${shortenToolLabel(cmd, 80)}`;
+      if (cmd) return `${shortenToolLabel(cmd, 80)}`;
     }
     if (toolName === 'exec_tool') {
       const cmd = argValue('command');
       const arr = argArray('args');
       const parts = [cmd, ...(arr ?? [])].filter(Boolean).map((s) => shortenToolLabel(s, 40));
-      if (parts.length > 0) return `exec_tool ${parts.join(' ')}`;
+      if (parts.length > 0) return `${parts.join(' ')}`;
     }
     const singlePathArgs = ['filePath', 'filepath', 'path', 'file', 'target', 'target_file'];
     for (const k of singlePathArgs) {
@@ -2228,6 +2230,7 @@
     const status = tool.status === 'result' ? 'done' : tool.status === 'called' ? 'running' : tool.status;
     const cls = status === 'done' ? 'done' : status === 'error' ? 'error' : status === 'waiting' ? 'waiting' : 'running';
     const command = formatToolCommand(tool.name, tool.args);
+    console.debug('[tool-render]', tool.name, status, 'id:', tool.id, 'args:', JSON.stringify(tool.args));
     const result = tool.result || '';
     const resultHtml = result
       ? `<pre class="tool-item-output">${escapeHtml(result)}</pre>`
@@ -2336,9 +2339,10 @@
 
     const existingTool = messageState.tools.find(t => t.name === toolName && (t.status === 'running' || t.status === 'waiting'));
     if (!existingTool) {
-      messageState.tools.push({ name: toolName, status: 'waiting', result: '' });
+      messageState.tools.push({ name: toolName, status: 'waiting', result: '', args });
     } else {
       existingTool.status = 'waiting';
+      if (args !== undefined) existingTool.args = args;
     }
     renderToolBadges();
 
@@ -2412,9 +2416,16 @@
     vscode.postMessage({ type: 'tool-approval', id, approved: true, remember });
     const el = document.getElementById(`approval-${id}`);
     if (el) el.remove();
+    const approvalArgs = pendingApproval?.args;
+    console.debug('[approve] id:', id, 'remember:', remember, 'approvalArgs:', JSON.stringify(approvalArgs));
+    console.debug('[approve] tools before:', messageState.tools.map(t => ({ name: t.name, status: t.status, args: t.args })));
     pendingApproval = null;
     const tool = messageState.tools.find(t => t.status === 'waiting');
-    if (tool) tool.status = 'running';
+    if (tool) {
+      tool.status = 'running';
+      console.debug('[approve] found waiting tool:', tool.name, 'args:', JSON.stringify(tool.args), 'approvalArgs:', approvalArgs);
+      if (!tool.args && approvalArgs) tool.args = approvalArgs;
+    }
     renderToolBadges();
   };
 
@@ -2604,6 +2615,15 @@ window.__denyTool = function(id) {
     if (t.includes('sse') && t.includes('closed')) return true;
     if (t.includes('aborted') && !t.includes('rate')) return true;
     return false;
+  }
+
+  function stopThinking() {
+    if (thinkingIntervalId) {
+      clearInterval(thinkingIntervalId);
+      thinkingIntervalId = null;
+    }
+    const wi = currentMessageEl?.querySelector('.waiting-indicator');
+    if (wi) wi.remove();
   }
 
   function showError(messageId, errorText) {
