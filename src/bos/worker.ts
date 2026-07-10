@@ -1601,38 +1601,94 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   }
 
   // Inject pending AutoResearch hypothesis into agent context (set by /auto)
-  // Read state from disk (survives worker restart) with globalThis as fallback
-  let pendingAuto = (globalThis as any).__AUTO_PENDING;
-  if (!pendingAuto) {
+  // Read state from disk — survives worker restart, no need for globalThis cache
+  const MAX_AUTO_ITERATIONS = 50;
+  function readAndConsumeAutoState(): { hypothesis: string; iteration: number; status: string } | null {
+    const fp = path.join(wsRoot, '08_AutoResearch', 'auto_state.json');
     try {
-      const statePath = path.join(wsRoot, '08_AutoResearch', 'auto_state.json');
-      if (fs.existsSync(statePath)) {
-        pendingAuto = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-      }
-    } catch { /* state file invalid or missing */ }
+      if (!fs.existsSync(fp)) return null;
+      const st = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+      if (!st || typeof st !== 'object' || typeof st.status !== 'string') return null;
+      fs.unlinkSync(fp);
+      return { hypothesis: String(st.hypothesis ?? ''), iteration: Number(st.iteration ?? 0), status: st.status };
+    } catch { return null; }
   }
-  if (pendingAuto) {
-    (globalThis as any).__AUTO_PENDING = undefined;
-    try {
-      fs.unlinkSync(path.join(wsRoot, '08_AutoResearch', 'auto_state.json'));
-    } catch { /* ok */ }
-    userMessage = [
-      `## AutoResearch Loop: Execute Hypothesis`,
-      ``,
-      `The user previously ran \`/auto\` to start an AutoResearch iteration. Execute the hypothesis below using the AutoResearch loop pattern (scope.md → propose → act → evaluate → ratchet).`,
-      ``,
-      `**Hypothesis:** ${pendingAuto.hypothesis}`,
-      `**Iteration:** ${pendingAuto.iteration}`,
-      `**Scope:** \`08_AutoResearch/scope.md\``,
-      `**Eval:** \`08_AutoResearch/eval.md\``,
-      `**Experiments:** \`08_AutoResearch/experiments/\``,
-      ``,
-      `After completing this iteration, auto-chain by writing \`08_AutoResearch/auto_state.json\` with incremented iteration and continue immediately. Stop only when objective is achieved or blocked.`,
-      ``,
-      `---`,
-      ``,
-      userMessage,
-    ].join('\n');
+
+  const pendingAuto = readAndConsumeAutoState();
+  if (pendingAuto && pendingAuto.status === 'active') {
+    if (pendingAuto.iteration > MAX_AUTO_ITERATIONS) {
+      userMessage = [
+        `## AutoResearch: Iteration Cap Reached`,
+        ``,
+        `Max ${MAX_AUTO_ITERATIONS} iterations reached. This loop is halted. Use \`/auto clear\` then \`/auto <new hypothesis>\` to start fresh.`,
+        ``,
+        `---`,
+        ``,
+        userMessage,
+      ].join('\n');
+    } else {
+      userMessage = [
+        `## AutoResearch Iteration ${pendingAuto.iteration} / ${MAX_AUTO_ITERATIONS}`,
+        ``,
+        `**Hypothesis:** ${pendingAuto.hypothesis}`,
+        ``,
+        `### AutoResearch Loop Protocol`,
+        `Execute this iteration using the propose → act → evaluate → ratchet pattern.`,
+        ``,
+        `**Phase 1 — Propose:**`,
+        `- Read \`08_AutoResearch/scope.md\` for constraints, allowed mutation surface, termination condition.`,
+        `- Read \`08_AutoResearch/eval.md\` for the fixed evaluation metric, protocol, baseline, accept/reject criteria.`,
+        `- Read previous experiment logs in \`08_AutoResearch/experiments/\` (sorted by filename) to learn from prior results.`,
+        `- Formulate a concrete hypothesis: what change, why it should improve the metric, and what specific measurable result (Δ threshold) determines accept vs. reject.`,
+        ``,
+        `**Phase 2 — Act:**`,
+        `- Make the minimal code or configuration change needed to test the hypothesis.`,
+        `- Put code in \`08_AutoResearch/code/\`. Put data/artifacts in \`08_AutoResearch/results/\`.`,
+        ``,
+        `**Phase 3 — Evaluate:**`,
+        `- Run the measurement procedure exactly as defined in eval.md.`,
+        `- Compute primary metric (before / after) and any secondary metrics.`,
+        `- Compare to baseline using eval.md's accept/reject criteria.`,
+        `- The evaluation is the GO/NO-GO gate. Do not skip or approximate it.`,
+        ``,
+        `**Phase 4 — Ratchet:**`,
+        `- Write \`08_AutoResearch/experiments/log_<N>.md\` (use experiment log template from \`log_template.md\`). Record the hypothesis, change, evaluation table (before/after/Δ/verdict), analysis, and next steps.`,
+        `- If eval.md criteria were met: verdict = KEPT. Commit the change.`,
+        `- If eval.md criteria were NOT met: verdict = REVERTED. Discard the change.`,
+        `- The verdict drives the next iteration's direction.`,
+        ``,
+        `### Continuation After This Iteration`,
+        `After completing the evaluation and writing the experiment log, write \`08_AutoResearch/auto_state.json\` with the NEXT iteration (current + 1) and a refined hypothesis based on this iteration's results.`,
+        ``,
+        `**auto_state.json format:**`,
+        `\`\`\`json`,
+        `{`,
+        `  "hypothesis": "<next hypothesis>",`,
+        `  "iteration": ${pendingAuto.iteration + 1},`,
+        `  "status": "active",`,
+        `  "createdAt": <unchanged, preserve from current state>,\``,
+        `  "updatedAt": <Date.now() timestamp in ms>`,
+        `}`,
+        `\`\`\``,
+        ``,
+        `**When to stop looping:**`,
+        `- Set \`status: "complete"\` if the evaluation proves the research objective is achieved AND no further improvements are expected.`,
+        `- Set \`status: "paused"\` if you hit an external blocker (data missing, compute unavailable, user input needed). The user can resume with \`/auto resume\`.`,
+        ``,
+        `**The loop self-perpetuates — the next round picks up this file automatically. No user input needed between iterations. Do NOT wait for the user to respond.**`,
+        ``,
+        `**Guardrails:**`,
+        `- Do NOT modify \`scope.md\` or \`eval.md\` mid-loop. They are immutable constraints.`,
+        `- Call todowrite at least once to report progress.`,
+        `- Every hypothesis must be concrete and testable. Vague "explore" / "investigate" hypotheses are rejected — skip and propose a real testable one.`,
+        `- Paste actual before/after measurements as evidence. Never accept a verdict based on memory or intent.`,
+        `- If the evaluation cannot be run (missing hardware, data, permissions), mark as paused — do not fabricate results.`,
+        ``,
+        `---`,
+        ``,
+        userMessage,
+      ].join('\n');
+    }
   }
 
   currentAgent = started;
@@ -1879,6 +1935,27 @@ Blocked audit:
 
 Do not call update_goal unless the goal is complete or the strict blocked audit above is satisfied. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.`;
           rounds.push(contPrompt);
+        }
+
+        // AutoResearch continuation: after each round, check if agent wrote a new auto_state.json
+        const nextAuto = readAndConsumeAutoState();
+        if (nextAuto && nextAuto.status === 'active') {
+          if (nextAuto.iteration > MAX_AUTO_ITERATIONS) {
+            localEmit('token', { tokenType: 'Text', text: `\n\n## AutoResearch: Iteration Cap Reached\n\n> ${nextAuto.hypothesis}\n\n_Max ${MAX_AUTO_ITERATIONS} iterations reached. Loop halted. Use \`/auto clear\` + \`/auto <new hypothesis>\` to restart._\n` });
+          } else {
+            localEmit('token', { tokenType: 'Text', text: `\n\n## AutoResearch Iteration ${nextAuto.iteration} / ${MAX_AUTO_ITERATIONS}\n\n**Hypothesis:** ${nextAuto.hypothesis}\n\n_Continuing automatically — reading scope/eval from \`08_AutoResearch/\`._\n` });
+            rounds.push([
+              `## AutoResearch Iteration ${nextAuto.iteration} / ${MAX_AUTO_ITERATIONS}`,
+              ``,
+              `**Hypothesis:** ${nextAuto.hypothesis}`,
+              ``,
+              `Continue the AutoResearch loop with this hypothesis. Follow the same propose → act → evaluate → ratchet protocol.`,
+              ``,
+              `After evaluating, write \`08_AutoResearch/auto_state.json\` with iteration ${nextAuto.iteration + 1} and a refined hypothesis, OR write status: "complete" / "paused" to stop.`,
+              ``,
+              `The loop self-perpetuates — no need to wait for user input.`,
+            ].join('\n'));
+          }
         }
       }
     }
