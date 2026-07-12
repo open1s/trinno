@@ -253,8 +253,15 @@ function flushEmitQueueSync(): void {
 }
 
 process.on('exit', flushEmitQueueSync);
-process.on('SIGTERM', () => { flushEmitQueueSync(); process.exit(0); });
-process.on('SIGINT', () => { flushEmitQueueSync(); process.exit(0); });
+function exitAfterGracefulAbort(): void {
+  // Give event loop time for Rust NAPI started.stop() callbacks to complete
+  // before exiting. Without this delay, process.exit() kills the TCP connection
+  // to the LLM before Rust can cancel the in-flight HTTP request, producing
+  // "Downstream ConnectionClosed: Prematurely before response body is complete".
+  setTimeout(() => process.exit(0), 500);
+}
+process.on('SIGTERM', () => { abortController?.abort(); flushEmitQueueSync(); exitAfterGracefulAbort(); });
+process.on('SIGINT', () => { abortController?.abort(); flushEmitQueueSync(); exitAfterGracefulAbort(); });
 
 setApprovalEmitter(emit);
 
@@ -753,6 +760,7 @@ function withMockInjector(
 }
 
 function handleCancel(): void {
+  log.warn({ hasAbortController: !!abortController, hasCurrentAgent: !!currentAgent }, '[DEBUG-DC] handleCancel called');
   abortController?.abort();
   cancelAllPendingApprovals();
   if (currentAgent) {
@@ -1721,7 +1729,11 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
         if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
         started.stream(msg, withMockInjector((token: any) => {
+          if (token.type === 'Error') {
+            log.warn({ error: token.error, aborted: signal.aborted }, '[DEBUG-DC] Error token received in stream callback');
+          }
           if (signal.aborted) {
+            log.warn({ tokenType: token.type, aborted: signal.aborted }, '[DEBUG-DC] signal.aborted guard: suppressing token');
             started.stop().catch(() => { });
             resolve();
             return;
@@ -1799,7 +1811,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
               resolve();
               break;
             }
-            case 'Error':
+            case 'Error': {
+              if (signal.aborted) {
+                log.warn({ error: token.error }, '[DEBUG-DC] case Error: suppressed due to signal.aborted');
+                resolve();
+                break;
+              }
+              log.warn({ error: token.error }, '[DEBUG-DC] case Error: emitting to panel');
               if (isRateLimited(token.error)) {
                 const retryAfter = parseRetryAfter(token.error);
                 log.warn({ sessionId, error: token.error, retryAfter }, '[RATE-LIMIT] worker received 429 from LLM');
@@ -1809,6 +1827,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
               }
               resolve();
               break;
+            }
           }
         }, localEmit, resolve));
       });
@@ -2037,9 +2056,10 @@ async function syncSessionAfterCommand(
 }
 
 process.on('SIGTERM', () => {
+  abortController?.abort();
   cancelAllPendingApprovals();
   closeTypstLspClient().catch(() => { });
   brain?.stop().catch(() => { });
   deps?.brain.stop().catch(() => { });
-  process.exit(0);
+  exitAfterGracefulAbort();
 });
