@@ -90,6 +90,9 @@ suite('E2E: Chat Retry Cap', () => {
 		assert.ok(!isRateLimitedForTest('500 Internal Server Error'));
 		assert.ok(!isRateLimitedForTest('Context overflow'));
 		assert.ok(!isRateLimitedForTest(''));
+		assert.ok(!isRateLimitedForTest('timeout: request timed out'));
+		assert.ok(!isRateLimitedForTest('stream timed out after 4290ms'));
+		assert.ok(!isRateLimitedForTest('upstream timeout'));
 	});
 
 	test('rate-limit retry counter starts at 0 with max 3', async () => {
@@ -683,5 +686,8 @@ suite('E2E: parseRetryAfter and isRateLimitedForTest (worker.ts)', () => {
     assert.ok(isRateLimitedForTest('Too many requests'));
     assert.ok(!isRateLimitedForTest('500 Internal Server Error'));
     assert.ok(!isRateLimitedForTest(''));
+    assert.ok(!isRateLimitedForTest('timeout: request timed out'));
+    assert.ok(!isRateLimitedForTest('stream timed out after 4290ms'));
+    assert.ok(!isRateLimitedForTest('upstream timeout'));
   });
 });

@@ -12,7 +12,7 @@ describe('Rapid Input (e2e via sendMessage)', function () {
   before(async function () {
     // Point to mock worker BEFORE agent module is loaded
     process.env.TRINNO_WORKER_PATH = path.resolve(
-      __dirname, '..', '..', 'dist', 'bos', 'mock-worker.js'
+      __dirname, '..', '..', '..', 'dist', 'bos', 'mock-worker.js'
     );
     // Reload agent module fresh (in case it was cached by another test)
     for (const modKey of Object.keys(require.cache)) {

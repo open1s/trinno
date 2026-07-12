@@ -689,7 +689,8 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
 }
 
 function isRateLimited(errorMsg: string): boolean {
-  return /429|rate.?limit|too many requests/i.test(errorMsg);
+  // Match only standalone "429" (HTTP status code), not as part of a larger number like "4290"
+  return /\b429\b|rate.?limit|too many requests/i.test(errorMsg);
 }
 
 export function parseRetryAfter(errorMsg: string): number {
