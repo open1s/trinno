@@ -604,9 +604,10 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
               emitTodoUpdate();
             }
             if (shouldEmitToolResult(token.id, token.name)) {
+              const resultText = truncateToolResult(token.result || token.text || '');
               emit('token', {
                 tokenType: 'ToolResult',
-                text: token.result || token.text || '',
+                text: resultText,
                 toolId: token.id,
                 status: 'completed'
               });
@@ -691,6 +692,16 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
 function isRateLimited(errorMsg: string): boolean {
   // Match only standalone "429" (HTTP status code), not as part of a larger number like "4290"
   return /\b429\b|rate.?limit|too many requests/i.test(errorMsg);
+}
+
+// Cap each tool result to ~25K tokens to avoid exceeding LLM context window
+const MAX_TOOL_RESULT_CHARS = 100_000;
+
+function truncateToolResult(text: string): string {
+  if (text.length > MAX_TOOL_RESULT_CHARS) {
+    return text.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, ${text.length - MAX_TOOL_RESULT_CHARS} chars omitted)`;
+  }
+  return text;
 }
 
 export function parseRetryAfter(errorMsg: string): number {
@@ -957,9 +968,10 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- PubScholar (pubscholar.cn) API is gated, but file CDN at `file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf` is open. Pass the article URL to papers_download.',
     '- Output language follows user input language — if user writes in Chinese, respond in Chinese; if English, respond in English. Never mix languages in the same output. Ensure all Chinese characters are valid UTF-8 — no garbled text, no partial characters, no mojibake.',
     '',
-    '## Writing Papers/Patents (use /patent or /write paper, LLM self-directs with skills, plan via todos, write incrementally, verify each step)',
+    '## Writing Papers/Patents (write each section as you generate it — never accumulate full content before writing)',
     '- When writing is requested, the panel injects a skill (paper-writer or patent-writer); load via load_skill.',
-    '- Use todowrite to plan sections, then read_file/write_file/edit_file to write incrementally.',
+    '- Use todowrite to plan sections, then write_file for the initial file with a title/header, then edit_file(append=true) for EACH section as you generate it — DO NOT accumulate the full paper content before writing.',
+    '- CRITICAL: Write SECTION BY SECTION, not all-at-once. After generating each section\'s text, immediately use edit_file(append=true) to append it. This lets the user see progress and avoids context overflow.',
     '- AMBIGUOUS ("write a paper" without colon+title) → do NOT invent topic. Ask for the topic.',
     '- Target artifact: 7-phase paper with contradiction → solution mapping, importance-weighted KPIs, evidence scores, decision factors, risks, ≤3-day validation.',
     '- Verify each section before marking completed.',
@@ -980,7 +992,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '- For a one-step alternative: `load_best_remote_skill({ query: "<keywords>" })` finds the best match and loads it in a single call.',
     '',
     '## File Operations',
-    'read_file first, never guess. For large files, paginate with offset/limit (200+ lines per chunk). edit_file for any change (refine/fix/improve/append). write_file only for brand-new files. Every file modification MUST use edit tool — text output is never a substitute for writing to disk.',
+    'read_file first, never guess. For large files, paginate with offset/limit (200+ lines per chunk). For files >1MB, prefer apply_patch (diff patch) over edit_file — the patch is far more token-efficient. For writing long content (papers, patents, reports): write_file for the initial file, then edit_file(append=true) for each section — write as you generate, never accumulate the full content before writing. edit_file for small/medium single-file changes. write_file only for brand-new files. Every file modification MUST use edit tool — text output is never a substitute for writing to disk.',
     '',
     '## Tools',
     'TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve.',
@@ -1349,7 +1361,7 @@ process.stdin.on('data', (chunk: Buffer) => {
             const paperWorkflowPrompt = [
               'You are Research Master writing a paper. Drive the 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) end-to-end and produce a copy-ready artifact via tools only.',
               '1. Use TRIZ tools (triz_contradiction, triz_principles, triz_s_curve, triz_search, websearch) to gather Evidence and decision factors — never fabricate',
-              '2. write_file to 05_Deliver/<slug>.typ — 3000+ word paper in Chinese typst, Dont mix markdown. All Chinese must be valid UTF-8 — no garbled text, no mojibake, no partial characters. Structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献',
+              '2. write_file to 05_Deliver/<slug>.typ — write EACH SECTION as you generate it, not all at once. First write_file with title+header, then use edit_file(append=true) for each subsequent section. DO NOT generate the full paper before writing. Structured: 摘要→引言→矛盾分析→物场分析→解决方案→S曲线→路线图→TRL→结论→参考文献. 3000+ word paper in Chinese typst, Dont mix markdown. All Chinese must be valid UTF-8 — no garbled text, no mojibake, no partial characters.',
               '3. Importance-weight KPIs, score evidence, surface decision factors, contradictions→solutions, risks, ≤3-day executable validation steps',
               '4. ≤4 lines per text response — only short confirmation after writing; never repeat the paper content in chat',
               '5. No fabricated parameter numbers, no preamble ("我将为您撰写…"), ask user only when essential info is missing',
@@ -1777,9 +1789,10 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
                 emitTodoUpdate();
               }
               if (shouldEmitToolResult(token.id, token.name)) {
+                const resultText = truncateToolResult(token.result || token.text || '');
                 localEmit('token', {
                   tokenType: 'ToolResult',
-                  text: token.result || token.text || '',
+                  text: resultText,
                   toolId: token.id,
                   status: 'completed'
                 });

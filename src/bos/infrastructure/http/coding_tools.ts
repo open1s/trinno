@@ -8,9 +8,12 @@ import { isWorkspacePath, isSecretPath, isDangerousCommand } from '../config/wor
 
 export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolean) {
   const sandbox = new SandboxManager({ enabled: sandboxEnabled !== false, workspaceRoot });
+  // Cap each tool result to ~25K tokens to avoid exceeding LLM context window
+  const MAX_TOOL_RESULT_CHARS = 100_000;
+
   const readFile = defineTool(
     'read_file',
-    'Read partial or full contents of a file with line numbers. Defaults to reading up to 1000 lines.',
+    'Read partial contents of a file with line numbers. Defaults to 200 lines (page). Use startLine/endLine to paginate through large files. Capped at ~25K tokens (100K chars) per read.',
   )
     .required('filePath', 'string', 'Path to the file (relative to workspace root)')
     .param('startLine', 'number', 'Starting line number (1-indexed, default: 1)')
@@ -29,7 +32,7 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         }
 
         const startLine = args.startLine || 1;
-        const endLine = args.endLine || (startLine + 999);
+        const endLine = args.endLine || (startLine + 199);
 
         if (startLine < 1) return err('startLine must be >= 1');
         if (endLine < startLine) return err('endLine must be >= startLine');
@@ -41,11 +44,20 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
 
         const lines: string[] = [];
         let currentLine = 0;
+        let accumulatedChars = 0;
+        let truncated = false;
 
         for await (const line of rl) {
           currentLine++;
           if (currentLine >= startLine && currentLine <= endLine) {
-            lines.push(`${currentLine}: ${line}`);
+            const numbered = `${currentLine}: ${line}`;
+            accumulatedChars += numbered.length + 1; // +1 for newline
+            if (accumulatedChars > MAX_TOOL_RESULT_CHARS) {
+              truncated = true;
+              rl.close();
+              break;
+            }
+            lines.push(numbered);
           }
           if (currentLine >= endLine) {
             rl.close();
@@ -53,10 +65,16 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           }
         }
 
+        let result = lines.join('\n');
+        if (truncated) {
+          result += `\n... (output truncated at ${MAX_TOOL_RESULT_CHARS} chars, reading stopped at line ${currentLine})`;
+        }
+
         return ok({
           filePath: args.filePath,
-          content: lines.join('\n'),
+          content: result,
           linesShown: `${startLine}-${Math.min(currentLine, endLine)}`,
+          truncated,
         });
       } catch (e: any) {
         return err(e.message);
@@ -89,9 +107,21 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
       }
     });
 
+  const LARGE_FILE_PATCH_BYTES = 1 * 1024 * 1024; // 1MB — prefer apply_patch above this
+
+  function suggestPatch(filePath: string): string | null {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > LARGE_FILE_PATCH_BYTES) {
+        return `File is ${(stat.size / 1024 / 1024).toFixed(1)}MB — too large for edit_file. Use \`apply_patch\` with a context diff instead: read_file the section, make changes, then apply_patch with a unified diff.`;
+      }
+    } catch { /* ignore stat errors */ }
+    return null;
+  }
+
   const editFile = defineTool(
     'edit_file',
-    'Sed-like file edit. Line-range mode (startLine+endLine): replace entire range, or if oldString given, find/replace only within those lines. No-range mode (oldString only): global find/replace. Append mode (append=true): append newString to end of file.',
+    'Sed-like file edit. Append mode (append=true): append newString to end of file — use for streaming long content section by section (write as you generate, don\'t wait for full content). Line-range mode (startLine+endLine): replace entire range, or if oldString given, find/replace only within those lines. No-range mode (oldString only): global find/replace. For files >1MB, use apply_patch instead.',
   )
     .required('filePath', 'string', 'Path to the file (relative to workspace root)')
     .required('newString', 'string', 'Text to replace with, or content to append when append=true')
@@ -113,11 +143,24 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           return err(`File not found: ${args.filePath}`);
         }
 
+        const patchSuggestion = suggestPatch(filePath);
+        if (patchSuggestion && !args.startLine && !args.endLine && !args.append) {
+          // Redirect full-file edits (no line range) to apply_patch for large files
+          return err(patchSuggestion);
+        }
+
         if (args.append) {
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const separator = content.endsWith('\n') ? '' : '\n';
-          fs.writeFileSync(filePath, content + separator + args.newString, 'utf-8');
-          return ok({ filePath: args.filePath, action: 'append' });
+          // For append, only read last few bytes to check trailing newline
+          const stat = fs.statSync(filePath);
+          let needsSeparator = true;
+          if (stat.size > 0) {
+            const buf = Buffer.alloc(Math.min(stat.size, 1));
+            fs.readSync(fs.openSync(filePath, 'r'), buf, 0, buf.length, stat.size - 1);
+            needsSeparator = buf[0] !== 0x0a; // '\n'
+          }
+          const separator = needsSeparator ? '\n' : '';
+          fs.writeFileSync(filePath, separator + args.newString, { encoding: 'utf-8', flag: 'a' });
+          return ok({ filePath: args.filePath, action: 'append', warning: patchSuggestion || undefined });
         }
 
         const content = fs.readFileSync(filePath, 'utf-8');
@@ -331,7 +374,7 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
 
   const applyPatch = defineTool(
     'apply_patch',
-    'Apply a unified diff patch to a file. Useful for applying complex multi-line changes with context.',
+    'Apply a unified diff patch to a file. PREFERRED for files >1MB (the diff is far smaller than full content). Generate a context diff (diff -u old new) with surrounding lines. For large files, read_file the section first, construct the change, then apply the patch.',
   )
     .required('filePath', 'string', 'Path to the file to patch (relative to workspace root)')
     .required('patch', 'string', 'The unified diff patch content')
