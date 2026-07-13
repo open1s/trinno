@@ -1346,7 +1346,7 @@
       return;
     }
 
-    sendBtn.disabled = true;
+    sendBtn.disabled = false;
     sendBtn.textContent = '■';
     sendBtn.classList.add('stop-btn');
     sendBtn.onclick = cancelGeneration;
@@ -1443,8 +1443,12 @@
   function handleQueueState(msg) {
     messageQueue = msg.queue || [];
     renderQueuePanel();
-    // Update send button: if generation + anything in queue, keep it active
     if (isGenerating && messageQueue.length > 0) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '➤';
+      sendBtn.classList.remove('stop-btn');
+      sendBtn.onclick = sendMessage;
+    } else if (messageQueue.length === 0 && !isGenerating) {
       sendBtn.disabled = false;
       sendBtn.textContent = '➤';
       sendBtn.classList.remove('stop-btn');
@@ -1932,7 +1936,7 @@
     isGenerating = true;
     // Don't change button if there are queued messages
     if (messageQueue.length === 0) {
-      sendBtn.disabled = true;
+      sendBtn.disabled = false;
       sendBtn.textContent = '■';
       sendBtn.classList.add('stop-btn');
       sendBtn.onclick = cancelGeneration;

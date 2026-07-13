@@ -792,7 +792,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
       currentQueueId = null;
       dequeuedItemText = null;
     }
-    setImmediate(() => processQueue());
+    clearQueue();
   } else if (msg.type === 'undoInsert') {
     await undoLastAiInsert();
   } else if (msg.type === 'contextRequest') {
