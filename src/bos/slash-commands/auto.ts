@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SlashCommand } from './registry.js';
 import { TrizDeps } from '../infrastructure/config/di.js';
+import { getAgentFactory } from '../infrastructure/agent-factory.js';
 
 const AUTO_STATE_FILE = 'auto_state.json';
 const MAX_ITERATIONS = 50;
@@ -63,6 +64,61 @@ function ensureAutoDirs(root: string): string | null {
     return null;
   }
   return autoDir;
+}
+
+async function generateScopeAndEval(
+  hypothesis: string,
+  deps: TrizDeps,
+): Promise<{ scope: string; eval: string }> {
+  const factory = getAgentFactory();
+  const builder = factory.create({
+    name: 'auto-planner',
+    systemPrompt: [
+      'You are a research planning expert. Given a research hypothesis, you generate two files:',
+      '1. scope.md — defines research scope, constraints, success criteria, allowed mutation surface, termination conditions',
+      '2. eval.md — defines evaluation metrics, validation protocol, baseline, accept/reject criteria',
+      '',
+      'Return your output in this exact format (no extra text before or after):',
+      '===SCOPE===',
+      '[markdown content for scope.md]',
+      '===EVAL===',
+      '[markdown content for eval.md]',
+      '',
+      'Use the hypothesis to infer the domain, metrics, and constraints. Be specific and actionable.',
+      'Fill in template fields with concrete values derived from the hypothesis. Do not leave placeholders.',
+    ].join('\n'),
+    temperature: 0.7,
+  });
+  const agent = await builder.start();
+
+  try {
+    const prompt = [
+      'Generate scope.md and eval.md for this research hypothesis:',
+      '',
+      `"${hypothesis}"`,
+      '',
+      'Infer the domain, typical metrics, constraints, and evaluation criteria from the hypothesis.',
+      'Be specific. Use concrete numbers and criteria where possible.',
+    ].join('\n');
+
+    const result = await agent.streamCollect(prompt);
+    const text = result
+      .filter((t: any) => t.type === 'Text')
+      .map((t: any) => t.text)
+      .join('');
+
+    const scopeMatch = text.match(/===SCOPE===\n([\s\S]*?)\n===EVAL===/);
+    const evalMatch = text.match(/===EVAL===\n([\s\S]*)/);
+
+    return {
+      scope: scopeMatch?.[1]?.trim() ?? `# Scope — AutoResearch\n\n**Hypothesis:** ${hypothesis}\n\n## Research Question\n\n${hypothesis}\n\n## Constraints\n\nSee eval.md for details.\n\n## Success Criteria\n\nSee eval.md for details.\n`,
+      eval: evalMatch?.[1]?.trim() ?? `# Evaluation — AutoResearch\n\n**Hypothesis:** ${hypothesis}\n\n## Primary Metric\n\nSee scope.md for details.\n`,
+    };
+  } finally {
+    if (typeof agent.close === 'function') {
+      await agent.close();
+    }
+  }
 }
 
 export const autoCommand: SlashCommand = {
@@ -178,21 +234,40 @@ export const autoCommand: SlashCommand = {
 
     const scopePath = path.join(autoDir, 'scope.md');
     const evalPath = path.join(autoDir, 'eval.md');
-    try {
-      fs.accessSync(scopePath);
-      fs.accessSync(evalPath);
-    } catch {
+
+    const scopeExists = fs.existsSync(scopePath);
+    const evalExists = fs.existsSync(evalPath);
+
+    if (!scopeExists || !evalExists) {
       emit('token', { tokenType: 'Text', text: [
-        '## /auto: Setup Required',
+        '## Pre-analyzing Research Task',
         '',
-        'AutoResearch loop requires two setup files. Run `/init` to create templates:',
+        `**Hypothesis:** ${raw}`,
         '',
-        '| File | Path | Purpose |',
-        '|------|------|---------|',
-        '| scope.md | `08_AutoResearch/scope.md` | Research scope, constraints, success criteria, mutation surface |',
-        '| eval.md | `08_AutoResearch/eval.md` | Fixed evaluation metric, protocol, accept/reject criteria |',
+        'Generating scope.md and eval.md via AI analysis...',
+      ].join('\n') });
+
+      const result = await generateScopeAndEval(raw, deps);
+
+      fs.writeFileSync(scopePath, result.scope);
+      fs.writeFileSync(evalPath, result.eval);
+
+      emit('token', { tokenType: 'Text', text: [
         '',
-        'Then run `/auto <hypothesis>` to start iterating.',
+        '### Generated: scope.md',
+        '```markdown',
+        result.scope,
+        '```',
+        '',
+        '### Generated: eval.md',
+        '```markdown',
+        result.eval,
+        '```',
+        '',
+        '---',
+        '',
+        'Review and edit these files in `08_AutoResearch/`, then run `/auto` with the same hypothesis to start the iteration loop.',
+        '',
       ].join('\n') });
       emit('done', {});
       return;
