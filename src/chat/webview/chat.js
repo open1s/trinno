@@ -19,6 +19,7 @@
   const statusSessionEl = document.getElementById('status-session');
   const statusMessagesEl = document.getElementById('status-messages');
   const statusMcpEl = document.getElementById('status-mcp');
+  const toolsStatusBarEl = document.getElementById('tools-status-bar');
   const statusSandboxEl = document.getElementById('status-sandbox');
   let lspStatus = null;
 
@@ -2108,41 +2109,25 @@
   }
 
   function renderToolBadges() {
-    if (!currentMessageEl) return;
+    renderToolsStatusBar();
+  }
 
-    let toolsSection = currentMessageEl.querySelector('.tool-section');
-    if (!toolsSection) {
-      toolsSection = document.createElement('div');
-      toolsSection.className = 'tool-section';
-      currentMessageEl.insertBefore(toolsSection, currentContentEl);
-    }
-
-    const doneCount = messageState.tools.filter(t => t.status === 'done').length;
-    const runningCount = messageState.tools.filter(t => t.status === 'running' || t.status === 'waiting').length;
-    const errorCount = messageState.tools.filter(t => t.status === 'error').length;
-    const totalCount = messageState.tools.length;
-
-    if (totalCount === 0) {
-      toolsSection.innerHTML = '';
+  function renderToolsStatusBar() {
+    if (!toolsStatusBarEl) return;
+    const tools = messageState.tools;
+    if (!tools || tools.length === 0) {
+      toolsStatusBarEl.style.display = 'none';
+      toolsStatusBarEl.innerHTML = '';
       return;
     }
-
-    let html = `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-list').classList.toggle('collapsed')">`;
-    html += `<span class="tool-count">`;
-    if (runningCount > 0) html += `<span class="tool-spinner-inline"></span> `;
-    html += `${doneCount}/${totalCount} tools`;
-    if (runningCount > 0) html += ` (${runningCount} running)`;
-    html += runningToolsSummary(messageState.tools, 3);
-    if (errorCount > 0) html += `, ${errorCount} failed`;
-    html += `</span><span class="tool-toggle">▼</span></div>`;
-
-    html += `<div class="tool-list collapsed">`;
-    for (const t of messageState.tools) {
-      html += renderToolItem(t);
+    const hasActive = tools.some(t => t.status === 'running' || t.status === 'waiting' || t.status === 'called');
+    if (hasActive) {
+      toolsStatusBarEl.innerHTML = renderToolLog(tools);
+      toolsStatusBarEl.style.display = '';
+    } else {
+      toolsStatusBarEl.style.display = 'none';
+      toolsStatusBarEl.innerHTML = '';
     }
-    html += `</div>`;
-
-    toolsSection.innerHTML = html;
   }
 
   function shortenToolLabel(label, maxLen) {

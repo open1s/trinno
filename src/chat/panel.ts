@@ -2494,6 +2494,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
 <body>
   <div id="app">
     <div id="messages" class="messages"></div>
+    <div id="tools-status-bar" class="tools-status-bar" style="display:none"></div>
     <div class="input-area">
       <div id="attachments" class="attachments"></div>
       <div class="input-container">

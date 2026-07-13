@@ -992,6 +992,16 @@ body {
   position: relative;
 }
 
+.tools-status-bar {
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--header-border);
+  flex-shrink: 0;
+  background: var(--bg);
+}
+.tools-status-bar .tool-section {
+  margin: 0;
+}
+
 .attachments {
   display: flex;
   flex-wrap: wrap;

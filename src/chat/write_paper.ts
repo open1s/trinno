@@ -6,23 +6,31 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
+export type PaperType = 'research' | 'review';
+
 export interface WriteCommand {
   title: string;
   phase: string;
   writePath: string;
+  paperType?: PaperType;
+  targetJournal?: string;
 }
 
 export function parseWriteCommand(text: string): WriteCommand | null {
   const t = text.trim();
   if (!t) return null;
 
+  const { paperType, targetJournal, cleanedText } = extractPaperMeta(t);
   const phaseMatch = (s: string) => s.match(/,\s*refer(?:ring)?\s+(?:the\s+)?research\s+([0-9]{2}_\w+)/i);
   const stripPhase = (s: string) => s.replace(/,\s*refer(?:ring)?\s+(?:the\s+)?research\s+[0-9]{2}_\w+/i, '').trim();
   const finalize = (body: string) => {
     const cleaned = stripPhase(body);
     if (!cleaned) return null;
     const phase = phaseMatch(body)?.[1] ?? '05_Deliver';
-    return { title: cleaned, phase, writePath: `${phase}/${slugifyPatentTitle(cleaned)}.typ` };
+    const cmd: WriteCommand = { title: cleaned, phase, writePath: `${phase}/${slugifyPatentTitle(cleaned)}.typ` };
+    if (paperType) cmd.paperType = paperType;
+    if (targetJournal) cmd.targetJournal = targetJournal;
+    return cmd;
   };
 
   // Form 1: "write paper: <title>" / "write a paper: <title>" / "write the paper: <title>" (explicit colon)
@@ -61,6 +69,61 @@ export function parseWriteCommand(text: string): WriteCommand | null {
   if (cn && cn[1] && cn[1].trim()) return finalize(cn[1].trim());
 
   return null;
+}
+
+/**
+ * Extract paper type and target journal from a raw input string.
+ * Returns cleaned text with type/journal keywords stripped.
+ */
+export function extractPaperMeta(input: string): { paperType?: PaperType; targetJournal?: string; cleanedText: string } {
+  let text = input;
+  let paperType: PaperType | undefined;
+  let targetJournal: string | undefined;
+
+  // Detect paper type: "review paper" / "综述论文"
+  const typePatterns: { pattern: RegExp; type: PaperType }[] = [
+    { pattern: /\b(?:review|综述|评述|综合)\s+paper\b/i, type: 'review' },
+    { pattern: /\bpaper\s+review\b/i, type: 'review' },
+    { pattern: /综述论文|综述文章|评述论文/i, type: 'review' },
+    { pattern: /\b(?:research|original|原创|研究)\s+paper\b/i, type: 'research' },
+    { pattern: /研究论文|原创论文/i, type: 'research' },
+  ];
+
+  for (const { pattern, type } of typePatterns) {
+    if (pattern.test(text)) {
+      paperType = type;
+      text = text.replace(pattern, 'paper');
+      break;
+    }
+  }
+
+  // Detect target journal: "for <Journal>" / "投 <Journal>" / "发表于 <Journal>" / "<Journal>"
+  // Must appear after a paper reference or at the end
+  const journalPatterns: RegExp[] = [
+    /(?:for|发表于|投(?:稿)?(?:到|至|给)?|submit\s+to)\s+(.+?)(?:[,，]?\s*[:：]\s*|[,，]\s*|$)/i,
+    /[,，]\s*(.+?)\s*[:：]\s/,
+  ];
+
+  for (const jp of journalPatterns) {
+    const m = text.match(jp);
+    if (m) {
+      const candidate = m[1]!.trim();
+      // Filter out known false positives (phase dirs, command keywords)
+      if (candidate && !/^[0-9]{2}_/.test(candidate) && !/^(?:paper|write|patent)$/i.test(candidate) && candidate.length > 1) {
+        targetJournal = candidate;
+        text = text.replace(m[0], m[0].replace(candidate, '').replace(/[,，]\s*$/, '').trim());
+        break;
+      }
+    }
+  }
+
+  // Post-clean: remove trailing punctuation/whitespace
+  text = text.replace(/[,;；，]\s*$/, '').trim();
+
+  const result: { cleanedText: string } & { paperType?: PaperType; targetJournal?: string } = { cleanedText: text };
+  if (paperType) result.paperType = paperType;
+  if (targetJournal) result.targetJournal = targetJournal;
+  return result;
 }
 
 export function slugifyPatentTitle(title: string): string {
@@ -183,58 +246,87 @@ export function normalizeArr(value: any): any[] {
   return [];
 }
 
-export function composeWritePaper(title: string, phase: string, data: ResearchData): string {
+export function composeWritePaper(title: string, phase: string, data: ResearchData, paperType?: PaperType): string {
   const out: string[] = [];
+  const isReview = paperType === 'review';
   out.push(`# ${title}`);
   out.push('');
-  out.push('## A TRIZ-Based Technical Research Paper');
+  out.push(isReview ? '## A Systematic Review' : '## Research Article');
   out.push('');
   out.push('---');
   out.push('');
   out.push('## 摘要');
   out.push('');
-  out.push(
-    `本研究聚焦 "${title}" 这一技术问题，基于 TRIZ（发明问题解决理论）方法论，` +
-    `对相关技术矛盾、瓶颈与解决路径进行系统分析。` +
-    `通过文献检索、S 曲线分析、技术成熟度评估（TRL）以及 TRIZ 矛盾矩阵与 40 条发明原理的应用，` +
-    `识别核心技术瓶颈并提出创新方案。` +
-    `研究覆盖从专利与论文检索、矛盾识别、原理映射到方案设计与实施路线图的全流程，` +
-    `为工程化应用提供理论与技术支撑。`
-  );
+  if (isReview) {
+    out.push(
+      `本综述聚焦 "${title}" 这一技术领域，` +
+      `对相关文献与技术发展趋势进行系统梳理与分析。` +
+      `通过系统性文献检索、S 曲线分析、技术成熟度评估等方法，` +
+      `识别当前技术瓶颈与研究空白，并提出未来研究方向。` +
+      `本综述遵循系统性文献综述框架，覆盖从文献检索到趋势预测的全流程分析。`
+    );
+  } else {
+    out.push(
+      `本研究聚焦 "${title}" 这一技术问题，` +
+      `对相关技术矛盾、瓶颈与解决路径进行系统分析。` +
+      `通过文献检索、S 曲线分析、技术成熟度评估等方法，` +
+      `识别核心技术瓶颈并提出创新方案。` +
+      `研究覆盖从文献检索到方案设计与实施路线图的全流程，` +
+      `为工程化应用提供理论与技术支撑。`
+    );
+  }
   out.push('');
-  out.push('**关键词：** TRIZ；技术矛盾；GDL；发明原理；技术成熟度评估');
+  out.push('**关键词：** GDL；技术矛盾；技术成熟度评估');
   out.push('');
 
   if (data.synthesisMd) {
-    out.push('## 1 引言');
+    out.push(`## 1 ${isReview ? '引言与研究背景' : '引言'}`);
     out.push('');
     out.push(data.synthesisMd);
     out.push('');
   }
 
-  if (data.contradictions) {
-    out.push('## 2 技术矛盾分析');
-    out.push('');
-    out.push(data.contradictions);
-    out.push('');
+  if (isReview) {
+    if (data.contradictions) {
+      out.push('## 2 检索策略与文献综合');
+      out.push('');
+      out.push('### 2.1 检索策略');
+      out.push('');
+      out.push('系统检索以下数据库：Scopus、Web of Science、CNKI、IEEE Xplore。');
+      out.push('检索式：("' + title + '" OR 相关术语)。');
+      out.push('纳入标准：2015-2025 年同行评审期刊论文、会议论文、专利。');
+      out.push('排除标准：非中英文文献、重复发表、全文不可获取。');
+      out.push('');
+      out.push('### 2.2 技术矛盾分析');
+      out.push('');
+      out.push(data.contradictions);
+      out.push('');
+    }
+  } else {
+    if (data.contradictions) {
+      out.push('## 2 技术矛盾分析');
+      out.push('');
+      out.push(data.contradictions);
+      out.push('');
+    }
   }
 
   if (data.solutions) {
-    out.push('## 3 解决方案设计');
+    out.push(`## 3 ${isReview ? '解决方案综合' : '解决方案设计'}`);
     out.push('');
     out.push(data.solutions);
     out.push('');
   }
 
   if (data.trends) {
-    out.push('## 4 技术发展趋势');
+    out.push(`## 4 ${isReview ? '技术发展趋势与展望' : '技术发展趋势'}`);
     out.push('');
     out.push(data.trends);
     out.push('');
   }
 
   if (data.roadmap) {
-    out.push('## 5 实施路线图');
+    out.push(`## 5 ${isReview ? '未来研究方向' : '实施路线图'}`);
     out.push('');
     out.push(data.roadmap);
     out.push('');
@@ -261,12 +353,16 @@ export function composeWritePaper(title: string, phase: string, data: ResearchDa
     out.push('');
   }
 
-  out.push('## 9 结论与展望');
+  out.push(`## 9 ${isReview ? '结论与研究展望' : '结论与展望'}`);
   out.push('');
-  out.push(
-    `本研究通过 TRIZ 方法论系统分析了 "${title}" 的核心技术问题，` +
-    `给出了基于发明原理的解决方案与实施路线图。` +
-    `后续工作将聚焦于实验验证、原型迭代与跨领域应用迁移。`
+  out.push(isReview
+    ? `本综述系统梳理了 "${title}" 领域的技术发展脉络，` +
+      `识别了核心矛盾与研究空白，` +
+      `为后续研究提供了方向性指导。` +
+      `未来研究可聚焦于解决已识别的技术矛盾、跨领域方法迁移及实验验证。`
+    : `本研究系统分析了 "${title}" 的核心技术问题，` +
+      `给出了解决方案与实施路线图。` +
+      `后续工作将聚焦于实验验证、原型迭代与跨领域应用迁移。`
   );
   out.push('');
 
@@ -288,7 +384,7 @@ export function composeWritePaper(title: string, phase: string, data: ResearchDa
 
 export async function executeWriteCommand(cmd: WriteCommand, workspaceRoot: string): Promise<string> {
   const data = await loadResearchData(cmd, workspaceRoot);
-  const content = composeWritePaper(cmd.title, cmd.phase, data);
+  const content = composeWritePaper(cmd.title, cmd.phase, data, cmd.paperType);
   await writePaperToFile(content, cmd.writePath, workspaceRoot);
   const parts = [];
   if (data.contradictions) parts.push('矛盾分析');
@@ -335,17 +431,30 @@ export async function writePaperToFile(content: string, writePath: string, works
   await fs.writeFile(targetPath, content, 'utf8');
 }
 
-export function buildPaperPrompt(title: string, data: ResearchData): string {
+export function buildPaperPrompt(title: string, data: ResearchData, paperType?: PaperType, targetJournal?: string): string {
   const sections: string[] = [];
 
-  sections.push(`你是 Research Master — self-directed, tool-first research agent。请基于以下研究数据撰写一篇完整的技术论文（7-phase pipeline: Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution），标题："${title}"\n`);
+  const typeLabel = paperType === 'review' ? '综述论文' : '技术论文';
+  sections.push(`You are Research Master — self-directed, tool-first research agent。请基于以下研究数据撰写一篇完整的${typeLabel}，标题："${title}"\n`);
+
   sections.push('要求：');
-  sections.push('1. 用 39 个工程参数、40 条发明原理、76 个标准解驱动 contradictions→solutions，importance-weighted KPIs，evidence 评分');
-  sections.push('2. 使用 PEST + SWOT + 5W1H + PICO + PRISMA 框架组织背景、证据、PRISMA 流程');
-  sections.push('3. 输出结构：摘要 → 引言 → 矛盾分析 → 物场分析 → 解决方案 → S 曲线 → 路线图 → TRL → 风险与≤3 天可执行验证 → 结论 → 参考文献');
-  sections.push('4. 内容专业、逻辑清晰、学术规范；evidence 行内注明 score/weight；decision factors 与 risks 显式列出');
-  sections.push('5. 不要编造参数编号、案例、数据；不确定时调用 websearch');
-  sections.push('6. 所有汉字必须为有效 UTF-8，不可出现乱码、缺字或编码错误\n');
+  sections.push('1. 所有方法论（TRIZ、PRISMA、SWOT、PEST 等）仅作为分析引擎使用，论文正文中不得出现这些方法论名称');
+  sections.push('2. 输出结构：摘要 → 引言 → 问题分析 → 解决方案 → 技术发展趋势 → 路线图 → 风险评估 → 结论 → 参考文献');
+  sections.push('3. 内容专业、逻辑清晰、学术规范；evidence 行内注明 score/weight；decision factors 与 risks 显式列出');
+  sections.push('4. 不要编造参数编号、案例、数据；不确定时调用 websearch');
+  sections.push('5. 所有汉字必须为有效 UTF-8，不可出现乱码、缺字或编码错误');
+  sections.push('6. 请基于以下数据撰写完整论文，直接输出 markdown 格式内容，不要包含任何 XML 标签或 JSON。文末追加"## 验证实验"清单');
+
+  if (targetJournal) {
+    sections.push(`\n### 目标期刊要求\n目标期刊：**${targetJournal}**`);
+    sections.push(`请按照 ${targetJournal} 的投稿指南调整论文格式与内容风格：`);
+    sections.push('- 章节划分符合该期刊的常规要求');
+    sections.push('- 参考文献格式遵循该期刊的引用规范');
+    sections.push('- 语言风格、摘要长度、关键词数量等符合该期刊惯例');
+    sections.push('- 在引言中简要说明本研究对该期刊读者群体的价值');
+  }
+
+  sections.push('\n');
 
   if (data.synthesisMd) {
     sections.push('## 综合研究报告\n' + data.synthesisMd + '\n');
