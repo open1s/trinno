@@ -1320,8 +1320,6 @@
       autoRetryTimer = null;
     }
     isRetrying = false;
-    autoRetryAttempt = 0;
-    autoRetryCountdown = 15;
     const errorBanners = messagesContainer.querySelectorAll('.error-banner');
     errorBanners.forEach(b => b.remove());
     hideCompletion();
@@ -1946,8 +1944,6 @@
     messageState.content = '';
     messageState.reasoning = '';
     messageState.reasoningVisible = false;
-    messageState.tools = [];
-    messageState.toolLog = [];
 
     currentMessageEl = document.createElement('div');
     currentMessageEl.id = messageId;
@@ -2114,20 +2110,15 @@
 
   function renderToolsStatusBar() {
     if (!toolsStatusBarEl) return;
+    if (messageState.tools.length > 10) messageState.tools.splice(0, messageState.tools.length - 10);
     const tools = messageState.tools;
     if (!tools || tools.length === 0) {
       toolsStatusBarEl.style.display = 'none';
       toolsStatusBarEl.innerHTML = '';
       return;
     }
-    const hasActive = tools.some(t => t.status === 'running' || t.status === 'waiting' || t.status === 'called');
-    if (hasActive) {
-      toolsStatusBarEl.innerHTML = renderToolLog(tools);
-      toolsStatusBarEl.style.display = '';
-    } else {
-      toolsStatusBarEl.style.display = 'none';
-      toolsStatusBarEl.innerHTML = '';
-    }
+    toolsStatusBarEl.innerHTML = renderToolLog(tools);
+    toolsStatusBarEl.style.display = '';
   }
 
   function shortenToolLabel(label, maxLen) {
@@ -2559,8 +2550,6 @@ window.__denyTool = function(id) {
 
     messageState.content = '';
     messageState.reasoning = '';
-    messageState.tools = [];
-    messageState.toolLog = [];
     currentMessageEl = null;
     currentContentEl = null;
     currentReasoningContentEl = null;
@@ -2568,9 +2557,6 @@ window.__denyTool = function(id) {
   }
 
   let autoRetryTimer = null;
-  let autoRetryCountdown = 15;
-  let autoRetryAttempt = 0;
-  const MAX_AUTO_RETRIES = 3;
   let isRetrying = false;
 
   function isNonRetryableError(text) {
@@ -2623,52 +2609,11 @@ window.__denyTool = function(id) {
       autoRetryTimer = null;
     }
 
-    function stopAutoRetry(mid, errText) {
-      if (autoRetryTimer) {
-        clearInterval(autoRetryTimer);
-        autoRetryTimer = null;
-      }
-      isRetrying = false;
-      if (messageQueue.length === 0) {
-        sendBtn.disabled = false;
-        sendBtn.textContent = '➤';
-        sendBtn.classList.remove('stop-btn');
-        sendBtn.onclick = sendMessage;
-      }
-      sendBtn.onclick = sendMessage;
-      const existing = document.getElementById(`retry-btn-${mid}`);
-      if (existing) existing.remove();
-      const existingStop = document.getElementById(`retry-stop-${mid}`);
-      if (existingStop) existingStop.remove();
-      const capMsg = document.createElement('div');
-      capMsg.className = 'error-banner';
-      capMsg.innerHTML = `<span>已达到最大自动重试次数 (${MAX_AUTO_RETRIES})。请检查网络或 API 配额后手动重试。${errText ? '<br><small>' + escapeHtml(errText) + '</small>' : ''}</span>`;
-      if (currentContentEl) {
-        currentContentEl.appendChild(capMsg);
-      } else {
-        const msgEl = document.getElementById(mid);
-        if (msgEl) {
-          const contentDiv = msgEl.querySelector('.message-content');
-          if (contentDiv) contentDiv.appendChild(capMsg);
-        }
-      }
-    }
-
     if (isNonRetryableError(errorText)) {
       finalizeMessage();
       appendErrorBanner(messageId, errorText);
       return;
     }
-
-    // Panel exhausted its retries → reset UI, show error but don't re-retry
-    if (errorText && errorText.includes('已达到最大重试次数')) {
-      finalizeMessage();
-      appendErrorBanner(messageId, errorText);
-      return;
-    }
-    autoRetryCountdown = 15;
-    isRetrying = true;
-    autoRetryAttempt = 0;
 
     for (const tool of messageState.tools) {
       if (tool.status === 'running') {
@@ -2683,46 +2628,6 @@ window.__denyTool = function(id) {
       }
     }
     renderToolBadges();
-
-    const doRetry = () => {
-      if (autoRetryTimer) {
-        clearInterval(autoRetryTimer);
-        autoRetryTimer = null;
-      }
-      isRetrying = false;
-      const errorBanners = messagesContainer.querySelectorAll('.error-banner');
-      errorBanners.forEach(b => b.remove());
-      if (lastUserMessageText) {
-        vscode.postMessage({ type: 'userMessage', text: lastUserMessageText });
-      }
-    };
-
-    const startCountdown = () => {
-      if (autoRetryAttempt >= MAX_AUTO_RETRIES) {
-        stopAutoRetry(messageId, errorText);
-        return;
-      }
-      autoRetryTimer = setInterval(() => {
-        autoRetryCountdown--;
-        if (autoRetryCountdown <= 0) {
-          clearInterval(autoRetryTimer);
-          autoRetryTimer = null;
-          autoRetryAttempt++;
-          if (autoRetryAttempt >= MAX_AUTO_RETRIES) {
-            stopAutoRetry(messageId, errorText);
-            return;
-          }
-          doRetry();
-        } else {
-          const retryBtn = document.getElementById(`retry-btn-${messageId}`);
-          if (autoRetryCountdown <= 1 && retryBtn) {
-            retryBtn.style.display = 'none';
-          } else if (retryBtn) {
-            retryBtn.textContent = `Retry(${autoRetryCountdown}s)`;
-          }
-        }
-      }, 1000);
-    };
 
     if (errorText && (errorText.includes('Hook abort') || errorText.includes('PERMISSION_DENIED') || errorText.includes('blocked by permission policy'))) {
       sendBtn.disabled = false;
@@ -2742,38 +2647,33 @@ window.__denyTool = function(id) {
       return;
     }
 
-    const retryContainer = document.createElement('div');
-    retryContainer.className = 'retry-container';
-    retryContainer.innerHTML = `<button id="retry-btn-${messageId}" class="retry-btn-inline">Retry(${autoRetryCountdown}s)</button>`;
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'retry-btn-inline';
+    retryBtn.id = `retry-btn-${messageId}`;
+    retryBtn.textContent = 'Retry';
+    retryBtn.onclick = () => {
+      const errorBanners = messagesContainer.querySelectorAll('.error-banner');
+      errorBanners.forEach(b => b.remove());
+      retryBtn.remove();
+      if (lastUserMessageText) {
+        vscode.postMessage({ type: 'userMessage', text: lastUserMessageText });
+      }
+    };
 
     if (currentContentEl) {
-      currentContentEl.appendChild(retryContainer);
+      currentContentEl.appendChild(retryBtn);
     } else {
       const msgEl = document.getElementById(messageId);
       if (msgEl) {
         const contentDiv = msgEl.querySelector('.message-content');
-        if (contentDiv) contentDiv.appendChild(retryContainer);
+        if (contentDiv) contentDiv.appendChild(retryBtn);
       }
     }
 
-    setTimeout(() => {
-      const retryBtn = document.getElementById(`retry-btn-${messageId}`);
-      if (retryBtn) {
-        retryBtn.onclick = () => {
-          if (autoRetryTimer) {
-            clearInterval(autoRetryTimer);
-            autoRetryTimer = null;
-          }
-          isRetrying = false;
-          retryBtn.textContent = 'Retry';
-          retryBtn.onclick = doRetry;
-        };
-      }
-    }, 0);
-
-    sendBtn.disabled = true;
-    sendBtn.classList.add('stop-btn');
-    startCountdown();
+    sendBtn.disabled = false;
+    sendBtn.textContent = '➤';
+    sendBtn.classList.remove('stop-btn');
+    sendBtn.onclick = sendMessage;
   }
 
   function appendErrorBanner(messageId, errorText) {
