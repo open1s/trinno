@@ -645,6 +645,17 @@ body {
   font-style: italic;
 }
 
+.todo-pinned {
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-top: 1px solid var(--header-border);
+  background: var(--bg);
+}
+
+.todo-pinned .todo-section {
+  margin: 0;
+}
+
 .todo-section {
   margin: 8px 0;
   border: 1px solid var(--border);

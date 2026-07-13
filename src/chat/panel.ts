@@ -2494,6 +2494,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
 <body>
   <div id="app">
     <div id="messages" class="messages"></div>
+    <div id="todo-pinned" class="todo-pinned" style="display:none"></div>
     <div id="tools-status-bar" class="tools-status-bar" style="display:none"></div>
     <div class="input-area">
       <div id="attachments" class="attachments"></div>
@@ -2530,7 +2531,6 @@ function getWebviewHtml(webview: vscode.Webview): string {
       <span id="status-messages" class="status-item"></span>
       <div id="status-mcp" class="status-item mcp-status-wrapper"></div>
       <span id="status-sandbox" class="status-item"></span>
-      <span id="status-todos" class="status-item todo-status-wrapper"></span>
     </div>
   </div>
   <script src="${scriptUri}"></script>

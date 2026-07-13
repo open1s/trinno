@@ -20,6 +20,7 @@
   const statusMessagesEl = document.getElementById('status-messages');
   const statusMcpEl = document.getElementById('status-mcp');
   const toolsStatusBarEl = document.getElementById('tools-status-bar');
+  const todoPinnedEl = document.getElementById('todo-pinned');
   const statusSandboxEl = document.getElementById('status-sandbox');
   let lspStatus = null;
 
@@ -270,26 +271,30 @@
   }
 
   function updateTodoList(todos) {
-    const el = document.getElementById('status-todos');
-    if (!el) return;
+    if (!todoPinnedEl) return;
     if (!todos || todos.length === 0) {
-      el.style.display = 'none';
+      todoPinnedEl.style.display = 'none';
       return;
     }
-    el.style.display = '';
-    const active = todos.filter(t => t.status === 'in_progress' || t.status === 'pending');
-    const done = todos.filter(t => t.status === 'completed');
+    todoPinnedEl.style.display = '';
+
+    const done = todos.filter(t => t.status === 'completed').length;
+    const running = todos.filter(t => t.status === 'in_progress').length;
     const total = todos.length;
-    if (active.length === 0 && done.length === total && total > 0) {
-      el.innerHTML = `<span class="todo-label">&#9654; TODOs (${total}/${total}) ✅</span>`;
-    } else if (active.length > 0) {
-      el.innerHTML = `<span class="todo-label">&#9654; TODOs (${done.length}/${total})</span>`;
-    } else {
-      el.innerHTML = `<span class="todo-label">&#9654; TODOs (0/${total})</span>`;
+
+    let html = '<div class="todo-summary" onclick="this.parentElement.querySelector(\'.todo-list\').classList.toggle(\'collapsed\')">';
+    html += '<span class="todo-count">';
+    if (running > 0) html += '<span class="todo-spinner-inline"></span> ';
+    html += `${done}/${total} tasks`;
+    html += '</span><span class="todo-toggle">▼</span></div>';
+    html += '<div class="todo-list collapsed">';
+    for (const t of todos) {
+      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : t.status === 'cancelled' ? '❌' : '⬜';
+      html += `<div class="todo-item"><span class="todo-icon">${icon}</span><span class="todo-text">${escapeHtml(t.content)}</span></div>`;
     }
-    el.onclick = () => {
-      renderTodoDropdown(todos);
-    };
+    html += '</div>';
+
+    todoPinnedEl.innerHTML = html;
   }
 
   function renderTodoDropdown(todos) {
