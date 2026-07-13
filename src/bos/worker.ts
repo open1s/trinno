@@ -899,6 +899,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## Tone and Style',
     '- Concise, direct, no preamble, no postamble.',
+    '- For greetings (hello/hi/hey): respond with exactly one short sentence. No alternatives, no follow-ups.',
     '- ≤4 lines of text (not including tool calls). One-sentence answers are best.',
     '- After completing work (editing a file, finishing analysis), stop. No "code summary" follow-ups.',
     '- Never start with "Here is what I will do:", "Let me explain:", etc. Just act.',
