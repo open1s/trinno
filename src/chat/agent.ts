@@ -16,6 +16,20 @@ interface InsertedCell {
 
 type TokenCallback = (msg: ExtToWebViewMessage) => void;
 
+function buildTokenMsg(raw: any): ExtToWebViewMessage {
+  return {
+    type: 'token' as const,
+    role: 'assistant' as const,
+    tokenType: raw.tokenType,
+    text: raw.text,
+    ...(raw.args !== undefined ? { args: raw.args } : {}),
+    ...(raw.toolId !== undefined ? { toolId: raw.toolId } : {}),
+    ...(raw.promptTokens !== undefined ? { promptTokens: raw.promptTokens } : {}),
+    ...(raw.completionTokens !== undefined ? { completionTokens: raw.completionTokens } : {}),
+    ...(raw.totalTokens !== undefined ? { totalTokens: raw.totalTokens } : {}),
+  };
+}
+
 type DoneCallback = (data?: any) => void;
 type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
 type RateLimitedCallback = (retryAfter: number, error: string) => void;
@@ -271,7 +285,7 @@ export async function sendMessage(
       try {
         const msg = JSON.parse(line);
         if (msg.type === 'token') {
-          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
+          onToken(buildTokenMsg(msg));
         }
       } catch { /* ignore non-JSON */ }
     }
@@ -290,7 +304,7 @@ export async function sendMessage(
             if (msg.tokenType === 'Text' && msg.text?.length > 0) {
               log.trace({ traceId: payload.messageId, tokenType: msg.tokenType, tokenLen: msg.text.length }, '[TRACE] agent←worker: streaming token');
             }
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
+            onToken(buildTokenMsg(msg));
             break;
           case 'done':
             drainRemainingLines(dataBuffer);
@@ -527,18 +541,18 @@ export async function sendCompactRequest(
   let compactBuffer = '';
   const drainRemainingLines = (buffer: string): void => {
     const lines = buffer.split('\n');
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const msg = JSON.parse(line);
-        if (msg.type === 'token') {
-          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
-        }
-      } catch { /* ignore non-JSON */ }
-    }
-  };
-  const handleData = (chunk: Buffer) => {
-    compactBuffer += chunk.toString();
+for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'token') {
+            onToken(buildTokenMsg(msg));
+          }
+        } catch { /* ignore non-JSON */ }
+      }
+    };
+    const handleData = (chunk: Buffer) => {
+      compactBuffer += chunk.toString();
     const lines = compactBuffer.split('\n');
     compactBuffer = lines.pop() || '';
     for (const line of lines) {
@@ -547,7 +561,7 @@ export async function sendCompactRequest(
         const msg = JSON.parse(line);
         switch (msg.type) {
           case 'token':
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
+            onToken(buildTokenMsg(msg));
             break;
           case 'done':
             drainRemainingLines(compactBuffer);
@@ -625,7 +639,7 @@ export async function sendSlashRequest(
         const msg = JSON.parse(line);
         switch (msg.type) {
           case 'token':
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text, ...(msg.args !== undefined ? { args: msg.args } : {}), ...(msg.toolId !== undefined ? { toolId: msg.toolId } : {}) });
+            onToken(buildTokenMsg(msg));
             break;
           case 'done':
             cleanup();
@@ -699,9 +713,9 @@ export async function sendPaperRequest(
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const msg = JSON.parse(line);
+const msg = JSON.parse(line);
         if (msg.type === 'token') {
-          onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text ?? msg.result ?? '' });
+          onToken(buildTokenMsg(msg));
         }
       } catch { /* ignore non-JSON */ }
     }
@@ -730,7 +744,7 @@ export async function sendPaperRequest(
                 } catch { /* not structured */ }
               }
             }
-            onToken({ type: 'token', role: 'assistant', tokenType: msg.tokenType, text: msg.text ?? msg.result ?? '' });
+            onToken(buildTokenMsg(msg));
             break;
           case 'done':
             drainPaperLines(paperBuffer);

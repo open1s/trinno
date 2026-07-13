@@ -36,6 +36,8 @@ let sessionStore: SessionStore | null = null;
 let currentSession: Session | null = null;
 let currentStreamingId: string | null = null;
 let currentStreamingMsg: ChatMessage | null = null;
+let _streamingPromptTokens = 0;
+let _streamingCompletionTokens = 0;
 let isGenerating = false;
 let messageQueue: QueuedMessage[] = [];
 let autoDrainLock = false;
@@ -1617,6 +1619,8 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
   isGenerating = true;
   currentStreamingId = docAssistantMsg.id;
   currentStreamingMsg = docAssistantMsg;
+  _streamingPromptTokens = 0;
+  _streamingCompletionTokens = 0;
   chatView?.webview.postMessage({ type: 'streaming-start', messageId: docAssistantMsg.id } as any);
 
   const skillPrompt = `请加载并遵循 ${skillName} 技能来撰写${docLabel}。"${cmd.title}"，目标文件: \`${cmd.writePath}\`，工作区根目录: ${workspaceRoot}。`;
@@ -1680,6 +1684,8 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
   const compactMsg = createAssistantMessage();
   currentStreamingId = compactMsg.id;
   currentStreamingMsg = compactMsg;
+  _streamingPromptTokens = 0;
+  _streamingCompletionTokens = 0;
   isGenerating = true;
   view.webview.postMessage({ type: 'streaming-start', messageId: compactMsg.id } as any);
   view.webview.postMessage({
@@ -1848,6 +1854,8 @@ async function handleUserMessage(text: string): Promise<void> {
           } else if (tokenMsg.tokenType === 'Text') {
             currentStreamingMsg.content += tokenMsg.text;
           } else if (tokenMsg.tokenType === 'Usage') {
+            _streamingPromptTokens = tokenMsg.promptTokens ?? 0;
+            _streamingCompletionTokens = tokenMsg.completionTokens ?? 0;
             chatView?.webview.postMessage({
               type: 'token-usage',
               usage: {
@@ -2084,6 +2092,8 @@ async function handleUserMessage(text: string): Promise<void> {
     const assistantMsg = createAssistantMessage();
     currentStreamingId = assistantMsg.id;
     currentStreamingMsg = assistantMsg;
+    _streamingPromptTokens = 0;
+    _streamingCompletionTokens = 0;
     isGenerating = true;
     chatView.webview.postMessage({ type: 'streaming-start', messageId: assistantMsg.id } as any);
     currentSession.messages.push(assistantMsg);
@@ -2091,13 +2101,20 @@ async function handleUserMessage(text: string): Promise<void> {
     await sendSlashRequest(
       assistantMsg.id,
       text,
-      (tokenMsg) => {
+(tokenMsg) => {
         if (chatView) chatView.webview.postMessage(tokenMsg);
         if (currentStreamingMsg && tokenMsg.type === 'token') {
           if (tokenMsg.tokenType === 'ReasoningContent') {
             currentStreamingMsg.reasoning += tokenMsg.text;
           } else if (tokenMsg.tokenType === 'Text') {
             currentStreamingMsg.content += tokenMsg.text;
+          } else if (tokenMsg.tokenType === 'Usage') {
+            _streamingPromptTokens = tokenMsg.promptTokens ?? 0;
+            _streamingCompletionTokens = tokenMsg.completionTokens ?? 0;
+            chatView?.webview.postMessage({
+              type: 'token-usage',
+              usage: { input: _streamingPromptTokens, output: _streamingCompletionTokens, total: _streamingPromptTokens + _streamingCompletionTokens },
+            } as any);
           }
         }
       },
@@ -2106,7 +2123,7 @@ async function handleUserMessage(text: string): Promise<void> {
         if (chatView) {
           chatView.webview.postMessage({
             type: 'token-usage',
-            usage: computeTokenUsage(),
+            usage: { input: _streamingPromptTokens, output: _streamingCompletionTokens, total: _streamingPromptTokens + _streamingCompletionTokens },
           } as any);
         }
         if (text.trim() === '/ping') _modelProfilesCache = null;
@@ -2205,8 +2222,10 @@ async function handleUserMessage(text: string): Promise<void> {
 
   const assistantMsg = createAssistantMessage();
   currentStreamingId = assistantMsg.id;
-  currentStreamingMsg = assistantMsg;
-  isGenerating = true;
+currentStreamingMsg = assistantMsg;
+    _streamingPromptTokens = 0;
+    _streamingCompletionTokens = 0;
+    isGenerating = true;
 
   chatView.webview.postMessage({ type: 'streaming-start', messageId: assistantMsg.id } as any);
   currentSession.messages.push(assistantMsg);
@@ -2239,6 +2258,13 @@ async function handleUserMessage(text: string): Promise<void> {
           currentStreamingMsg.reasoning += tokenMsg.text;
         } else if (tokenMsg.tokenType === 'Text') {
           currentStreamingMsg.content += tokenMsg.text;
+        } else if (tokenMsg.tokenType === 'Usage') {
+          _streamingPromptTokens = tokenMsg.promptTokens ?? 0;
+          _streamingCompletionTokens = tokenMsg.completionTokens ?? 0;
+          chatView?.webview.postMessage({
+            type: 'token-usage',
+            usage: { input: _streamingPromptTokens, output: _streamingCompletionTokens, total: _streamingPromptTokens + _streamingCompletionTokens },
+          } as any);
         }
       }
     },
@@ -2268,7 +2294,7 @@ async function handleUserMessage(text: string): Promise<void> {
         log.trace({ sessionId: currentSession?.id, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] panel: stream done');
         chatView.webview.postMessage({
           type: 'token-usage',
-          usage: computeTokenUsage(),
+          usage: { input: _streamingPromptTokens, output: _streamingCompletionTokens, total: _streamingPromptTokens + _streamingCompletionTokens },
         } as any);
       }
       finalizeCurrentMessage();
@@ -2307,6 +2333,8 @@ async function handleUserMessage(text: string): Promise<void> {
         const compactMsg = createAssistantMessage();
         currentStreamingId = compactMsg.id;
         currentStreamingMsg = compactMsg;
+        _streamingPromptTokens = 0;
+        _streamingCompletionTokens = 0;
         isGenerating = true;
         chatView.webview.postMessage({ type: 'streaming-start', messageId: compactMsg.id } as any);
 
