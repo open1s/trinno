@@ -106,7 +106,7 @@ let depsInitPromise: Promise<void> | null = null;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
-const activeAgents = new Map<string, { started: any; agent: any }>();
+const activeAgents = new Map<string, { started: any; agent: any; model: string | null; baseUrl: string | null }>();
 const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information. All tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output). For large files: read in 500+ line chunks with offset/limit, never tiny slices.`;';
 
 const slashRegistry = createSlashCommandRegistry();
@@ -912,7 +912,7 @@ function buildMethodologyPrompt(slashCommandsList: string): string {
     '',
     '## Verification',
     '- After writing/editing a file: read_file to confirm, run tests if available.',
-    '- Check the README or search the codebase for the test command. NEVER assume the framework.',
+    '- Check the README.md/Agents.md or search the codebase for the test command. NEVER assume the framework.',
     '- NEVER add comments unless the user explicitly asks.',
     '- For each principle/parameter cited, verify it exists in the matrix before recommending.',
     '',
@@ -1553,10 +1553,35 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   const existingAgent = activeAgents.get(sessionKey);
   let started: any;
   let isNew = false;
-  if (existingAgent && existingAgent.started) {
+  // Detect model/baseUrl drift so a mid-session switch takes effect immediately.
+  // Without this check, the cached `started` retains the model it was built with.
+  const modelChanged = !!existingAgent
+    && (existingAgent.model !== (model || null) || existingAgent.baseUrl !== (baseUrl || null));
+  if (existingAgent && existingAgent.started && !modelChanged) {
     started = existingAgent.started;
     // Don't re-emit MCP/LSP status — unchanged since last message
   } else {
+    if (existingAgent && existingAgent.started && modelChanged) {
+      // Preserve conversation history by exporting the old session through the
+      // factory's session context (handleChat re-imports it on the next chat),
+      // then stop and drop the cached agent so the fresh build picks up the
+      // newly selected model/baseUrl.
+      if (sessionId) {
+        try {
+          const exported = existingAgent.started.exportSession?.();
+          if (exported && typeof exported === 'string') {
+            getAgentFactory().setSessionContext(sessionId, {
+              brainOsSession: exported,
+              lastUpdated: Date.now(),
+            });
+          }
+        } catch { /* best effort — fall through to rebuild */ }
+        try {
+          await existingAgent.started.stop?.();
+        } catch { /* best effort — best effort */ }
+      }
+      activeAgents.delete(sessionKey);
+    }
     isNew = true;
     // Emit initial MCP status (all disconnected)
     emitMcpStatus(effectiveMcp.map(s => ({ name: s.name, type: s.type, connected: false })));
@@ -1576,7 +1601,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
 
     started = await agent.start();
     log.trace({ phase: 'agent-start', elapsedMs: Date.now() - phaseT0, isNew: true }, '[PHASE] agent started');
-    activeAgents.set(sessionKey, { started, agent });
+    activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null });
 
     // Final status after all connections resolved
     cancelMcpDebounce();
