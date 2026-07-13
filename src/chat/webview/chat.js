@@ -226,49 +226,8 @@
     }
   }
 
-  function renderTodoBadges() {
-    let targetEl = currentMessageEl || messagesContainer.querySelector('.message.assistant:last-of-type');
-    if (!targetEl) {
-      targetEl = document.createElement('div');
-      targetEl.className = 'message assistant';
-      messagesContainer.appendChild(targetEl);
-    }
-
-    let todoSection = targetEl.querySelector('.todo-section');
-    if (!todoSection) {
-      todoSection = document.createElement('div');
-      todoSection.className = 'todo-section';
-      const refEl = targetEl.querySelector('.message-content') || targetEl.querySelector('.reasoning-section');
-      if (refEl) {
-        targetEl.insertBefore(todoSection, refEl);
-      } else {
-        targetEl.appendChild(todoSection);
-      }
-    }
-
-    if (!todoData || todoData.length === 0) {
-      todoSection.innerHTML = '';
-      return;
-    }
-
-    const done = todoData.filter(t => t.status === 'completed').length;
-    const running = todoData.filter(t => t.status === 'in_progress').length;
-    const total = todoData.length;
-
-    let html = `<div class="todo-summary" onclick="this.parentElement.querySelector('.todo-list').classList.toggle('collapsed')">`;
-    html += `<span class="todo-count">`;
-    if (running > 0) html += `<span class="todo-spinner-inline"></span> `;
-    html += `${done}/${total} tasks`;
-    html += `</span><span class="todo-toggle">▼</span></div>`;
-    html += `<div class="todo-list collapsed">`;
-    for (const t of todoData) {
-      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : t.status === 'cancelled' ? '❌' : '⬜';
-      html += `<div class="todo-item"><span class="todo-icon">${icon}</span><span class="todo-text">${escapeHtml(t.content)}</span></div>`;
-    }
-    html += `</div>`;
-
-    todoSection.innerHTML = html;
-  }
+function renderTodoBadges() {
+}
 
   function updateTodoList(todos) {
     if (!todoPinnedEl) return;
