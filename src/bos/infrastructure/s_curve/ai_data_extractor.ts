@@ -1,5 +1,6 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
+import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
 import { CachedSearchService } from '../search/cached_search.js';
 import { SearchResult } from '../../domain/solution/search_port.js';
@@ -46,6 +47,7 @@ async initialize(): Promise<void> {
     initAgentFactory(this.brain);
 
     const factory = getAgentFactory();
+    const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-scurve-data-extractor',
       systemPrompt: `${langPrefix}You are Research Master — a TRIZ S-Curve data extraction expert serving the Validation phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You produce copy-ready JSON evidence artifacts only. Importance-weighted, no fabrication, no synthesis.
@@ -70,9 +72,19 @@ Schema to return:
   "lifecycleInfo": {"inventionYear": number|null, "growthStartYear": number|null, "maturityStartYear": number|null, "currentYear": number}
 }`,
       temperature: 0.1,
+      ...(mc.model ? { model: mc.model } : {}),
+      ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+      ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
     });
 
     this.agent = await builder.start();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.agent) {
+      try { await this.agent.stop(); } catch { }
+      this.agent = null;
+    }
   }
 
   async extractData(

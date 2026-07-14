@@ -1,5 +1,6 @@
 import { Agent, AgentBuilder, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
+import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from './streaming.js';
 import { InventivePrinciple } from '../../domain/principle/entity.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
@@ -63,13 +64,24 @@ export class AiTrizAgent {
     initAgentFactory(this.brain);
 
     const factory = getAgentFactory();
+    const mc = getModelConfig();
     const builder = factory.create({
       name: this.agentName,
       systemPrompt: `${langPrefix}${TRIZ_SYSTEM_PROMPT}`,
       temperature: 0.7,
+      ...(mc.model ? { model: mc.model } : {}),
+      ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+      ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
     });
 
     this.agent = await builder.start();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.agent) {
+      try { await this.agent.stop(); } catch { }
+      this.agent = null;
+    }
   }
 
   async generateInsight(

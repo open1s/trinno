@@ -1,6 +1,7 @@
 import { SlashCommand } from './registry.js';
 import { TrizDeps } from '../infrastructure/config/di.js';
 import { initAgentFactory, getAgentFactory } from '../infrastructure/agent-factory.js';
+import { getModelConfig } from '../infrastructure/config/model-config.js';
 
 function resolveParameter(deps: TrizDeps, input: string): number | null {
   const num = parseInt(input, 10);
@@ -130,9 +131,11 @@ export const contradictionCommand: SlashCommand = {
 
     emit('token', { tokenType: 'Text', text: `## Contradiction Analysis: ${topic}\n\n_Analyzing key technical contradictions..._\n\n---\n\n` });
 
+    let started: any = null;
 try {
         initAgentFactory(deps.brain, { defaultTools: deps.tools });
         const factory = getAgentFactory();
+        const mc = getModelConfig();
         const agent = factory.create({
           name: 'triz-contradiction',
           systemPrompt: `You are Research Master — a self-directed, tool-first TRIZ expert operating in the Analyze phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution), producing copy-ready contradiction artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO with importance-weighted KPIs and evidence scoring.
@@ -158,9 +161,12 @@ Format (≤4 lines per contradiction):
 
 Be concise. Think step by step, break into smaller parts.`,
           temperature: 0.3,
+          ...(mc.model ? { model: mc.model } : {}),
+          ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+          ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
         });
 
-        const started = await agent.start();
+        started = await agent.start();
       await new Promise<void>((resolve) => {
         started.stream(`Identify key technical contradictions for: ${topic}`, (token: any) => {
           if (signal.aborted) {
@@ -171,10 +177,11 @@ Be concise. Think step by step, break into smaller parts.`,
           if (token.type === 'Text') emit('token', { tokenType: 'Text', text: token.text });
           else if (token.type === 'ReasoningContent') emit('token', { tokenType: 'ReasoningContent', text: token.text });
           else if (token.type === 'Done') { started.close().catch(() => {}); resolve(); }
-          else if (token.type === 'Error') { emit('token', { tokenType: 'Text', text: `\n\n Error: ${token.error}` }); resolve(); }
+          else if (token.type === 'Error') { started.close().catch(() => {}); emit('token', { tokenType: 'Text', text: `\n\n Error: ${token.error}` }); resolve(); }
         });
       });
     } catch (err) {
+      try { started.close().catch(() => {}); } catch { }
       if (signal.aborted) {
         emit('token', { tokenType: 'Text', text: '\n\n_Analysis cancelled._' });
       } else {

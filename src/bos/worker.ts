@@ -21,6 +21,7 @@
 import { composeRoot } from './infrastructure/config/di.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
 import { getAgentFactory } from './infrastructure/agent-factory.js';
+import { getModelConfig } from './infrastructure/config/model-config.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
 import { searchMemories, listMemories, addMemory } from '../chat/memory.js';
 import {
@@ -108,6 +109,15 @@ let lastApiKey: string | undefined;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
+
+async function closeDeps(oldDeps: typeof deps): Promise<void> {
+  if (!oldDeps) return;
+  try { await oldDeps.aiAgent.dispose(); } catch { }
+  try { await oldDeps.aiSCurveEstimator.dispose(); } catch { }
+  try { await oldDeps.aiSCurveDataExtractor.dispose(); } catch { }
+  try { await oldDeps.trlAssessor.dispose(); } catch { }
+  try { await oldDeps.summarizer.dispose(); } catch { }
+}
 const activeAgents = new Map<string, { started: any; agent: any; model: string | null; baseUrl: string | null; apiKey: string | null }>();
 const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information. All tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output). For large files: read in 500+ line chunks with offset/limit, never tiny slices.`;';
 
@@ -368,12 +378,14 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 
 async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   log.error({ model, baseUrl, apiKeyPrefix: apiKey?.slice(0, 8), lastApiKeyPrefix: lastApiKey?.slice(0, 8) }, 'DEBUG handleChat: params');
+  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
   abortController = new AbortController();
   const signal = abortController.signal;
 
   if (depsInitPromise) await depsInitPromise;
   if (deps && apiKey !== lastApiKey) {
     log.error({ old: lastApiKey?.slice(0, 4), new: apiKey?.slice(0, 4) }, 'DEBUG handleChat: apiKey changed, recreating deps');
+    await closeDeps(deps);
     deps = null;
     depsInitPromise = null;
   }
@@ -1105,6 +1117,7 @@ ${conversationText}
     temperature: 0.3,
     ...(model ? { model } : {}),
     ...(baseUrl ? { baseUrl } : {}),
+    ...(apiKey ? { apiKey } : {}),
   });
 
   const started = await agent.start();
@@ -1314,10 +1327,14 @@ process.stdin.on('data', (chunk: Buffer) => {
           enqueue('compact-result', async () => {
             if (msg.sessionId && msg.summary) {
               const factory = getAgentFactory();
+              const mc = getModelConfig();
               const agent = factory.create({
                 name: 'trinno-compact-result',
                 systemPrompt: `## Conversation History Summary\n\n${msg.summary}`,
                 temperature: 0.3,
+                ...(mc.model ? { model: mc.model } : {}),
+                ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+                ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
               });
               const started = await agent.start();
               try {
@@ -1355,7 +1372,7 @@ process.stdin.on('data', (chunk: Buffer) => {
               (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
               chdirToWorkspace();
             }
-            (globalThis as any).__SLASH_MODEL_CONFIG = {
+            (globalThis as any).__TRP_MODEL_CONFIG = {
               model: msg.model,
               baseUrl: msg.baseUrl,
               apiKey: msg.apiKey,
@@ -1484,9 +1501,11 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   const phaseT0 = Date.now();
+  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
   if (depsInitPromise) await depsInitPromise;
   if (deps && apiKey !== lastApiKey) {
     log.error({ old: lastApiKey?.slice(0, 4), new: apiKey?.slice(0, 4) }, 'DEBUG handleChatWithEmit: apiKey changed, recreating deps');
+    await closeDeps(deps);
     deps = null;
     depsInitPromise = null;
   }
@@ -2025,9 +2044,13 @@ async function syncSessionAfterCommand(
 ): Promise<string | undefined> {
   try {
     const f = getAgentFactory();
+    const mc = getModelConfig();
     const syncAgent = f.create({
       name: 'session-sync',
       systemPrompt: 'You are Research Master — a context synchronization agent. Acknowledge new slash-command output silently and integrate it as Evidence/Modeling in the 7-phase pipeline without re-explaining.',
+      ...(mc.model ? { model: mc.model } : {}),
+      ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+      ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
     });
     const started = await syncAgent.start();
     try {

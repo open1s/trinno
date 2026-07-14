@@ -254,7 +254,7 @@ export async function sendMessage(
   const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
   const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
-  log.warn({config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, hasModelConfig: !!modelConfig }}, 'model used for request');
+  log.warn({ config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, hasModelConfig: !!modelConfig } }, 'model used for request');
   const payload = {
     type: 'chat',
     messageId,
@@ -456,9 +456,9 @@ export function getWelcomeContext(): { context: ReturnType<typeof extractNoteboo
 }
 
 export async function initializeAgent(
-	workspaceRoot?: string
+  workspaceRoot?: string
 ): Promise<void> {
-	await ensureWorker();
+  await ensureWorker();
   const config = getChatConfig();
   log.debug({ workspaceRoot }, 'sending init message to worker');
   if (workerProcess?.stdin) {
@@ -537,18 +537,18 @@ export async function sendCompactRequest(
   let compactBuffer = '';
   const drainRemainingLines = (buffer: string): void => {
     const lines = buffer.split('\n');
-for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'token') {
-            onToken(buildTokenMsg(msg));
-          }
-        } catch { /* ignore non-JSON */ }
-      }
-    };
-    const handleData = (chunk: Buffer) => {
-      compactBuffer += chunk.toString();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'token') {
+          onToken(buildTokenMsg(msg));
+        }
+      } catch { /* ignore non-JSON */ }
+    }
+  };
+  const handleData = (chunk: Buffer) => {
+    compactBuffer += chunk.toString();
     const lines = compactBuffer.split('\n');
     compactBuffer = lines.pop() || '';
     for (const line of lines) {
@@ -582,6 +582,9 @@ for (const line of lines) {
     currentCallbacks = null;
   };
 
+  if (activeDataHandler) {
+    workerProcess.stdout?.removeListener('data', activeDataHandler);
+  }
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
@@ -709,7 +712,7 @@ export async function sendPaperRequest(
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-const msg = JSON.parse(line);
+        const msg = JSON.parse(line);
         if (msg.type === 'token') {
           onToken(buildTokenMsg(msg));
         }
@@ -765,6 +768,9 @@ const msg = JSON.parse(line);
     currentCallbacks = null;
   };
 
+  if (activeDataHandler) {
+    workerProcess.stdout?.removeListener('data', activeDataHandler);
+  }
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { SlashCommand } from './registry.js';
 import { TrizDeps } from '../infrastructure/config/di.js';
 import { getAgentFactory } from '../infrastructure/agent-factory.js';
+import { getModelConfig } from '../infrastructure/config/model-config.js';
 
 const AUTO_STATE_FILE = 'auto_state.json';
 const MAX_ITERATIONS = 50;
@@ -71,6 +72,7 @@ async function generateScopeAndEval(
   deps: TrizDeps,
 ): Promise<{ scope: string; eval: string }> {
   const factory = getAgentFactory();
+  const mc = getModelConfig();
   const builder = factory.create({
     name: 'auto-planner',
     systemPrompt: [
@@ -88,6 +90,9 @@ async function generateScopeAndEval(
       'Fill in template fields with concrete values derived from the hypothesis. Do not leave placeholders.',
     ].join('\n'),
     temperature: 0.7,
+    ...(mc.model ? { model: mc.model } : {}),
+    ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+    ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
   });
   const agent = await builder.start();
 

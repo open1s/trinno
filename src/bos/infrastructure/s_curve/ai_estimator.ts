@@ -1,5 +1,6 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
+import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
 import { CurvePoint, CurveParameters } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
@@ -34,6 +35,7 @@ export class AiSCurveEstimator {
     initAgentFactory(this.brain);
 
     const factory = getAgentFactory();
+    const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-scurve-estimator',
       systemPrompt: `${langPrefix}You are Research Master — a TRIZ S-Curve estimation expert serving the Modeling phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You score evidence, weigh KPIs by importance, surface decision factors, and produce copy-ready JSON.
@@ -62,9 +64,19 @@ Schema to return (importance-weighted, decision-ready):
 
 Use websearch when domain knowledge is uncertain. Return ONLY valid JSON, no markdown.`,
       temperature: 0.3,
+      ...(mc.model ? { model: mc.model } : {}),
+      ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+      ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
     });
 
     this.agent = await builder.start();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.agent) {
+      try { await this.agent.stop(); } catch { }
+      this.agent = null;
+    }
   }
 
   async estimate(

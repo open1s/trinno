@@ -74,6 +74,7 @@ class BuilderLru {
       config.name,
       config.model ?? '-',
       config.baseUrl ?? '-',
+      config.apiKey ?? '-',
       fnv1aHash(config.systemPrompt),
       fnv1aHash(toolSig),
       fnv1aHash(hookSig),

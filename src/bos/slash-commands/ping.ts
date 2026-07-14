@@ -78,6 +78,7 @@ async function runProbe(
   deps: any,
   model: string | undefined,
   baseUrl: string | undefined,
+  apiKey: string | undefined,
   systemPrompt: string,
   userMessage: string,
   maxTokens: number,
@@ -94,6 +95,7 @@ async function runProbe(
     timeoutSecs: 120,
     ...(model ? { model } : {}),
     ...(baseUrl ? { baseUrl } : {}),
+    ...(apiKey ? { apiKey } : {}),
   });
   const started = await builder.start();
   return new Promise((resolve) => {
@@ -133,6 +135,7 @@ async function probeHardLimit(
   deps: any,
   model: string | undefined,
   baseUrl: string | undefined,
+  apiKey: string | undefined,
   emit: (type: string, data: any) => void,
   signal: AbortSignal,
   cachedMax?: number,
@@ -153,7 +156,7 @@ async function probeHardLimit(
     emit('token', { tokenType: 'Text', text: `  Probing ${probeTokens.toLocaleString()} tokens... ` });
 
     const padding = generatePadding(probeTokens * CHARS_PER_TOKEN);
-    const result = await runProbe(deps, model, baseUrl, SYSTEM, padding, 10, signal, { pong: true });
+    const result = await runProbe(deps, model, baseUrl, apiKey, SYSTEM, padding, 10, signal, { pong: true });
 
     if (signal.aborted) {
       emit('token', { tokenType: 'Text', text: `cancelled\n` });
@@ -196,7 +199,7 @@ async function probeHardLimit(
     emit('token', { tokenType: 'Text', text: `  → ${mid.toLocaleString()}... ` });
 
     const padding = generatePadding(mid * CHARS_PER_TOKEN);
-    const result = await runProbe(deps, model, baseUrl, SYSTEM, padding, 10, signal, { pong: true });
+    const result = await runProbe(deps, model, baseUrl, apiKey, SYSTEM, padding, 10, signal, { pong: true });
 
     if (signal.aborted) return lastGood;
 
@@ -221,6 +224,7 @@ async function probeWorkingLimit(
   deps: any,
   model: string | undefined,
   baseUrl: string | undefined,
+  apiKey: string | undefined,
   hardLimit: number,
   emit: (type: string, data: any) => void,
   signal: AbortSignal,
@@ -235,7 +239,7 @@ async function probeWorkingLimit(
     const question = '\n\nIgnore all the above text. Write a detailed analysis of the three main causes of the French Revolution, covering economic, social, and political factors with specific examples.';
 
     const result = await runProbe(
-      deps, model, baseUrl,
+      deps, model, baseUrl, apiKey,
       'You are a helpful historian.',
       padding + question,
       2000,
@@ -265,9 +269,10 @@ export const pingCommand: SlashCommand = {
   description: 'Probe LLM model token limits (context window, max output, working limit)',
   usage: '/ping',
   execute: async (args, deps, emit, signal) => {
-    const modelConfig = (globalThis as any).__SLASH_MODEL_CONFIG || {};
+    const modelConfig = (globalThis as any).__TRP_MODEL_CONFIG || {};
     const model: string | undefined = modelConfig.model;
     const baseUrl: string | undefined = modelConfig.baseUrl;
+    const apiKey: string | undefined = modelConfig.apiKey;
 
     if (!model) {
       emit('token', { tokenType: 'Text', text: 'No model configured. Set a model in Trinno settings first.\n' });
@@ -283,11 +288,11 @@ export const pingCommand: SlashCommand = {
     const cachedProfile = cache[model] || {};
 
     emit('token', { tokenType: 'Text', text: `### Phase 1: Hard Context Limit\n` });
-    const maxInput = await probeHardLimit(deps, model, baseUrl, emit, signal, cachedProfile.maxInput);
+    const maxInput = await probeHardLimit(deps, model, baseUrl, apiKey, emit, signal, cachedProfile.maxInput);
     if (signal.aborted) { emit('token', { tokenType: 'Text', text: `\n_Cancelled._\n` }); emit('done', {}); return; }
 
     emit('token', { tokenType: 'Text', text: `\n### Phase 2: Working Quality Limit\n` });
-    const workingLimit = await probeWorkingLimit(deps, model, baseUrl, maxInput, emit, signal);
+    const workingLimit = await probeWorkingLimit(deps, model, baseUrl, apiKey, maxInput, emit, signal);
     if (signal.aborted) { emit('done', {}); return; }
 
     const workingFraction = Math.round((workingLimit / maxInput) * 100);

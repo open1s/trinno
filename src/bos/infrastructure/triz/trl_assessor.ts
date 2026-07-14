@@ -1,5 +1,6 @@
 import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
+import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
 import {
   TRLAssessment,
@@ -61,6 +62,7 @@ export class TRLAssessor {
     initAgentFactory(this.brain);
 
     const factory = getAgentFactory();
+    const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-trl-assessor',
       systemPrompt: `${langPrefix}You are Research Master — a Technology Readiness Level (TRL) assessment expert using the NASA/DoD 1-9 scale within a 7-phase TRIZ pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You prioritize importance-weighted KPIs, score evidence, surface decision factors, and produce copy-ready JSON artifacts.
@@ -92,9 +94,19 @@ User-supplied TRL:
 
 Return ONLY valid JSON. No markdown, no explanation outside JSON. ≤4 lines per artifact cell.`,
       temperature: 0.2,
+      ...(mc.model ? { model: mc.model } : {}),
+      ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
+      ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
     });
 
     this.agent = await builder.start();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.agent) {
+      try { await this.agent.stop(); } catch { }
+      this.agent = null;
+    }
   }
 
   async assess(input: TRLAssessmentInput): Promise<TRLAssessmentResult> {
