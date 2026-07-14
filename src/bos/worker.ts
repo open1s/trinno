@@ -43,6 +43,7 @@ import {
   isGoalTerminal,
   appendGoalHistory,
   updateGoalProgress,
+  type GoalState,
 } from './slash-commands/index.js';
 import { ToolPermissionConfig, McpServerConfig } from './infrastructure/config/toolPermissions.js';
 import { initApprovalBus, sendApprovalResponse, setApprovalEmitter, cancelAllPendingApprovals } from './infrastructure/config/toolPermissionHook.js';
@@ -951,6 +952,101 @@ interface CompactMessage {
   reasoning?: string;
 }
 
+function buildGoalPrompt(goal: GoalState): string {
+  return `
+## Current Research Goal
+
+${goal.text}${goal.note ? `\n**User note:** ${goal.note}` : ''}
+
+### Goal Rules (Codex State Machine)
+- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.
+- **"complete"**: only after completion audit proves every requirement satisfied with auditable evidence.
+- **"blocked"**: only after 3 consecutive goal turns with same blocking condition. Never for "hard/slow/uncertain/incomplete".
+
+### Fidelity
+- Keep the full objective intact. Do not shrink or redefine success.
+- Optimize each turn for movement toward the requested end state.
+- Temporary rough edges are acceptable while moving in the right direction.
+
+### Completion Audit (Mandatory)
+Before calling \`update_goal\` complete, verify each requirement against current-state evidence:
+- File artifact: exact path + expected content/structure
+- Command stdout/stderr
+- Passing test name
+- Measured metric value
+Subjective statements ("looks good", "I checked") do NOT count as evidence.
+
+### Blocked Audit
+Do NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count.
+
+### Decomposition & Acceptance Criteria (Mandatory First Turn)
+On your FIRST turn for a new goal:
+1. Decompose into concrete, independently-executable sub-tasks (each finishable in one turn).
+2. For each sub-task, define MEASURABLE acceptance criteria — each criterion MUST be one of the four evidence types above.
+3. Track every sub-task via \`todowrite\` with embedded acceptance criteria.
+`;
+}
+
+function buildAutoResearchPrompt(pendingAuto: { hypothesis: string; iteration: number }, maxIterations: number): string {
+  return `
+## AutoResearch Iteration ${pendingAuto.iteration} / ${maxIterations}
+
+**Hypothesis:** ${pendingAuto.hypothesis}
+
+### AutoResearch Loop Protocol
+Execute this iteration using the propose → act → evaluate → ratchet pattern.
+
+**Phase 1 — Propose:**
+- Read \`08_AutoResearch/scope.md\` for constraints, allowed mutation surface, termination condition.
+- Read \`08_AutoResearch/eval.md\` for fixed evaluation metric, protocol, baseline, accept/reject criteria.
+- Read previous experiment logs in \`08_AutoResearch/experiments/\` (sorted by filename) to learn from prior results.
+- Formulate a concrete hypothesis: what change, why it should improve the metric, and what specific measurable result (Δ threshold) determines accept vs. reject.
+
+**Phase 2 — Act:**
+- Make the minimal code or configuration change needed to test the hypothesis.
+- Put code in \`08_AutoResearch/code/\`. Put data/artifacts in \`08_AutoResearch/results/\`.
+
+**Phase 3 — Evaluate:**
+- Run the measurement procedure exactly as defined in eval.md.
+- Compute primary metric (before / after) and any secondary metrics.
+- Compare to baseline using eval.md's accept/reject criteria.
+- The evaluation is the GO/NO-GO gate. Do not skip or approximate it.
+
+**Phase 4 — Ratchet:**
+- Write \`08_AutoResearch/experiments/log_<N>.md\` (use template from \`log_template.md\`). Record hypothesis, change, evaluation table (before/after/Δ/verdict), analysis, and next steps.
+- If eval.md criteria met: verdict = KEPT. Commit the change.
+- If eval.md criteria NOT met: verdict = REVERTED. Discard the change.
+- The verdict drives the next iteration's direction.
+
+### Continuation After This Iteration
+After completing evaluation and writing the experiment log, write \`08_AutoResearch/auto_state.json\` with the NEXT iteration (current + 1) and a refined hypothesis based on this iteration's results.
+
+**auto_state.json format:**
+\`\`\`json
+{
+  "hypothesis": "<next hypothesis>",
+  "iteration": ${pendingAuto.iteration + 1},
+  "status": "active",
+  "createdAt": <preserve from current state>,
+  "updatedAt": <Date.now() timestamp in ms>
+}
+\`\`\`
+
+**When to stop looping:**
+- Set \`status: "complete"\` if evaluation proves the research objective is achieved AND no further improvements expected.
+- Set \`status: "paused"\` if you hit an external blocker (data missing, compute unavailable, user input needed). User can resume with \`/auto resume\`.
+
+**The loop self-perpetuates — the next round picks up this file automatically. No user input needed between iterations. Do NOT wait for the user to respond.**
+
+### Guardrails
+- Do NOT modify \`scope.md\` or \`eval.md\` mid-loop. They are immutable constraints.
+- Call \`todowrite\` at least once to report progress.
+- Every hypothesis must be concrete and testable. Vague "explore" / "investigate" hypotheses are rejected — skip and propose a real testable one.
+- Paste actual before/after measurements as evidence. Never accept a verdict based on memory or intent.
+- If evaluation cannot be run (missing hardware, data, permissions), mark as paused — do not fabricate results.
+`;
+}
+
 async function handleCompact(
   messages: CompactMessage[],
   systemSummary: string | undefined,
@@ -1421,13 +1517,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
   const typstDiags = await collectTypstDiagnostics(wsRoot);
   if (typstDiags) {
-    systemPrompt += typstDiags;
+systemPrompt += typstDiags;
   }
 
   // Inject active goal
   const goal = readGoalForWorker();
   if (goal && goal.status === 'active') {
-    systemPrompt += `\n\n## Current Research Goal\n\n${goal.text}\n${goal.note ? `\n**User note:** ${goal.note}\n` : ''}\n**Goal rules (exact Codex state machine):**\n- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.\n- **"complete"**: only after completion audit proves every requirement satisfied.\n- **"blocked"**: only after 3 consecutive goal turns with same blocking condition.\n\n**Fidelity:**\n- Keep the full objective intact. Do not shrink or redefine success.\n- Optimize each turn for movement toward the requested end state, not for the easiest passing change.\n- Temporary rough edges are acceptable while moving in the right direction.\n\n**Completion audit:**\nBefore calling update_goal complete, verify each requirement against current-state evidence. Do not rely on intent, partial progress, or memory. Only mark complete when ALL requirements are proven with auditable evidence — each criterion must be matched to a concrete artifact: file at path with expected content, command stdout, passing test name, or measured metric value. Subjective statements (\"looks good\", \"I checked\") do NOT count as evidence.\n\n**Blocked audit:**\nDo NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count. Never use blocked for "hard/slow/uncertain/incomplete" reasons.\n\n**Decomposition & acceptance criteria (mandatory first step):**\nOn your FIRST turn for a new goal, decompose the objective into sub-tasks AND quantify acceptance criteria. Track every sub-task via todowrite with embedded acceptance criteria. Required workflow:\n1. Decompose the goal into concrete, independently-executable sub-tasks. Each sub-task must be small enough to finish in one turn.\n2. For each sub-task, define MEASURABLE acceptance criteria — not subjective statements. Each criterion MUST be one of:\n   - **File artifact:** exact path + expected content/structure (e.g. \"06_References/drone.pdf exists and starts with %PDF-1.4\")\n   - **Command output:** exact command + expected stdout pattern (e.g. \"npm run compile exits 0 with no errors\")\n   - **Test pass:** named test case passes (e.g. \"test 'extracts year from YYYY-MM-DD' in publication-trends.test.js is green\")\n   - **Numerical threshold:** metric value within range (e.g. \"TRL score = 7\", \"ideality ratio > 1.5\")\n   - **Structural conformance:** spec match (e.g. \"output .typ file contains sections: Problem, Context, Evidence, Modeling, TRIZ, Validation, Execution\")\n   FORBIDDEN as criteria: \"I reviewed it\", \"looks correct\", \"seems complete\", \"the code is good\". These are subjective and unmeasurable.\n3. Use todowrite with status: pending / in_progress / completed. Embed acceptance criteria in each todo's content field.\n4. EXECUTE one sub-task per turn. Before marking a sub-task completed: RUN the verification (execute the command, read the file, run the test, check the metric), and PASTE the actual output as evidence in your response. Only then mark status=completed.\n5. Do not move to next sub-task until current one has ALL criteria verified with pasted evidence.\n6. Aggregate sub-task verification across the whole goal. Only call update_goal complete when EVERY sub-task has status=completed, and your update_goal reasoning lists each criterion alongside its evidence (command output / file content / test result).`;
+    systemPrompt += `\n\n${buildGoalPrompt(goal)}`;
   }
 
   let effectiveMcp = mcpServers;
@@ -1602,67 +1698,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
         userMessage,
       ].join('\n');
     } else {
-      userMessage = [
-        `## AutoResearch Iteration ${pendingAuto.iteration} / ${MAX_AUTO_ITERATIONS}`,
-        ``,
-        `**Hypothesis:** ${pendingAuto.hypothesis}`,
-        ``,
-        `### AutoResearch Loop Protocol`,
-        `Execute this iteration using the propose → act → evaluate → ratchet pattern.`,
-        ``,
-        `**Phase 1 — Propose:**`,
-        `- Read \`08_AutoResearch/scope.md\` for constraints, allowed mutation surface, termination condition.`,
-        `- Read \`08_AutoResearch/eval.md\` for the fixed evaluation metric, protocol, baseline, accept/reject criteria.`,
-        `- Read previous experiment logs in \`08_AutoResearch/experiments/\` (sorted by filename) to learn from prior results.`,
-        `- Formulate a concrete hypothesis: what change, why it should improve the metric, and what specific measurable result (Δ threshold) determines accept vs. reject.`,
-        ``,
-        `**Phase 2 — Act:**`,
-        `- Make the minimal code or configuration change needed to test the hypothesis.`,
-        `- Put code in \`08_AutoResearch/code/\`. Put data/artifacts in \`08_AutoResearch/results/\`.`,
-        ``,
-        `**Phase 3 — Evaluate:**`,
-        `- Run the measurement procedure exactly as defined in eval.md.`,
-        `- Compute primary metric (before / after) and any secondary metrics.`,
-        `- Compare to baseline using eval.md's accept/reject criteria.`,
-        `- The evaluation is the GO/NO-GO gate. Do not skip or approximate it.`,
-        ``,
-        `**Phase 4 — Ratchet:**`,
-        `- Write \`08_AutoResearch/experiments/log_<N>.md\` (use experiment log template from \`log_template.md\`). Record the hypothesis, change, evaluation table (before/after/Δ/verdict), analysis, and next steps.`,
-        `- If eval.md criteria were met: verdict = KEPT. Commit the change.`,
-        `- If eval.md criteria were NOT met: verdict = REVERTED. Discard the change.`,
-        `- The verdict drives the next iteration's direction.`,
-        ``,
-        `### Continuation After This Iteration`,
-        `After completing the evaluation and writing the experiment log, write \`08_AutoResearch/auto_state.json\` with the NEXT iteration (current + 1) and a refined hypothesis based on this iteration's results.`,
-        ``,
-        `**auto_state.json format:**`,
-        `\`\`\`json`,
-        `{`,
-        `  "hypothesis": "<next hypothesis>",`,
-        `  "iteration": ${pendingAuto.iteration + 1},`,
-        `  "status": "active",`,
-        `  "createdAt": <unchanged, preserve from current state>,\``,
-        `  "updatedAt": <Date.now() timestamp in ms>`,
-        `}`,
-        `\`\`\``,
-        ``,
-        `**When to stop looping:**`,
-        `- Set \`status: "complete"\` if the evaluation proves the research objective is achieved AND no further improvements are expected.`,
-        `- Set \`status: "paused"\` if you hit an external blocker (data missing, compute unavailable, user input needed). The user can resume with \`/auto resume\`.`,
-        ``,
-        `**The loop self-perpetuates — the next round picks up this file automatically. No user input needed between iterations. Do NOT wait for the user to respond.**`,
-        ``,
-        `**Guardrails:**`,
-        `- Do NOT modify \`scope.md\` or \`eval.md\` mid-loop. They are immutable constraints.`,
-        `- Call todowrite at least once to report progress.`,
-        `- Every hypothesis must be concrete and testable. Vague "explore" / "investigate" hypotheses are rejected — skip and propose a real testable one.`,
-        `- Paste actual before/after measurements as evidence. Never accept a verdict based on memory or intent.`,
-        `- If the evaluation cannot be run (missing hardware, data, permissions), mark as paused — do not fabricate results.`,
-        ``,
-        `---`,
-        ``,
-        userMessage,
-      ].join('\n');
+      userMessage = buildAutoResearchPrompt(pendingAuto, MAX_AUTO_ITERATIONS) + `\n\n---\n\n${userMessage}`;
     }
   }
 
