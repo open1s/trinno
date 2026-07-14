@@ -19,8 +19,8 @@ export function getChatConfig() {
 export function openConfig(): void {
   const tomlPath = TOML_PATH;
   if (!fs.existsSync(tomlPath)) {
-    vscode.window.showWarningMessage(`Config file not found: ${tomlPath}`);
-    return;
+    fs.mkdirSync(path.dirname(tomlPath), { recursive: true });
+    fs.writeFileSync(tomlPath, '', 'utf-8');
   }
   vscode.workspace.openTextDocument(tomlPath).then(doc => {
     vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Active });

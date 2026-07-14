@@ -138,6 +138,8 @@ interface ModelConfig {
   apiKey?: string;
 }
 
+const CONFIG_TOML_PATH = path.join(os.homedir(), '.bos', 'conf', 'config.toml');
+
 function loadModelsFromConfig(): ModelConfig[] {
   const models: ModelConfig[] = [];
   try {
@@ -167,7 +169,7 @@ function loadModelsFromConfig(): ModelConfig[] {
 
 const loadedAgents = loadAgentsFromBosDir();
 let selectedAgentContent: string | undefined;
-const loadedModels = loadModelsFromConfig();
+let loadedModels = loadModelsFromConfig();
 let selectedModelConfig: ModelConfig | undefined;
 let pendingMcpStatus: { name: string; type: string; connected: boolean }[] | null = null;
 
@@ -460,6 +462,17 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
       chatView.webview.postMessage({ type: 'lsp-status', ...status } as any);
     }
   });
+
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (doc.uri.fsPath === CONFIG_TOML_PATH) {
+        loadedModels = loadModelsFromConfig();
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'models-loaded', models: loadedModels } as any);
+        }
+      }
+    })
+  );
 }
 
 async function createNewSession(title?: string): Promise<void> {
