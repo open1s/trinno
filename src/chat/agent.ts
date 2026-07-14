@@ -47,7 +47,7 @@ export const AgentEvent = {
 
 let workerProcess: childProcess.ChildProcess | null = null;
 let workerReady = false;
-let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined } | null = null;
+let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined; messageId?: string } | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
 const insertStack: InsertedCell[] = [];
@@ -236,7 +236,7 @@ export async function sendMessage(
   workspaceRoot?: string
 ): Promise<void> {
   log.info({ messageId, textLength: text.length, sessionId }, 'sendMessage called');
-  currentCallbacks = { token: onToken, done: onDone, approval: onApproval };
+  currentCallbacks = { token: onToken, done: onDone, approval: onApproval, messageId };
 
   await ensureWorker();
   log.debug({ workerReady }, 'ensureWorker done');
@@ -303,6 +303,7 @@ export async function sendMessage(
             onToken(buildTokenMsg(msg));
             break;
           case 'done':
+            if (msg.messageId && msg.messageId !== payload.messageId) break;
             drainRemainingLines(dataBuffer);
             dataBuffer = '';
             log.trace({ traceId: payload.messageId }, '[TRACE] agent←worker: stream complete');
@@ -310,6 +311,7 @@ export async function sendMessage(
             onDone(msg);
             break;
           case 'error':
+            if (msg.messageId && msg.messageId !== payload.messageId) break;
             log.warn({ error: msg.error }, 'handleData got error');
             cleanup();
             onError(msg.error);
@@ -595,7 +597,7 @@ export async function sendSlashRequest(
   workspaceRoot?: string
 ): Promise<void> {
   log.info({ text }, 'sendSlashRequest called');
-  currentCallbacks = { token: onToken, done: onDone, approval: undefined };
+  currentCallbacks = { token: onToken, done: onDone, approval: undefined, messageId };
 
   await ensureWorker();
 
@@ -635,10 +637,12 @@ export async function sendSlashRequest(
             onToken(buildTokenMsg(msg));
             break;
           case 'done':
+            if (msg.messageId && msg.messageId !== payload.messageId) break;
             cleanup();
             onDone(msg);
             break;
           case 'error':
+            if (msg.messageId && msg.messageId !== payload.messageId) break;
             cleanup();
             onError(msg.error);
             break;

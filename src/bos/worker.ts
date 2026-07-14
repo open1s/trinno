@@ -1247,6 +1247,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                   msg.systemSummary,
                   localEmit,
                   signal,
+                  msg.messageId,
                   msg.sessionId,
                   msg.brainOsSession,
                   msg.skillContent,
@@ -1267,6 +1268,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 msg.systemSummary,
                 emit,
                 abortController.signal,
+                msg.messageId,
                 msg.sessionId,
                 msg.brainOsSession,
                 msg.skillContent,
@@ -1480,7 +1482,7 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
   }
 }
 
-async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
   const phaseT0 = Date.now();
   if (depsInitPromise) await depsInitPromise;
   if (deps && apiKey !== lastApiKey) {
@@ -1993,6 +1995,7 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
     // Use raw token counts from the last 'Usage' event (directly from LLM API) — no delta/cumulative math
     log.trace({ sessionId, lastPromptTokens, lastCompletionTokens, totalTokens: lastPromptTokens + lastCompletionTokens }, '[TOKEN] worker: all rounds done (raw usage)');
     localEmit('done', {
+      ...(messageId ? { messageId } : {}),
       sessionId,
       brainOsSession: undefined,
       inputTokens: lastPromptTokens,
