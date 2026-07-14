@@ -453,7 +453,7 @@ export async function undoLastAiInsert(): Promise<boolean> {
 export function getWelcomeContext(): { context: ReturnType<typeof extractNotebookContext>; personaName: string } {
   return {
     context: extractNotebookContext(),
-    personaName: getChatConfig().persona.name,
+    personaName: getChatConfig().persona?.name ?? 'Research Assistant',
   };
 }
 

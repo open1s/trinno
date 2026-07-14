@@ -1481,6 +1481,7 @@ function renderTodoBadges() {
 
     switch (msg.type) {
       case 'welcome':
+        console.log('[chat-webview] welcome received, personaName:', msg.personaName, 'sandboxEnabled:', msg.sandboxEnabled);
         personaName = msg.personaName || 'Research Assistant';
         const titleEl = document.querySelector('.chat-title');
         if (titleEl) titleEl.textContent = personaName;
@@ -1600,6 +1601,7 @@ function renderTodoBadges() {
 
       case 'models-loaded':
         models = msg.models || [];
+        console.log('[chat-webview] models-loaded:', models.length, 'models', models.map(m => m.name));
         modelLabel.textContent = selectedModel;
         renderModelMenu();
         break;

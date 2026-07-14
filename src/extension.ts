@@ -11,7 +11,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(vscode.commands.registerCommand('trinno-chat.openConfig', () => {
         const fs = require('fs');
-        const path = require('path');
         const tomlPath = CONFIG_TOML;
         if (!fs.existsSync(tomlPath)) {
             vscode.window.showWarningMessage(`Config file not found: ${tomlPath}`);

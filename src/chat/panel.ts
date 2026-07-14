@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { createModuleLogger } from '../bos/infrastructure/logging/logger';
 import { getChatConfig, openConfig } from './settings';
+import * as jsbos from '@open1s/jsbos';
 
 const log = createModuleLogger('chat-panel');
 import type { CompactMessage } from './agent';
@@ -125,7 +126,6 @@ function loadAgentsFromBosDir(): SkillInfo[] {
   return agents;
 }
 
-import * as jsbos from '@open1s/jsbos';
 import { downloadPaper, listDownloadedPapers } from '../papers/downloader';
 import { searchOpenAlex, hitToIdentifier } from '../papers/search';
 import type { SearchHit } from '../papers/search';
@@ -145,6 +145,7 @@ function loadModelsFromConfig(): ModelConfig[] {
     loader.discover();
     const configJson = loader.loadSync();
     const config = JSON.parse(configJson);
+    log.error({ cwd: process.cwd(), hasLlm: !!config.llm, llmKeys: config.llm ? Object.keys(config.llm) : [] }, 'DEBUG: loadModelsFromConfig: parsed config');
 
     const llmSection = config.llm;
     if (llmSection && typeof llmSection === 'object') {
@@ -160,6 +161,7 @@ function loadModelsFromConfig(): ModelConfig[] {
   } catch (e) {
     log.warn({ err: e }, 'Failed to load BOS config');
   }
+  log.error({ count: models.length, names: models.map(m => m.name) }, 'DEBUG: loadModelsFromConfig: result');
   return models;
 }
 
@@ -263,47 +265,64 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async sendWelcome(): Promise<void> {
-    if (!chatView) return;
+    try {
+      if (!chatView) {
+        log.error('DEBUG: sendWelcome: chatView is null, bailing');
+        return;
+      }
+      log.error('DEBUG: sendWelcome: starting');
 
-    if (!sessionStore) {
-      sessionStore = await migrateOldHistory();
-    }
+      if (!sessionStore) {
+        log.error('DEBUG: sendWelcome: before migrateOldHistory');
+        sessionStore = await migrateOldHistory();
+        log.error('DEBUG: sendWelcome: after migrateOldHistory');
+      }
 
-    if (!currentSession && sessionStore.activeSessionId) {
-      currentSession = await loadSession(sessionStore.activeSessionId);
-    }
+      if (!currentSession && sessionStore.activeSessionId) {
+        log.error('DEBUG: sendWelcome: before loadSession');
+        currentSession = await loadSession(sessionStore.activeSessionId);
+        log.error('DEBUG: sendWelcome: after loadSession');
+      }
 
-    if (!currentSession) {
-      const session = createSession();
-      sessionStore.sessions.push(sessionToMetadata(session));
-      sessionStore.activeSessionId = session.id;
-      await saveSessionStore(sessionStore);
-      await saveSession(session);
-      currentSession = session;
-    }
+      if (!currentSession) {
+        log.error('DEBUG: sendWelcome: creating session');
+        const session = createSession();
+        sessionStore.sessions.push(sessionToMetadata(session));
+        sessionStore.activeSessionId = session.id;
+        await saveSessionStore(sessionStore);
+        await saveSession(session);
+        currentSession = session;
+        log.error('DEBUG: sendWelcome: session created');
+      }
 
-    chatView.webview.postMessage({
-      type: 'welcome',
-      context: getWelcomeContext().context,
-      personaName: getChatConfig().persona.name,
-      slashCommands: allSlashCommands,
-      sessionId: currentSession.id,
-      sessionTitle: currentSession.title,
-      sessions: sessionStore.sessions,
-      isCompacted: currentSession.isCompacted,
-      sandboxEnabled: getChatConfig().sandbox.enabled,
-      tokenUsage: computeTokenUsage(),
-    } as any);
+      log.error('DEBUG: sendWelcome: before welcome postMessage');
+      chatView.webview.postMessage({
+        type: 'welcome',
+        context: getWelcomeContext().context,
+        personaName: getChatConfig().persona?.name ?? 'Research Assistant',
+        slashCommands: allSlashCommands,
+        sessionId: currentSession.id,
+        sessionTitle: currentSession.title,
+        sessions: sessionStore.sessions,
+        isCompacted: currentSession.isCompacted,
+        sandboxEnabled: getChatConfig().sandbox?.enabled ?? true,
+        tokenUsage: computeTokenUsage(),
+      } as any);
+      log.error('DEBUG: sendWelcome: after welcome postMessage');
 
-    chatView.webview.postMessage({
-      type: 'agents-loaded',
-      agents: [{ name: getChatConfig().persona.name, description: 'TRIZ research expert' }, ...loadedAgents.map(a => ({ name: a.name, description: a.description }))],
-    } as any);
+      log.error('DEBUG: sendWelcome: before agents-loaded postMessage');
+      chatView.webview.postMessage({
+        type: 'agents-loaded',
+        agents: [{ name: getChatConfig().persona?.name ?? 'Research Assistant', description: 'TRIZ research expert' }, ...loadedAgents.map(a => ({ name: a.name, description: a.description }))],
+      } as any);
+      log.error('DEBUG: sendWelcome: after agents-loaded postMessage');
 
-    chatView.webview.postMessage({
-      type: 'models-loaded',
-      models: loadedModels,
-    } as any);
+      log.error({ modelCount: loadedModels.length }, 'DEBUG: sendWelcome: posting models-loaded');
+      chatView.webview.postMessage({
+        type: 'models-loaded',
+        models: loadedModels,
+      } as any);
+      log.error('DEBUG: sendWelcome: after models-loaded postMessage');
 
     if (pendingMcpStatus) {
       chatView.webview.postMessage({ type: 'mcp-status', servers: pendingMcpStatus } as any);
@@ -330,6 +349,9 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       type: 'queue-state',
       queue: messageQueue,
     } as any);
+  } catch (e) {
+    log.error({ err: e, stack: (e as Error)?.stack }, 'DEBUG: sendWelcome: UNCAUGHT ERROR');
+  }
   }
 }
 
@@ -2494,7 +2516,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${getChatConfig().persona.name}</title>
+  <title>${getChatConfig().persona?.name ?? 'Research Assistant'}</title>
   <link rel="stylesheet" href="${styleUri}">
   <script src="${markedUri}"></script>
   <script src="${mermaidUri}"></script>
