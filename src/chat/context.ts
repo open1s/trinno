@@ -4,7 +4,7 @@ import { getChatConfig } from './settings';
 
 export function extractNotebookContext(): NotebookContext {
   const config = getChatConfig();
-  const maxChars = config.context.maxCharsPerCell;
+  const maxChars = (config as any)?.context?.max_chars_per_cell ?? 500;
 
   const editor = vscode.window.activeNotebookEditor;
   if (!editor) {

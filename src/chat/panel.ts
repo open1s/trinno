@@ -138,8 +138,6 @@ interface ModelConfig {
   apiKey?: string;
 }
 
-let globalModelConfig: ModelConfig | undefined;
-
 function loadModelsFromConfig(): ModelConfig[] {
   const models: ModelConfig[] = [];
   try {
@@ -147,14 +145,6 @@ function loadModelsFromConfig(): ModelConfig[] {
     loader.discover();
     const configJson = loader.loadSync();
     const config = JSON.parse(configJson);
-
-    const gm = config.global_model || {};
-    if (gm.model || gm.base_url || gm.api_key) {
-      globalModelConfig = { name: 'global' };
-      if (gm.model) { globalModelConfig.model = gm.model; globalModelConfig.description = gm.model; }
-      if (gm.base_url) globalModelConfig.baseUrl = gm.base_url;
-      if (gm.api_key) globalModelConfig.apiKey = gm.api_key;
-    }
 
     const llmSection = config.llm;
     if (llmSection && typeof llmSection === 'object') {
@@ -385,7 +375,7 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('trinno-chat.sendSelection', async () => {
       const config = getChatConfig();
-      const text = extractEditorSelection(config.context.maxCharsPerAttachment);
+      const text = extractEditorSelection(config.context?.max_chars_per_attachment ?? 2000);
       if (!text) {
         vscode.window.showInformationMessage('Select text in an editor first, then use this command.');
         return;
@@ -408,9 +398,9 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('trinno-chat.sendContext', async () => {
       const config = getChatConfig();
-      let ctx = extractNotebookCellSelection(config.context.maxCharsPerAttachment);
+      let ctx = extractNotebookCellSelection(config.context?.max_chars_per_attachment ?? 2000);
       if (!ctx) {
-        ctx = extractEditorSelection(config.context.maxCharsPerAttachment);
+        ctx = extractEditorSelection(config.context?.max_chars_per_attachment ?? 2000);
       }
       if (!ctx) {
         vscode.window.showInformationMessage('No text selected. Select text in an editor or notebook cell first.');
@@ -427,7 +417,7 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
       const nbEditor = vscode.window.activeNotebookEditor;
       if (nbEditor) {
         const config = getChatConfig();
-        const ctx = await extractWholeNotebook(nbEditor.notebook.uri, config.context.maxCharsPerAttachment);
+        const ctx = await extractWholeNotebook(nbEditor.notebook.uri, config.context?.max_chars_per_attachment ?? 2000);
         if (!ctx) {
           vscode.window.showInformationMessage('Notebook is empty.');
           return;
@@ -444,7 +434,7 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
         return;
       }
       const config = getChatConfig();
-      const ctx = await extractWholeFile(editor.document.uri, config.context.maxCharsPerAttachment);
+      const ctx = await extractWholeFile(editor.document.uri, config.context?.max_chars_per_attachment ?? 2000);
       if (!ctx) {
         vscode.window.showInformationMessage('Could not read file.');
         return;
@@ -885,8 +875,8 @@ async function handleChooseFile(): Promise<void> {
   const config = getChatConfig();
   const isNotebook = uri.fsPath.endsWith('.ipynb');
   const ctx = isNotebook
-    ? await extractWholeNotebook(uri, config.context.maxCharsPerAttachment)
-    : await extractWholeFile(uri, config.context.maxCharsPerAttachment);
+    ? await extractWholeNotebook(uri, config.context?.max_chars_per_attachment ?? 2000)
+    : await extractWholeFile(uri, config.context?.max_chars_per_attachment ?? 2000);
   if (!ctx) {
     vscode.window.showInformationMessage('Could not read file.');
     return;
@@ -1414,7 +1404,7 @@ interface ModelProfile {
 
 function getEffectiveModelName(): string {
   const config = getChatConfig();
-  return (selectedModelConfig?.model || config.model.name) ?? '';
+  return selectedModelConfig?.model ?? config.global_model?.model ?? '';
 }
 
 let _modelProfilesCache: Record<string, ModelProfile> | null = null;
@@ -1658,7 +1648,7 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
     currentSession?.brainOsSession,
     undefined,
     undefined,
-    selectedModelConfig || globalModelConfig,
+    selectedModelConfig,
     workspaceRoot,
   );
 }
@@ -1743,7 +1733,7 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
         if (chatView) chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
         reject(compactErr);
       },
-      selectedModelConfig || globalModelConfig,
+      selectedModelConfig,
     );
   });
 }
@@ -1929,7 +1919,7 @@ async function handleUserMessage(text: string): Promise<void> {
           } as ExtToWebViewMessage);
         }
       },
-      selectedModelConfig || globalModelConfig,
+      selectedModelConfig,
     );
     return;
   }
@@ -2154,7 +2144,7 @@ async function handleUserMessage(text: string): Promise<void> {
           } as ExtToWebViewMessage);
         }
       },
-      selectedModelConfig || globalModelConfig,
+      selectedModelConfig,
       getDefaultWorkspaceRoot(),
     );
     return;
@@ -2378,7 +2368,7 @@ async function handleUserMessage(text: string): Promise<void> {
             _autoCompactInProgress = false;
             if (chatView) chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
           },
-          selectedModelConfig || globalModelConfig,
+          selectedModelConfig,
         );
         return;
       }
@@ -2414,7 +2404,7 @@ async function handleUserMessage(text: string): Promise<void> {
     currentSession?.id,
     currentSession?.brainOsSession,
     skillContentForLLM,
-    selectedModelConfig || globalModelConfig,
+    selectedModelConfig,
     workspaceRoot,
   );
 }

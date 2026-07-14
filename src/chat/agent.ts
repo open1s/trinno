@@ -2,7 +2,8 @@ import * as childProcess from 'child_process';
 import * as nodePath from 'path';
 import { EventEmitter } from 'events';
 import type { ExtToWebViewMessage } from './messages';
-import { getChatConfig, getApiKey } from './settings';
+import { getChatConfig } from './settings';
+import { DEFAULT_TOOL_PERMISSIONS } from '../bos/infrastructure/config/toolPermissions';
 import { extractNotebookContext, insertCellAt, undoLastInsert, formatContextForPrompt } from './context';
 import { createModuleLogger } from '../bos/infrastructure/logging/logger';
 
@@ -249,21 +250,20 @@ export async function sendMessage(
 
   const ctx = extractNotebookContext();
   const config = getChatConfig();
-  const apiKey = await getApiKey();
 
-  const effectiveModel = modelConfig?.model || config.model.name;
-  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
-  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+  const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
+  const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
+  const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
 
   const payload = {
     type: 'chat',
     messageId,
     text,
     workspaceRoot: workspaceRoot || process.cwd(),
-    context: config.context.autoInject ? formatContextForPrompt(ctx) : null,
+    context: (config.context?.auto_inject ?? true) ? formatContextForPrompt(ctx) : null,
     persona: {
-      name: config.persona.name,
-      prompt: config.persona.prompt,
+      name: config.persona?.name ?? 'Research Assistant',
+      prompt: config.persona?.prompt ?? '',
     },
     systemSummary: systemSummary || undefined,
     apiKey: effectiveApiKey || undefined,
@@ -272,9 +272,9 @@ export async function sendMessage(
     skillContent: skillContent || undefined,
     model: effectiveModel,
     baseUrl: effectiveBaseUrl,
-    toolPermissions: config.tools.permissions,
-    mcpServers: config.mcp.servers,
-    sandboxEnabled: config.sandbox.enabled,
+    toolPermissions: config.tools?.permissions ?? DEFAULT_TOOL_PERMISSIONS,
+    mcpServers: config.mcp?.servers ?? [],
+    sandboxEnabled: config.sandbox?.enabled ?? true,
   };
 
   let dataBuffer = '';
@@ -461,16 +461,15 @@ export async function initializeAgent(
 	workspaceRoot?: string
 ): Promise<void> {
 	await ensureWorker();
-  const apiKey = await getApiKey();
   const config = getChatConfig();
   log.debug({ workspaceRoot }, 'sending init message to worker');
   if (workerProcess?.stdin) {
     workerProcess.stdin.write(JSON.stringify({
       type: 'init',
       workspaceRoot,
-      apiKey: apiKey || undefined,
-      toolPermissions: config.tools.permissions,
-      sandboxEnabled: config.sandbox.enabled,
+      apiKey: config.global_model?.api_key ?? undefined,
+      toolPermissions: config.tools?.permissions ?? DEFAULT_TOOL_PERMISSIONS,
+      sandboxEnabled: config.sandbox?.enabled ?? true,
     }) + '\n');
   }
 }
@@ -519,19 +518,18 @@ export async function sendCompactRequest(
   }
 
   const config = getChatConfig();
-  const apiKey = await getApiKey();
 
-  const effectiveModel = modelConfig?.model || config.model.name;
-  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
-  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+  const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
+  const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
+  const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
 
   const payload = {
     type: 'compact',
     messages,
     systemSummary: systemSummary || undefined,
     persona: {
-      name: config.persona.name,
-      prompt: config.persona.prompt,
+      name: config.persona?.name ?? 'Research Assistant',
+      prompt: config.persona?.prompt ?? '',
     },
     apiKey: effectiveApiKey || undefined,
     model: effectiveModel,
@@ -612,11 +610,10 @@ export async function sendSlashRequest(
   }
 
   const config = getChatConfig();
-  const apiKey = await getApiKey();
 
-  const effectiveModel = modelConfig?.model || config.model.name;
-  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
-  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+  const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
+  const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
+  const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
 
   const payload = {
     type: 'slash',
@@ -688,18 +685,17 @@ export async function sendPaperRequest(
   }
 
   const config = getChatConfig();
-  const apiKey = await getApiKey();
 
-  const effectiveModel = modelConfig?.model || config.model.name;
-  const effectiveBaseUrl = modelConfig?.baseUrl || config.model.baseUrl;
-  const effectiveApiKey = modelConfig?.apiKey || apiKey;
+  const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
+  const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
+  const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
 
   const payload = {
     type: 'paper',
     prompt,
     persona: {
-      name: config.persona.name,
-      prompt: config.persona.prompt,
+      name: config.persona?.name ?? 'Research Assistant',
+      prompt: config.persona?.prompt ?? '',
     },
     apiKey: effectiveApiKey || undefined,
     model: effectiveModel,
