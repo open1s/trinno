@@ -3,87 +3,34 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as toml from 'toml';
-import type { ToolPermissionConfig, McpServerConfig } from '../bos/infrastructure/config/toolPermissions';
 import { DEFAULT_TOOL_PERMISSIONS } from '../bos/infrastructure/config/toolPermissions';
-
-interface TrinnoTomlConfig {
-  active_llm?: string;
-  global_model?: { model?: string; base_url?: string; api_key?: string };
-  llm?: Record<string, { model?: string; base_url?: string; api_key?: string }>;
-  persona?: { name?: string; prompt?: string };
-  streaming?: { show_thinking?: boolean; thinking_flush_interval?: number };
-  context?: Record<string, unknown>;
-  history?: { enabled?: boolean; max_messages?: number };
-  tools?: { permissions?: ToolPermissionConfig };
-  sandbox?: { enabled?: boolean };
-  mcp?: { servers?: McpServerConfig[] };
-}
-
-export interface ChatConfig {
-  model: {
-    provider: 'openai' | 'anthropic' | 'openai-compatible';
-    name: string;
-    apiKey: string;
-    baseUrl: string;
-  };
-  persona: {
-    name: string;
-    prompt: string;
-  };
-  streaming: {
-    showThinking: boolean;
-    thinkingFlushInterval: number;
-  };
-  context: {
-    autoInject: boolean;
-    maxCharsPerCell: number;
-    maxTotalTokens: number;
-    maxCharsPerAttachment: number;
-  };
-  history: {
-    enabled: boolean;
-    maxMessages: number;
-  };
-  tools: {
-    permissions: ToolPermissionConfig;
-  };
-  sandbox: {
-    enabled: boolean;
-  };
-  mcp: {
-    servers: McpServerConfig[];
-  };
-}
 
 const TOML_PATH = path.join(os.homedir(), '.bos', 'conf', 'config.toml');
 
-function readToml(filePath: string): TrinnoTomlConfig | null {
+function readToml(filePath: string): Record<string, unknown> | null {
   try {
-    const expanded = filePath.startsWith('~')
-      ? path.join(os.homedir(), filePath.slice(1))
-      : filePath;
-    if (!fs.existsSync(expanded)) return null;
-    return toml.parse(fs.readFileSync(expanded, 'utf-8')) as unknown as TrinnoTomlConfig;
+    if (!fs.existsSync(filePath)) return null;
+    return toml.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-export function getChatConfig(filePath?: string): ChatConfig {
-  const data = readToml(filePath || TOML_PATH);
+export function getChatConfig() {
+  const d = (readToml(TOML_PATH) ?? {}) as any;
 
-  const globalModel = data?.global_model;
-  const llm = data?.llm;
-  const activeLlm = data?.active_llm ?? '';
+  const globalModel = d.global_model;
+  const llm = d.llm;
+  const activeLlm = d.active_llm ?? '';
   const activeModel = activeLlm && llm?.[activeLlm] ? llm[activeLlm] : globalModel;
 
-  const persona = data?.persona ?? {};
-  const streaming = data?.streaming ?? {};
-  const context = data?.context ?? {};
-  const history = data?.history ?? {};
-  const tools = data?.tools ?? {};
-  const sandbox = data?.sandbox ?? {};
-  const mcp = data?.mcp ?? {};
+  const persona = d.persona ?? {};
+  const streaming = d.streaming ?? {};
+  const context = d.context ?? {};
+  const history = d.history ?? {};
+  const tools = d.tools ?? {};
+  const sandbox = d.sandbox ?? {};
+  const mcp = d.mcp ?? {};
 
   return {
     model: {
@@ -93,40 +40,41 @@ export function getChatConfig(filePath?: string): ChatConfig {
       baseUrl: activeModel?.base_url ?? '',
     },
     persona: {
-      name: (persona as any)?.name ?? 'Research Assistant',
-      prompt: (persona as any)?.prompt ?? '',
+      name: persona.name ?? 'Research Assistant',
+      prompt: persona.prompt ?? '',
     },
     streaming: {
-      showThinking: (streaming as any)?.show_thinking ?? true,
-      thinkingFlushInterval: (streaming as any)?.thinking_flush_interval ?? 200,
+      showThinking: streaming.show_thinking ?? true,
+      thinkingFlushInterval: streaming.thinking_flush_interval ?? 200,
     },
     context: {
-      autoInject: (context as any)?.auto_inject ?? true,
-      maxCharsPerCell: (context as any)?.max_chars_per_cell ?? 500,
-      maxTotalTokens: (context as any)?.max_total_tokens ?? 4000,
-      maxCharsPerAttachment: (context as any)?.max_chars_per_attachment ?? 2000,
+      autoInject: context.auto_inject ?? true,
+      maxCharsPerCell: context.max_chars_per_cell ?? 500,
+      maxTotalTokens: context.max_total_tokens ?? 4000,
+      maxCharsPerAttachment: context.max_chars_per_attachment ?? 2000,
     },
     history: {
-      enabled: (history as any)?.enabled ?? true,
-      maxMessages: (history as any)?.max_messages ?? 100,
+      enabled: history.enabled ?? true,
+      maxMessages: history.max_messages ?? 100,
     },
     tools: {
-      permissions: (tools as any)?.permissions ?? DEFAULT_TOOL_PERMISSIONS,
+      permissions: d.tools?.permissions ?? DEFAULT_TOOL_PERMISSIONS,
     },
     sandbox: {
-      enabled: (sandbox as any)?.enabled ?? true,
+      enabled: d.sandbox?.enabled ?? true,
     },
     mcp: {
-      servers: (mcp as any)?.servers ?? [],
+      servers: d.mcp?.servers ?? [],
     },
   };
 }
 
-export async function getApiKey(filePath?: string): Promise<string> {
-  const data = readToml(filePath || TOML_PATH);
-  const globalModel = data?.global_model;
-  const llm = data?.llm;
-  const activeLlm = data?.active_llm ?? '';
+export async function getApiKey(): Promise<string> {
+  const d = readToml(TOML_PATH) as any;
+  if (!d) return '';
+  const globalModel = d.global_model;
+  const llm = d.llm;
+  const activeLlm = d.active_llm ?? '';
   const activeModel = activeLlm && llm?.[activeLlm] ? llm[activeLlm] : globalModel;
 
   if (activeModel?.api_key) return activeModel.api_key;

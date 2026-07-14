@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { createModuleLogger } from '../bos/infrastructure/logging/logger';
-import { getChatConfig } from './settings';
+import { getChatConfig, openConfig } from './settings';
 
 const log = createModuleLogger('chat-panel');
 import type { CompactMessage } from './agent';
@@ -829,7 +829,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
       selectedModelConfig = loadedModels.find(m => m.name === msg.model);
     }
   } else if (msg.type === 'openSettings') {
-    vscode.commands.executeCommand('workbench.action.openSettings', 'chat.');
+    openConfig();
   } else if (msg.type === 'tool-approval') {
     sendToolApproval(msg.id, msg.approved, msg.remember);
   } else if (msg.type === 'rate-limited-retry') {
@@ -1974,9 +1974,11 @@ async function handleUserMessage(text: string): Promise<void> {
     if (!arg) {
       const count = currentSession.messages.length;
       const estimatedTokens = Math.round(currentSession.messages.reduce((sum, m) => sum + m.content.length + m.reasoning.length, 0) / 4);
-      chatView.webview.postMessage({ type: 'history-message', message: createAssistantMessageForText(
-        `## Session Stats\n\n**Messages:** ${count}\n**Estimated tokens:** ~${estimatedTokens}\n\nUse \`/recover keep <N>\` to keep the last N message pairs and discard older ones.`,
-      ) } as any);
+      chatView.webview.postMessage({
+        type: 'history-message', message: createAssistantMessageForText(
+          `## Session Stats\n\n**Messages:** ${count}\n**Estimated tokens:** ~${estimatedTokens}\n\nUse \`/recover keep <N>\` to keep the last N message pairs and discard older ones.`,
+        )
+      } as any);
       return;
     }
 
@@ -2089,7 +2091,7 @@ async function handleUserMessage(text: string): Promise<void> {
     await sendSlashRequest(
       assistantMsg.id,
       text,
-(tokenMsg) => {
+      (tokenMsg) => {
         if (chatView) chatView.webview.postMessage(tokenMsg);
         if (currentStreamingMsg && tokenMsg.type === 'token') {
           if (tokenMsg.tokenType === 'ReasoningContent') {
@@ -2126,7 +2128,7 @@ async function handleUserMessage(text: string): Promise<void> {
           if (goal && goal.status === 'active') {
             processQueue();
             setImmediate(() => {
-              handleUserMessage(`Decompose this goal into sub-tasks and acceptance criteria. Use todowrite to track each sub-task with embedded acceptance criteria. For each sub-task, define what observable artifact proves it done (file written, test passes, code compiles, output matches spec). Then execute one sub-task per turn, verifying each criterion before marking it verified. Only call update_goal complete when EVERY sub-task is verified.\n\nGoal: ${goal.text}`).catch(() => {});
+              handleUserMessage(`Decompose this goal into sub-tasks and acceptance criteria. Use todowrite to track each sub-task with embedded acceptance criteria. For each sub-task, define what observable artifact proves it done (file written, test passes, code compiles, output matches spec). Then execute one sub-task per turn, verifying each criterion before marking it verified. Only call update_goal complete when EVERY sub-task is verified.\n\nGoal: ${goal.text}`).catch(() => { });
             });
             return;
           }
@@ -2210,10 +2212,10 @@ async function handleUserMessage(text: string): Promise<void> {
 
   const assistantMsg = createAssistantMessage();
   currentStreamingId = assistantMsg.id;
-currentStreamingMsg = assistantMsg;
-    _streamingPromptTokens = 0;
-    _streamingCompletionTokens = 0;
-    isGenerating = true;
+  currentStreamingMsg = assistantMsg;
+  _streamingPromptTokens = 0;
+  _streamingCompletionTokens = 0;
+  isGenerating = true;
 
   chatView.webview.postMessage({ type: 'streaming-start', messageId: assistantMsg.id } as any);
   currentSession.messages.push(assistantMsg);
@@ -2294,7 +2296,7 @@ currentStreamingMsg = assistantMsg;
         if (accTotal > 0) {
           const threshold = getAutoCompactThreshold(getEffectiveModelName());
           if (threshold > 0 && accTotal >= threshold) {
-            triggerAutoCompactOnThreshold(lastUserMessageText || '').catch(() => {});
+            triggerAutoCompactOnThreshold(lastUserMessageText || '').catch(() => { });
             return;
           }
         }
