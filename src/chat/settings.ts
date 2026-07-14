@@ -1,6 +1,29 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import * as toml from 'toml';
 import type { ToolPermissionConfig, McpServerConfig } from '../bos/infrastructure/config/toolPermissions';
 import { DEFAULT_TOOL_PERMISSIONS } from '../bos/infrastructure/config/toolPermissions';
+
+interface TrinnoTomlConfig {
+  global_model?: { model?: string; base_url?: string; api_key?: string };
+  llm?: Record<string, { model?: string; base_url?: string; api_key?: string }>;
+  proxy?: { http_proxy?: string; https_proxy?: string };
+  tavily?: { api_key?: string };
+  agent?: { max_iterations?: number; timeout_seconds?: number };
+  logging?: { level?: string; console?: boolean };
+  bus?: { max_queue_size?: number };
+  skills_registry?: { skills?: Array<Record<string, unknown>> };
+  persona?: { name?: string; prompt?: string };
+  streaming?: { show_thinking?: boolean; thinking_flush_interval?: number };
+  context?: Record<string, unknown>;
+  history?: { enabled?: boolean; max_messages?: number };
+  tools?: { permissions?: ToolPermissionConfig };
+  sandbox?: { enabled?: boolean };
+  mcp?: { servers?: McpServerConfig[] };
+  papers?: { output_dir?: string; unpaywall_email?: string };
+}
 
 export interface ChatConfig {
   model: {
@@ -38,185 +61,241 @@ export interface ChatConfig {
   };
 }
 
-export const DEFAULT_CONFIG: ChatConfig = {
-  model: {
-    provider: 'openai',
-    name: 'gpt-4o',
-    apiKey: '',
-    baseUrl: 'https://api.openai.com/v1',
-  },
-  persona: {
-    name: 'Research Master',
-    prompt: 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information. All tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output). For large files: read in 500+ line chunks with offset/limit, never tiny slices.',
-  },
-  streaming: {
-    showThinking: true,
-    thinkingFlushInterval: 100,
-  },
-  context: {
-    autoInject: true,
-    maxCharsPerCell: 500,
-    maxTotalTokens: 4000,
-    maxCharsPerAttachment: 2000,
-  },
-  history: {
-    enabled: true,
-    maxMessages: 100,
-  },
-  tools: {
-    permissions: DEFAULT_TOOL_PERMISSIONS,
-  },
-  sandbox: {
-    enabled: true,
-  },
-  mcp: {
-    servers: [],
-  },
-};
+export const TOML_PATH = path.join(os.homedir(), '.bos', 'conf', 'config.toml');
+const CONFIG_NS = 'chat.trinno';
 
-const CONFIG_NS = 'chat';
-const API_KEY_SECRET = 'chat.model.apiKey';
+const SKIP_TOML_KEYS = new Set(['name', 'version', 'general', 'keybinding', 'proxy']);
+
+function expandTilde(p: string): string {
+  return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+function readToml(filePath: string): TrinnoTomlConfig | null {
+  try {
+    const expanded = expandTilde(filePath);
+    if (!fs.existsSync(expanded)) return null;
+    return toml.parse(fs.readFileSync(expanded, 'utf-8')) as unknown as TrinnoTomlConfig;
+  } catch {
+    return null;
+  }
+}
+
+// Strip api_key from an object recursively
+function stripApiKeys(obj: unknown): unknown {
+  if (Array.isArray(obj)) {
+    return obj.map(stripApiKeys);
+  }
+  if (obj && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (k !== 'api_key') {
+        result[k] = stripApiKeys(v);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
+const VS_CODE_SECTIONS = [
+  'global_model', 'active_llm', 'llm', 'persona', 'streaming', 'context',
+  'history', 'tools', 'sandbox', 'mcp', 'papers',
+  'agent', 'logging', 'tavily', 'bus', 'skills_registry',
+];
+
+export function syncTomlToSettings(tomlPath?: string): void {
+  const tPath = tomlPath || TOML_PATH;
+  const data = readToml(tPath);
+  if (!data) return;
+
+  const vsConfig = vscode.workspace.getConfiguration(CONFIG_NS);
+
+  for (const section of VS_CODE_SECTIONS) {
+    const val = (data as Record<string, unknown>)[section];
+    if (val !== undefined) {
+      // Strip api_key before writing to VS Code settings
+      vsConfig.update(section, stripApiKeys(val), vscode.ConfigurationTarget.Global);
+    }
+  }
+}
+
+export function syncSettingsToToml(tomlPath?: string): void {
+  const tPath = tomlPath || TOML_PATH;
+  const vsConfig = vscode.workspace.getConfiguration(CONFIG_NS);
+  const existing: Record<string, unknown> = (readToml(tPath) as Record<string, unknown> | null) ?? {};
+
+  for (const section of VS_CODE_SECTIONS) {
+    const val = vsConfig.inspect(section);
+    if (val?.globalValue !== undefined) {
+      (existing as Record<string, unknown>)[section] = val.globalValue;
+    }
+  }
+
+  const outDir = path.dirname(expandTilde(tPath));
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+  fs.writeFileSync(expandTilde(tPath), toTomlString(existing), 'utf-8');
+}
+
+export function initTomlSync(context: vscode.ExtensionContext, tomlPath?: string): void {
+  const tPath = tomlPath || TOML_PATH;
+  const expanded = expandTilde(tPath);
+  const outDir = path.dirname(expanded);
+
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+
+  if (!fs.existsSync(expanded)) {
+    syncSettingsToToml(tPath);
+  } else {
+    syncTomlToSettings(tPath);
+  }
+
+  if (fs.existsSync(expanded)) {
+    const watcher = vscode.workspace.createFileSystemWatcher(expanded);
+    watcher.onDidChange(() => syncTomlToSettings(tPath));
+    context.subscriptions.push(watcher);
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration(CONFIG_NS)) {
+        syncSettingsToToml(tPath);
+      }
+    })
+  );
+}
+
+function toTomlString(obj: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (SKIP_TOML_KEYS.has(key)) continue;
+    if (value === null || value === undefined) continue;
+
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
+      if (entries.length === 0) continue;
+
+      const hasNested = entries.some(([, v]) =>
+        typeof v === 'object' && v !== null && !Array.isArray(v)
+      );
+      const hasArraysOfTables = entries.some(([, v]) =>
+        Array.isArray(v) && v.length > 0 && typeof v[0] === 'object'
+      );
+
+      if (hasArraysOfTables) {
+        for (const [subKey, subVal] of entries) {
+          if (Array.isArray(subVal) && subVal.length > 0 && typeof subVal[0] === 'object') {
+            for (const item of subVal as Record<string, unknown>[]) {
+              lines.push(`[[${key}.${subKey}]]`);
+              for (const [ik, iv] of Object.entries(item)) {
+                lines.push(`${ik} = ${tomlValue(iv)}`);
+              }
+            }
+          } else {
+            lines.push(`${subKey} = ${tomlValue(subVal)}`);
+          }
+        }
+      } else if (hasNested) {
+        for (const [subKey, subVal] of entries) {
+          if (typeof subVal === 'object' && subVal !== null) {
+            lines.push(`[${key}.${subKey}]`);
+            for (const [sk, sv] of Object.entries(subVal as Record<string, unknown>)) {
+              lines.push(`${sk} = ${tomlValue(sv)}`);
+            }
+          } else {
+            lines.push(`${subKey} = ${tomlValue(subVal)}`);
+          }
+        }
+      } else {
+        lines.push(`[${key}]`);
+        for (const [subKey, subVal] of entries) {
+          lines.push(`${subKey} = ${tomlValue(subVal)}`);
+        }
+      }
+    } else {
+      lines.push(`${key} = ${tomlValue(value)}`);
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
+function tomlValue(v: unknown): string {
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (Array.isArray(v)) return JSON.stringify(v);
+  if (v === true) return 'true';
+  if (v === false) return 'false';
+  return String(v);
+}
 
 export function getChatConfig(): ChatConfig {
-  const cfg = vscode.workspace.getConfiguration(CONFIG_NS);
+  const data = readToml(TOML_PATH);
+
+  const globalModel = data?.global_model;
+  const llm = data?.llm;
+  const activeLlm = ''; // not stored in TOML yet, could add
+  const activeModel = activeLlm && llm?.[activeLlm] ? llm[activeLlm] : globalModel;
+
+  const persona = data?.persona ?? {};
+  const streaming = data?.streaming ?? {};
+  const context = data?.context ?? {};
+  const history = data?.history ?? {};
+  const tools = data?.tools ?? {};
+  const sandbox = data?.sandbox ?? {};
+  const mcp = data?.mcp ?? {};
+
   return {
     model: {
-      provider: cfg.get<'openai' | 'anthropic' | 'openai-compatible'>('model.provider', DEFAULT_CONFIG.model.provider),
-      name: cfg.get<string>('model.name', DEFAULT_CONFIG.model.name),
-      apiKey: '', // loaded from secrets
-      baseUrl: cfg.get<string>('model.baseUrl', DEFAULT_CONFIG.model.baseUrl),
+      provider: 'openai',
+      name: activeModel?.model ?? '',
+      apiKey: activeModel?.api_key ?? '',
+      baseUrl: activeModel?.base_url ?? '',
     },
     persona: {
-      name: cfg.get<string>('persona.name', DEFAULT_CONFIG.persona.name),
-      prompt: cfg.get<string>('persona.prompt', DEFAULT_CONFIG.persona.prompt),
+      name: (persona as any)?.name ?? 'Research Assistant',
+      prompt: (persona as any)?.prompt ?? '',
     },
     streaming: {
-      showThinking: cfg.get<boolean>('streaming.showThinking', DEFAULT_CONFIG.streaming.showThinking),
-      thinkingFlushInterval: cfg.get<number>('streaming.thinkingFlushInterval', DEFAULT_CONFIG.streaming.thinkingFlushInterval),
+      showThinking: (streaming as any)?.show_thinking ?? true,
+      thinkingFlushInterval: (streaming as any)?.thinking_flush_interval ?? 200,
     },
     context: {
-      autoInject: cfg.get<boolean>('context.autoInject', DEFAULT_CONFIG.context.autoInject),
-      maxCharsPerCell: cfg.get<number>('context.maxCharsPerCell', DEFAULT_CONFIG.context.maxCharsPerCell),
-      maxTotalTokens: cfg.get<number>('context.maxTotalTokens', DEFAULT_CONFIG.context.maxTotalTokens),
-      maxCharsPerAttachment: cfg.get<number>('context.maxCharsPerAttachment', DEFAULT_CONFIG.context.maxCharsPerAttachment),
+      autoInject: (context as any)?.auto_inject ?? true,
+      maxCharsPerCell: (context as any)?.max_chars_per_cell ?? 500,
+      maxTotalTokens: (context as any)?.max_total_tokens ?? 4000,
+      maxCharsPerAttachment: (context as any)?.max_chars_per_attachment ?? 2000,
     },
     history: {
-      enabled: cfg.get<boolean>('history.enabled', DEFAULT_CONFIG.history.enabled),
-      maxMessages: cfg.get<number>('history.maxMessages', DEFAULT_CONFIG.history.maxMessages),
+      enabled: (history as any)?.enabled ?? true,
+      maxMessages: (history as any)?.max_messages ?? 100,
     },
     tools: {
-      permissions: cfg.get<ToolPermissionConfig>('tools.permissions', DEFAULT_CONFIG.tools.permissions),
+      permissions: (tools as any)?.permissions ?? DEFAULT_TOOL_PERMISSIONS,
     },
     sandbox: {
-      enabled: cfg.get<boolean>('tools.terminal.sandbox.enabled', true),
+      enabled: (sandbox as any)?.enabled ?? true,
     },
     mcp: {
-      servers: cfg.get<McpServerConfig[]>('mcp.servers', DEFAULT_CONFIG.mcp.servers),
+      servers: (mcp as any)?.servers ?? [],
     },
   };
 }
 
 export async function getApiKey(): Promise<string> {
+  const data = readToml(TOML_PATH);
+  const globalModel = data?.global_model;
+  const llm = data?.llm;
+  const activeModel = globalModel; // fallback to global_model
+
+  if (activeModel?.api_key) return activeModel.api_key;
+
   try {
     const secretStore = (vscode.env as any).secrets;
-    const secret = await secretStore?.get(API_KEY_SECRET);
+    const secret = await secretStore?.get('chat.model.apiKey');
     return secret || '';
   } catch {
     return '';
   }
-}
-
-export async function setApiKey(key: string): Promise<void> {
-  try {
-    const secretStore = (vscode.env as any).secrets;
-    await secretStore?.store(API_KEY_SECRET, key);
-  } catch {
-    // secrets not available
-  }
-}
-
-export function getConfigSchema(): Record<string, unknown> {
-  return {
-    [`${CONFIG_NS}.model.provider`]: {
-      type: 'string',
-      enum: ['openai', 'anthropic', 'openai-compatible'],
-      default: DEFAULT_CONFIG.model.provider,
-      description: 'AI model provider',
-    },
-    [`${CONFIG_NS}.model.name`]: {
-      type: 'string',
-      default: DEFAULT_CONFIG.model.name,
-      description: 'Model name (e.g., gpt-4o, claude-sonnet-4-20250514)',
-    },
-    [`${CONFIG_NS}.model.baseUrl`]: {
-      type: 'string',
-      default: DEFAULT_CONFIG.model.baseUrl,
-      description: 'API base URL (for openai-compatible providers)',
-    },
-    [`${CONFIG_NS}.model.apiKey`]: {
-      type: 'string',
-      default: '',
-      description: 'API key (stored in VS Code secrets)',
-    },
-    [`${CONFIG_NS}.persona.name`]: {
-      type: 'string',
-      default: DEFAULT_CONFIG.persona.name,
-      description: 'Agent display name',
-    },
-    [`${CONFIG_NS}.persona.prompt`]: {
-      type: 'string',
-      default: DEFAULT_CONFIG.persona.prompt,
-      description: 'System prompt for the agent',
-    },
-    [`${CONFIG_NS}.streaming.showThinking`]: {
-      type: 'boolean',
-      default: DEFAULT_CONFIG.streaming.showThinking,
-      description: 'Show reasoning/thinking content in chat',
-    },
-    [`${CONFIG_NS}.streaming.thinkingFlushInterval`]: {
-      type: 'number',
-      default: DEFAULT_CONFIG.streaming.thinkingFlushInterval,
-      description: 'How many characters to buffer before flushing thinking content (200 = flush every 200 chars)',
-    },
-    [`${CONFIG_NS}.context.autoInject`]: {
-      type: 'boolean',
-      default: DEFAULT_CONFIG.context.autoInject,
-      description: 'Auto-inject notebook context at conversation start',
-    },
-    [`${CONFIG_NS}.context.maxCharsPerCell`]: {
-      type: 'number',
-      default: DEFAULT_CONFIG.context.maxCharsPerCell,
-      description: 'Max characters per cell to include in notebook context',
-    },
-    [`${CONFIG_NS}.context.maxTotalTokens`]: {
-      type: 'number',
-      default: DEFAULT_CONFIG.context.maxTotalTokens,
-      description: 'Max total tokens for notebook context',
-    },
-    [`${CONFIG_NS}.context.maxCharsPerAttachment`]: {
-      type: 'number',
-      default: DEFAULT_CONFIG.context.maxCharsPerAttachment,
-      description: 'Max characters to inline before switching to file reference mode',
-    },
-    [`${CONFIG_NS}.history.enabled`]: {
-      type: 'boolean',
-      default: DEFAULT_CONFIG.history.enabled,
-      description: 'Persist chat history across VS Code sessions',
-    },
-    [`${CONFIG_NS}.history.maxMessages`]: {
-      type: 'number',
-      default: DEFAULT_CONFIG.history.maxMessages,
-      description: 'Max messages to keep in history',
-    },
-    [`${CONFIG_NS}.tools.permissions`]: {
-      type: 'object',
-      default: DEFAULT_CONFIG.tools.permissions,
-      description: 'Tool permission configuration. Values: "allow" (auto-execute), "deny" (blocked), "ask" (requires approval)',
-    },
-    [`${CONFIG_NS}.mcp.servers`]: {
-      type: 'array',
-      default: [],
-      description: 'MCP servers to connect. Each server: { name, type: "stdio"|"http", command?, args?, url? }',
-    },
-  };
 }

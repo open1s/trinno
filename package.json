@@ -125,162 +125,177 @@
         "when": "editorTextFocus || !editorTextFocus"
       }
     ],
-    "chatModel": {
-      "title": "Chat Model",
-      "properties": {
-        "chat.model.provider": {
-          "type": "string",
-          "enum": [
-            "openai",
-            "anthropic",
-            "openai-compatible"
-          ],
-          "default": "openai",
-          "description": "AI model provider"
-        },
-        "chat.model.name": {
-          "type": "string",
-          "default": "gpt-4o",
-          "description": "Model name (e.g., gpt-4o, claude-sonnet-4-20250514)"
-        },
-        "chat.model.baseUrl": {
-          "type": "string",
-          "default": "https://api.openai.com/v1",
-          "description": "API base URL (for openai-compatible providers)"
-        },
-        "chat.model.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key (stored in VS Code secrets)"
-        }
-      }
-    },
-    "chatPersona": {
-      "title": "Chat Persona",
-      "properties": {
-        "chat.persona.name": {
-          "type": "string",
-          "default": "Research Assistant",
-          "description": "Agent display name"
-        },
-        "chat.persona.prompt": {
-          "type": "string",
-          "default": "You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information.`;",
-          "description": "System prompt for the agent"
-        }
-      }
-    },
-    "chatStreaming": {
-      "title": "Chat Streaming",
-      "properties": {
-        "chat.streaming.showThinking": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show reasoning/thinking content in chat"
-        },
-        "chat.streaming.thinkingFlushInterval": {
-          "type": "number",
-          "default": 200,
-          "description": "How many characters to buffer before flushing thinking content"
-        }
-      }
-    },
-    "chatContext": {
-      "title": "Chat Context",
-      "properties": {
-        "chat.context.autoInject": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-inject notebook context at conversation start"
-        },
-        "chat.context.maxCharsPerCell": {
-          "type": "number",
-          "default": 500,
-          "description": "Max characters per cell to include in notebook context"
-        },
-        "chat.context.maxTotalTokens": {
-          "type": "number",
-          "default": 4000,
-          "description": "Max total tokens for notebook context"
-        }
-      }
-    },
-    "chatHistory": {
-      "title": "Chat History",
-      "properties": {
-        "chat.history.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Persist chat history across VS Code sessions"
-        },
-        "chat.history.maxMessages": {
-          "type": "number",
-          "default": 100,
-          "description": "Max messages to keep in history"
-        }
-      }
-    },
-    "chatTools": {
-      "title": "Chat Tools",
-      "properties": {
-        "chat.tools.permissions": {
+    "configuration": [
+      {
+        "title": "Trinno",
+        "properties": {
+        "chat.trinno.global_model": {
           "type": "object",
-          "default": {
-            "read_file": "allow",
-            "list_dir": "allow",
-            "grep_search": "allow",
-            "glob_files": "allow",
-            "ast_grep": "allow",
-            "write_file": "allow",
-            "load_skill": "allow",
-            "edit_file": "allow",
-            "ast_edit": "allow",
-            "bash": "ask",
-            "triz_analyze_contradiction": "allow",
-            "triz_lookup_matrix": "allow",
-            "triz_get_principle": "allow",
-            "triz_search_principles": "allow",
-            "triz_list_principles": "allow",
-            "triz_list_parameters": "allow",
-            "triz_analyze_su_field": "allow",
-            "triz_evaluate_ideality": "allow",
-            "triz_ai_analyze": "allow",
-            "triz_ai_insight": "allow",
-            "triz_trigger_search_patents": "allow",
-            "triz_trigger_search_papers": "allow",
-            "triz_trigger_search_prior_art": "allow",
-            "triz_get_cached_patents": "allow",
-            "triz_get_cached_papers": "allow",
-            "triz_get_cached_prior_art": "allow",
-            "triz_list_cached_searches": "allow",
-            "triz_analyze_s_curve": "allow",
-            "triz_extract_s_curve_data": "allow",
-            "triz_enrich_s_curve": "allow"
+          "default": { "model": "", "base_url": "", "api_key": "" },
+          "properties": {
+            "model": { "type": "string", "default": "" },
+            "base_url": { "type": "string", "default": "" },
+            "api_key": { "type": "string", "default": "" }
           },
-          "description": "Tool permission configuration. Values: \"allow\" (auto-execute), \"deny\" (blocked), \"ask\" (requires approval)"
-        }
-      }
-    },
-    "chatPapers": {
-      "title": "Paper Downloads",
-      "properties": {
-        "chat.papers.outputDir": {
+          "description": "Default LLM model configuration (from TOML [global_model])"
+        },
+        "chat.trinno.active_llm": {
           "type": "string",
           "default": "",
-          "description": "Override directory for downloaded PDFs. Empty = <workspace>/.trinno/papers/ or ~/.trinno/papers/ when no workspace is open. Tilde (~) is expanded."
+          "description": "Key of the active named LLM profile from [llm.*]. Empty = use global_model"
         },
-        "chat.trpWorkspace": {
-          "type": "string",
-          "default": "",
-          "description": "Absolute path to the TRIZ Research Project (TRP) workspace root. Used for /patent and /paper writes. Empty = auto-detect (first sub-folder with 3+ phase directories among 01_Discover, 02_TRL, 03_Analyze, 04_Synthesize, 05_Deliver, 06_References, 07_Patent; falls back to first workspace folder). Tilde (~) is expanded."
+        "chat.trinno.llm": {
+          "type": "object",
+          "default": {},
+          "description": "Named LLM profiles (from TOML [llm.*]). Each key is a profile name with model/base_url/api_key fields."
         },
-        "chat.papers.unpaywallEmail": {
-          "type": "string",
-          "default": "trinno-research@example.com",
-          "description": "Email registered with Unpaywall (free, required by their API). Polite User-Agent."
+        "chat.trinno.persona": {
+          "type": "object",
+          "default": { "name": "Research Assistant", "prompt": "" },
+          "properties": {
+            "name": { "type": "string", "default": "Research Assistant" },
+            "prompt": { "type": "string", "default": "" }
+          },
+          "description": "Agent persona configuration"
+        },
+        "chat.trinno.streaming": {
+          "type": "object",
+          "default": { "show_thinking": true, "thinking_flush_interval": 200 },
+          "properties": {
+            "show_thinking": { "type": "boolean", "default": true },
+            "thinking_flush_interval": { "type": "number", "default": 200 }
+          },
+          "description": "Response streaming settings"
+        },
+        "chat.trinno.context": {
+          "type": "object",
+          "default": { "auto_inject": true, "max_chars_per_cell": 500, "max_total_tokens": 4000, "max_chars_per_attachment": 2000 },
+          "properties": {
+            "auto_inject": { "type": "boolean", "default": true },
+            "max_chars_per_cell": { "type": "number", "default": 500 },
+            "max_total_tokens": { "type": "number", "default": 4000 },
+            "max_chars_per_attachment": { "type": "number", "default": 2000 }
+          },
+          "description": "Notebook context extraction settings"
+        },
+        "chat.trinno.history": {
+          "type": "object",
+          "default": { "enabled": true, "max_messages": 100 },
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "max_messages": { "type": "number", "default": 100 }
+          },
+          "description": "Chat history persistence settings"
+        },
+        "chat.trinno.tools": {
+          "type": "object",
+          "default": { "permissions": {} },
+          "properties": {
+            "permissions": {
+              "type": "object",
+              "default": {},
+              "description": "Tool permission configuration. Values: \"allow\" (auto-execute), \"deny\" (blocked), \"ask\" (requires approval)"
+            }
+          },
+          "description": "Tool permission settings"
+        },
+        "chat.trinno.sandbox": {
+          "type": "object",
+          "default": { "enabled": true },
+          "properties": {
+            "enabled": { "type": "boolean", "default": true }
+          },
+          "description": "Terminal sandbox settings"
+        },
+        "chat.trinno.mcp": {
+          "type": "object",
+          "default": { "servers": [] },
+          "properties": {
+            "servers": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "type": { "type": "string", "enum": ["stdio", "http"] },
+                  "command": { "type": "string" },
+                  "args": { "type": "array", "items": { "type": "string" } },
+                  "url": { "type": "string" }
+                }
+              },
+              "description": "MCP servers to connect"
+            }
+          },
+          "description": "MCP server configuration"
+        },
+        "chat.trinno.papers": {
+          "type": "object",
+          "default": { "output_dir": "", "unpaywall_email": "trinno-research@example.com" },
+          "properties": {
+            "output_dir": { "type": "string", "default": "" },
+            "unpaywall_email": { "type": "string", "default": "trinno-research@example.com" }
+          },
+          "description": "Paper download settings"
+        },
+        "chat.trinno.agent": {
+          "type": "object",
+          "default": { "max_iterations": 100, "timeout_seconds": 30 },
+          "properties": {
+            "max_iterations": { "type": "number", "default": 100 },
+            "timeout_seconds": { "type": "number", "default": 30 }
+          },
+          "description": "Agent runtime limits (from TOML [agent])"
+        },
+        "chat.trinno.logging": {
+          "type": "object",
+          "default": { "level": "trace", "console": false },
+          "properties": {
+            "level": { "type": "string", "default": "trace" },
+            "console": { "type": "boolean", "default": false }
+          },
+          "description": "Logging configuration (from TOML [logging])"
+        },
+        "chat.trinno.tavily": {
+          "type": "object",
+          "default": { "api_key": "" },
+          "properties": {
+            "api_key": { "type": "string", "default": "" }
+          },
+          "description": "Tavily web search API (from TOML [tavily])"
+        },
+        "chat.trinno.bus": {
+          "type": "object",
+          "default": { "max_queue_size": 1000 },
+          "properties": {
+            "max_queue_size": { "type": "number", "default": 1000 }
+          },
+          "description": "Event bus settings (from TOML [bus])"
+        },
+        "chat.trinno.skills_registry": {
+          "type": "object",
+          "default": { "skills": [] },
+          "properties": {
+            "skills": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "repo": { "type": "string" },
+                  "ref": { "type": "string" },
+                  "tags": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "description": "Remote skills registry (from TOML [skills_registry])"
         }
       }
     }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -315,7 +330,7 @@
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
     "pino": "^10.3.1",
-    "toml": "^4.1.1",
+    "toml": "^4.3.0",
     "undici": "^8.5.0"
   },
   "packageManager": "yarn@4.13.0+sha512.5c20ba010c99815433e5c8453112165e673f1c7948d8d2b267f4b5e52097538658388ebc9f9580656d9b75c5cc996f990f611f99304a2197d4c56d21eea370e7"

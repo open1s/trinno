@@ -316,7 +316,7 @@ export const initCommand: SlashCommand = {
           '**Trinno workspace is not set.**',
           '',
           '1. Open the folder where you want to run your research (Command Palette → **File: Open Folder**).',
-          '2. Run **Trinno: Set Workspace** from the Command Palette, or set `trinno.chat.trpWorkspace` in VS Code settings to that folder\'s absolute path.',
+          '2. Run **Trinno: Set Workspace** from the Command Palette to set that folder as the workspace root.',
           '3. Re-run `/init` from the Trinno chat panel.',
         ].join('\n'),
       });

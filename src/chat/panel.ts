@@ -1450,19 +1450,7 @@ function isTrpWorkspaceRoot(p: string): boolean {
   return hits >= 3;
 }
 
-function expandHome(p: string): string {
-  return p.startsWith('~') || p.startsWith('$HOME')
-    ? path.join(os.homedir(), p.replace(/^~|\$HOME/, ''))
-    : p;
-}
-
 function getTrpWorkspaceRoot(): string | undefined {
-  const configured = vscode.workspace.getConfiguration('trinno').get<string>('chat.trpWorkspace');
-  if (configured) {
-    const expanded = path.isAbsolute(configured) ? configured : expandHome(configured);
-    if (isTrpWorkspaceRoot(expanded)) return expanded;
-  }
-
   const ed = vscode.window.activeTextEditor;
   const folders = vscode.workspace.workspaceFolders;
   const candidates: string[] = [];

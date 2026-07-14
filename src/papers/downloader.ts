@@ -314,27 +314,13 @@ async function fetchFile(url: string, signal: AbortSignal | undefined, timeoutMs
   }
 }
 
-function resolveOutputDir(override?: string): string {
+function resolveOutputDir(override?: string): string | null {
   if (override && override.trim().length > 0) return override;
-  const configured = readConfiguredOutputDir();
-  if (configured && configured.trim().length > 0) {
-    return configured.startsWith('~') ? path.join(os.homedir(), configured.slice(1)) : configured;
-  }
   const firstFolder = readFirstWorkspaceFolder();
   if (firstFolder) {
     return path.join(firstFolder, '06_References');
   }
-  return path.join(os.homedir(), '.trinno', 'papers');
-}
-
-function readConfiguredOutputDir(): string {
-  try {
-    const vscode = require('vscode');
-    const cfg = vscode.workspace.getConfiguration('chat.papers').get('outputDir', '');
-    return typeof cfg === 'string' ? cfg : '';
-  } catch {
-    return '';
-  }
+  return null;
 }
 
 function readFirstWorkspaceFolder(): string | null {
@@ -488,6 +474,9 @@ export async function downloadPaper(
   }
 
   const outputDir = resolveOutputDir(opts.outputDir);
+  if (!outputDir) {
+    return { ok: false, error: 'No workspace folder is open. Open a folder to set the download target (06_References).' };
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   log.debug({ outputDir }, 'resolved output directory');
 
@@ -516,6 +505,7 @@ export async function downloadPaper(
 
 export function listDownloadedPapers(outputDir?: string): { filePath: string; size: number; mtime: number }[] {
   const dir = resolveOutputDir(outputDir);
+  if (!dir) return [];
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const results: { filePath: string; size: number; mtime: number }[] = [];
