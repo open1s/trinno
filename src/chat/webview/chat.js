@@ -529,7 +529,7 @@ function renderTodoBadges() {
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey && !completionVisible && !fileCompletionVisible) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !completionVisible && !fileCompletionVisible) {
       e.preventDefault();
       sendMessage();
     }
