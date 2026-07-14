@@ -112,6 +112,13 @@ class BuilderLru {
 
 let instance: AgentFactory | null = null;
 
+export async function resetAgentFactory(): Promise<void> {
+  if (instance) {
+    await instance.dispose();
+  }
+  instance = null;
+}
+
 export function getAgentFactory(): AgentFactory {
   if (!instance) {
     throw new Error('AgentFactory not initialized. Call initAgentFactory() first.');
@@ -246,6 +253,15 @@ class AgentFactory {
   }
 
   /** Clear the pool (e.g. after config reload). */
+  async dispose(): Promise<void> {
+    this.clearPool();
+    try {
+      await this.brain.stop();
+    } catch {
+      // ignore errors during cleanup
+    }
+  }
+
   clearPool(): void {
     if (this.builderPool) {
       this.builderPool.clear();

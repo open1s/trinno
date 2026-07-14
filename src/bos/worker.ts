@@ -20,7 +20,7 @@
 
 import { composeRoot } from './infrastructure/config/di.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
-import { getAgentFactory, initAgentFactory } from './infrastructure/agent-factory.js';
+import { getAgentFactory, initAgentFactory, resetAgentFactory } from './infrastructure/agent-factory.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
 import { searchMemories, listMemories, addMemory } from '../chat/memory.js';
 import {
@@ -104,6 +104,7 @@ let abortController: AbortController | null = null;
 let deps: Awaited<ReturnType<typeof composeRoot>> | null = null;
 let brain: any = null;
 let depsInitPromise: Promise<void> | null = null;
+let lastApiKey: string | undefined;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
@@ -371,11 +372,16 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 }
 
 async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
-  log.trace({ sessionId, textLength: text.length, text: text.slice(0, 200) }, '[TRACE] worker recv chat message');
+  log.error({ model, baseUrl, apiKeyPrefix: apiKey?.slice(0, 8), lastApiKeyPrefix: lastApiKey?.slice(0, 8) }, 'DEBUG handleChat: params');
   abortController = new AbortController();
   const signal = abortController.signal;
 
   if (depsInitPromise) await depsInitPromise;
+  if (deps && apiKey !== lastApiKey) {
+    log.error({ old: lastApiKey?.slice(0, 4), new: apiKey?.slice(0, 4) }, 'DEBUG handleChat: apiKey changed, recreating deps');
+    deps = null;
+    depsInitPromise = null;
+  }
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -383,12 +389,14 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
+    await resetAgentFactory();
     initAgentFactory(deps.brain, {
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
     });
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
+  lastApiKey = apiKey;
 
   const slashList = slashRegistry.list().map(c => '- /' + c.name + ': ' + c.description).join('\n');
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
@@ -1214,6 +1222,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 brainOptions.sandboxEnabled = msg.sandboxEnabled !== false;
                 const d = await composeRoot(brainOptions);
                 deps = d;
+                lastApiKey = msg.apiKey;
                 await initApprovalBus(deps.brain);
                 getTypstLspClient(wsRoot).catch(() => { });
               })();
@@ -1485,8 +1494,14 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
 }
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+    log.error({ model, baseUrl, apiKeyPrefix: apiKey?.slice(0, 8), lastApiKeyPrefix: lastApiKey?.slice(0, 8) }, 'DEBUG handleChatWithEmit: params');
   const phaseT0 = Date.now();
   if (depsInitPromise) await depsInitPromise;
+  if (deps && apiKey !== lastApiKey) {
+    log.error({ old: lastApiKey?.slice(0, 4), new: apiKey?.slice(0, 4) }, 'DEBUG handleChatWithEmit: apiKey changed, recreating deps');
+    deps = null;
+    depsInitPromise = null;
+  }
   if (!deps) {
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
@@ -1494,6 +1509,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
+    await resetAgentFactory();
     initAgentFactory(deps.brain, {
       defaultTools: deps.tools,
       defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
@@ -1501,6 +1517,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
     log.trace({ phase: 'deps-init', elapsedMs: Date.now() - phaseT0 }, '[PHASE] deps initialized');
   }
+  lastApiKey = apiKey;
 
   const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
     ? persona.prompt.trim()
