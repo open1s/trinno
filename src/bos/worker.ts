@@ -108,7 +108,7 @@ let lastApiKey: string | undefined;
 let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
-const activeAgents = new Map<string, { started: any; agent: any; model: string | null; baseUrl: string | null }>();
+const activeAgents = new Map<string, { started: any; agent: any; model: string | null; baseUrl: string | null; apiKey: string | null }>();
 const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information. All tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output). For large files: read in 500+ line chunks with offset/limit, never tiny slices.`;';
 
 const slashRegistry = createSlashCommandRegistry();
@@ -451,12 +451,13 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     systemPrompt,
     ...(model ? { model } : {}),
     ...(baseUrl ? { baseUrl } : {}),
+    ...(apiKey ? { apiKey } : {}),
     mcpServers: effectiveMcp,
   });
 
-  log.debug('about to call agent.start()');
+  let config = (agent as any)._config;
+  log.debug({ model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey });
   const started = await agent.start();
-  log.debug('agent.start() done');
 
   if (sessionId) {
     // Check if the factory has a more recent session for this sessionId
@@ -1577,7 +1578,7 @@ systemPrompt += typstDiags;
   // Detect model/baseUrl drift so a mid-session switch takes effect immediately.
   // Without this check, the cached `started` retains the model it was built with.
   const modelChanged = !!existingAgent
-    && (existingAgent.model !== (model || null) || existingAgent.baseUrl !== (baseUrl || null));
+    && (existingAgent.model !== (model || null) || existingAgent.baseUrl !== (baseUrl || null) || existingAgent.apiKey !== (apiKey || null));
   if (existingAgent && existingAgent.started && !modelChanged) {
     started = existingAgent.started;
     // Don't re-emit MCP/LSP status — unchanged since last message
@@ -1613,6 +1614,7 @@ systemPrompt += typstDiags;
       systemPrompt,
       ...(model ? { model } : {}),
       ...(baseUrl ? { baseUrl } : {}),
+      ...(apiKey ? { apiKey } : {}),
       mcpServers: effectiveMcp,
       onMcpStatus: (namespace, type, comm, status) => {
         mcpStatusMap.set(mcpKey(namespace, type, comm), status === 'connected');
@@ -1620,9 +1622,10 @@ systemPrompt += typstDiags;
       },
     });
 
+    let config = (agent as any)._config;
+    log.debug({model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey});
     started = await agent.start();
-    log.trace({ phase: 'agent-start', elapsedMs: Date.now() - phaseT0, isNew: true }, '[PHASE] agent started');
-    activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null });
+    activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null });
 
     // Final status after all connections resolved
     cancelMcpDebounce();
@@ -1785,7 +1788,6 @@ systemPrompt += typstDiags;
               }
               break;
             case 'Usage':
-              log.trace({ sessionId, rawToken: token }, '[USAGE-RAW] ezbos Usage token received');
               if (typeof token.promptTokens === 'number') lastPromptTokens = token.promptTokens;
               if (typeof token.completionTokens === 'number') lastCompletionTokens = token.completionTokens;
               localEmit('token', {

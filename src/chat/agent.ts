@@ -298,12 +298,8 @@ export async function sendMessage(
       if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
-        log.trace({ msgType: msg.type }, 'handleData received msg');
         switch (msg.type) {
           case 'token':
-            if (msg.tokenType === 'Text' && msg.text?.length > 0) {
-              log.trace({ traceId: payload.messageId, tokenType: msg.tokenType, tokenLen: msg.text.length }, '[TRACE] agent←worker: streaming token');
-            }
             onToken(buildTokenMsg(msg));
             break;
           case 'done':

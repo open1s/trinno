@@ -23,6 +23,7 @@ export interface AgentConfig {
   temperature?: number;
   model?: string;
   baseUrl?: string;
+  apiKey?: string;
   maxTokens?: number;
   timeoutSecs?: number;
   tools?: any[];
@@ -305,6 +306,9 @@ class AgentFactory {
     }
     if (config.baseUrl) {
       builder = builder.with_baseUrl(config.baseUrl);
+    }
+    if (config.apiKey) {
+      builder = builder.with_apiKey(config.apiKey);
     }
     if (config.timeoutSecs) {
       builder = builder.with_timeout(config.timeoutSecs);
