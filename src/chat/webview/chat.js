@@ -1481,7 +1481,6 @@ function renderTodoBadges() {
 
     switch (msg.type) {
       case 'welcome':
-        console.log('[chat-webview] welcome received, personaName:', msg.personaName, 'sandboxEnabled:', msg.sandboxEnabled);
         personaName = msg.personaName || 'Research Assistant';
         const titleEl = document.querySelector('.chat-title');
         if (titleEl) titleEl.textContent = personaName;
@@ -1601,7 +1600,6 @@ function renderTodoBadges() {
 
       case 'models-loaded':
         models = msg.models || [];
-        console.log('[chat-webview] models-loaded:', models.length, 'models', models.map(m => m.name));
         modelLabel.textContent = selectedModel;
         renderModelMenu();
         break;
@@ -1719,8 +1717,7 @@ function renderTodoBadges() {
           ${context.cursorCell !== null ? `Cursor at cell ${context.cursorCell}.` : ''}
           <br><br>Ask me anything about your notebook, or let me search for prior art and analyze your research.`;
       } else {
-        welcome.innerHTML = `Open a Jupyter notebook to start working, or ask me anything about your research.
-          I can search patents, papers, and perform TRIZ analysis.`;
+        welcome.innerHTML = `Turn concepts into inventions with AI-assisted research. Perfect for researchers, engineers, inventors, and R&D teams.`;
       }
       messagesContainer.appendChild(welcome);
     }
