@@ -1067,6 +1067,7 @@ async function handleCompact(
   baseUrl?: string
 ): Promise<void> {
   log.info({ messageCount: messages.length }, 'handleCompact START');
+  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
 
   if (depsInitPromise) await depsInitPromise;
   if (!deps) {
