@@ -20,7 +20,7 @@
 
 import { composeRoot } from './infrastructure/config/di.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
-import { getAgentFactory, initAgentFactory, resetAgentFactory } from './infrastructure/agent-factory.js';
+import { getAgentFactory } from './infrastructure/agent-factory.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
 import { searchMemories, listMemories, addMemory } from '../chat/memory.js';
 import {
@@ -336,12 +336,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   if (!deps) {
     const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
     deps = await composeRoot({ workspaceRoot: wsRoot });
-    // Init factory with tools so the chat agent path also benefits (fixes race condition)
     await initApprovalBus(deps.brain);
-    initAgentFactory(deps.brain, {
-      defaultTools: deps.tools,
-      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
-    });
     // Start Typst LSP eagerly so first lint call is fast
     getTypstLspClient(wsRoot).catch(() => { });
   }
@@ -389,11 +384,6 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
-    await resetAgentFactory();
-    initAgentFactory(deps.brain, {
-      defaultTools: deps.tools,
-      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
-    });
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
   lastApiKey = apiKey;
@@ -1071,10 +1061,6 @@ async function handleCompact(
     if (apiKey) brainOptions.apiKey = apiKey;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
-    initAgentFactory(deps.brain, {
-      defaultTools: deps.tools,
-      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
-    });
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
 
@@ -1509,11 +1495,6 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
     await initApprovalBus(deps.brain);
-    await resetAgentFactory();
-    initAgentFactory(deps.brain, {
-      defaultTools: deps.tools,
-      defaultHooks: [deps.toolPermissionHook, deps.afterToolHook],
-    });
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
     log.trace({ phase: 'deps-init', elapsedMs: Date.now() - phaseT0 }, '[PHASE] deps initialized');
   }
