@@ -82,8 +82,8 @@ const _pid = process.pid;
 function syslogLine(line: string): string {
   try {
     const o = JSON.parse(line);
-    const sev: Record<string, number> = { trace: 7, debug: 7, info: 6, warn: 4, error: 3, fatal: 2 };
-    const pri = 14 * 8 + (sev[o.level] ?? 7);
+    const levelLabels: Record<string, string> = { trace: 'TRACE', debug: 'DEBUG', info: 'INFO', warn: 'WARN', error: 'ERROR', fatal: 'FATAL' };
+    const label = levelLabels[o.level] || o.level || 'INFO';
     const d = new Date(o.time);
     const months = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
     const ts = `${months[d.getUTCMonth()]} ${String(d.getUTCDate()).padStart(2, ' ')} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
@@ -94,7 +94,7 @@ function syslogLine(line: string): string {
     if (o.config) extras.push(`config=${JSON.stringify(o.config)}`);
     if (o.effectiveModel) extras.push(`model=${o.effectiveModel}`);
     const extraStr = extras.length ? ` [${extras.join(' ')}]` : '';
-    return `<${pri}>${ts} ${tag}[${_pid}]:${extraStr} ${o.msg || o.message || ''}`;
+    return `${ts} ${label} ${tag}[${_pid}]:${extraStr} ${o.msg || o.message || ''}`;
   } catch {
     return line;
   }

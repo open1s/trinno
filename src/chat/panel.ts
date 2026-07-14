@@ -2295,12 +2295,13 @@ async function handleUserMessage(text: string): Promise<void> {
       finalizeCurrentMessage();
       sendGoalStatus();
 
-      // Proactive auto-compact: fire when accumulated tokens approach model's limit
+      // Proactive auto-compact: fire when last prompt tokens approach model's limit
+      // NOTE: inputTokens is the FULL context size for this message (not incremental),
+      // so it correctly reflects how close we are to the model's working limit.
       if (currentSession && !_autoCompactInProgress && currentSession.messages.length >= 6 && !currentQueueId) {
-        const accTotal = (currentSession.totalInputTokens ?? 0) + (currentSession.totalOutputTokens ?? 0);
-        if (accTotal > 0) {
+        if (inputTokens > 0) {
           const threshold = getAutoCompactThreshold(getEffectiveModelName());
-          if (threshold > 0 && accTotal >= threshold) {
+          if (threshold > 0 && inputTokens >= threshold) {
             triggerAutoCompactOnThreshold(lastUserMessageText || '').catch(() => { });
             return;
           }

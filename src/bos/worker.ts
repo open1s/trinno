@@ -456,7 +456,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   });
 
   let config = (agent as any)._config;
-  log.debug({ model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey });
+  log.warn({config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey }}, 'model info');
   const started = await agent.start();
 
   if (sessionId) {
@@ -1481,7 +1481,6 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
 }
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
-    log.error({ model, baseUrl, apiKeyPrefix: apiKey?.slice(0, 8), lastApiKeyPrefix: lastApiKey?.slice(0, 8) }, 'DEBUG handleChatWithEmit: params');
   const phaseT0 = Date.now();
   if (depsInitPromise) await depsInitPromise;
   if (deps && apiKey !== lastApiKey) {
@@ -1623,7 +1622,7 @@ systemPrompt += typstDiags;
     });
 
     let config = (agent as any)._config;
-    log.debug({model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey});
+    log.warn({config:{model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey}},'model info');
     started = await agent.start();
     activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null });
 

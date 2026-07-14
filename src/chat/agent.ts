@@ -254,7 +254,7 @@ export async function sendMessage(
   const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
   const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
-  log.error({ effectiveModel, effectiveBaseUrl, effectiveApiKey: effectiveApiKey.slice(0, 8), hasModelConfig: !!modelConfig }, 'DEBUG sendMessage: effective values');
+  log.warn({config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, hasModelConfig: !!modelConfig }}, 'model used for request');
   const payload = {
     type: 'chat',
     messageId,
