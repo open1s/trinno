@@ -34,23 +34,23 @@ const DOWNLOAD_TEXT_RE = /\b(pdf|download|full ?text|全文|supplement|supplemen
 
 const PUBLISHER_PATTERNS = [
   // ScienceDirect — /science/article/pii/S0360319925000382/pdfft?md5=...&pid=...
-  /\/pdfft\?/i,
+  /\/(?:pdfft|pdf)\?/gi,
   // Nature — articles/XXX.pdf
-  /\/articles\/s\d{5}-\d{3}-\d{5}-\w\/pdf\//i,
+  /\/articles\/s\d{5}-\d{3}-\d{5}-\w\/pdf\//gi,
   // ACS — /doi/pdf/10.1021/...
-  /\/doi\/pdf\//i,
+  /\/doi\/pdf\//gi,
   // Wiley — /doi/epdf/...
-  /\/doi\/epdf\//i,
+  /\/doi\/epdf\//gi,
   // SpringerLink — /content/pdf/...
-  /\/content\/pdf\//i,
+  /\/content\/pdf\//gi,
   // IEEE — /stamp/stamp.jsp?tp=&arnumber=...
-  /\/stamp\/stamp\.jsp/i,
+  /\/stamp\/stamp\.jsp/gi,
   // Taylor & Francis API
-  /\/chapters\/oa-edit\/download\?/i,
+  /\/chapters\/oa-edit\/download\?/gi,
   // PubMed Central — /pmc/articles/PMC...
-  /\/pmc\/articles\/PMC\d+\/pdf\//i,
+  /\/pmc\/articles\/PMC\d+\/pdf\//gi,
   // arXiv PDF
-  /\/pdf\/\d{4}\.\d{4,}/i,
+  /\/pdf\/\d{4}\.\d{4,}/gi,
 ];
 
 function formatFromUrl(u: string): string | null {
