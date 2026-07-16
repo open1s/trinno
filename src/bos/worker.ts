@@ -377,6 +377,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 }
 
 async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+  text = `[You reference Current Time: ${new Date().toISOString()}]\n${text}`;
   log.error({ model, baseUrl, apiKeyPrefix: apiKey?.slice(0, 8), lastApiKeyPrefix: lastApiKey?.slice(0, 8) }, 'DEBUG handleChat: params');
   (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
   abortController = new AbortController();
@@ -1501,6 +1502,7 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
 }
 
 async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+  text = `[You reference Current Time: ${new Date().toISOString()}]\n${text}`;
   const phaseT0 = Date.now();
   (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
   if (depsInitPromise) await depsInitPromise;
