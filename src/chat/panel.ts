@@ -167,8 +167,10 @@ function loadModelsFromConfig(): ModelConfig[] {
   return models;
 }
 
+import { COMMON_AGENT_NAME, COMMON_AGENT_DESCRIPTION, getCommonAgentContent } from '../bos/agents/common-agent';
+
 const loadedAgents = loadAgentsFromBosDir();
-let selectedAgentContent: string | undefined;
+let selectedAgentContent: string | undefined = getCommonAgentContent();
 let loadedModels = loadModelsFromConfig();
 let selectedModelConfig: ModelConfig | undefined;
 let pendingMcpStatus: { name: string; type: string; connected: boolean }[] | null = null;
@@ -301,7 +303,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
 
     chatView.webview.postMessage({
       type: 'agents-loaded',
-      agents: [{ name: getChatConfig().persona?.name ?? 'Research Assistant', description: 'TRIZ research expert' }, ...loadedAgents.map(a => ({ name: a.name, description: a.description }))],
+      agents: [{ name: COMMON_AGENT_NAME, description: COMMON_AGENT_DESCRIPTION }, { name: getChatConfig().persona?.name ?? 'Research Assistant', description: 'TRIZ research expert' }, ...loadedAgents.map(a => ({ name: a.name, description: a.description }))],
     } as any);
 
     chatView.webview.postMessage({
@@ -825,7 +827,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
     await handleChooseFile();
   } else if (msg.type === 'setAgent') {
     const agent = loadedAgents.find(a => a.name === msg.agent);
-    selectedAgentContent = agent ? agent.content : undefined;
+    selectedAgentContent = agent ? agent.content : msg.agent === COMMON_AGENT_NAME ? getCommonAgentContent() : undefined;
     log.debug({ agent: msg.agent, hasContent: !!selectedAgentContent }, 'Agent set');
   } else if (msg.type === 'setModel') {
     if (msg.model === 'Auto') {

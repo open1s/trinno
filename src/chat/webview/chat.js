@@ -79,12 +79,12 @@
   let agentMenuVisible = false;
   let modelMenuVisible = false;
   let attachments = [];
-  let agents = [{ name: 'Research Assistant', description: 'TRIZ research expert' }];
+  let agents = [{ name: 'ARTEMIS', description: 'Research + coding expert with hypothesis-driven workflow (TDD x Autoresearch)' }, { name: 'Research Assistant', description: 'TRIZ research expert' }];
   let models = [];
   let mcpServers = [];
   let mcpDropdownVisible = false;
   let mcpDropdownEl = null;
-  let selectedAgent = 'Research Assistant';
+  let selectedAgent = 'ARTEMIS';
   let selectedModel = 'Auto';
   let tokenUsage = { input: 0, output: 0, total: 0 };
   let todoData = [];
@@ -756,7 +756,7 @@ function renderTodoBadges() {
     agentMenu.querySelectorAll('.dropdown-item').forEach((item) => {
       item.addEventListener('click', () => {
         selectedAgent = item.dataset.agent;
-        agentLabel.textContent = selectedAgent === 'Research Assistant' ? 'Research' : selectedAgent;
+        agentLabel.textContent = selectedAgent === 'Common Agent' ? 'Common' : selectedAgent === 'Research Assistant' ? 'Research' : selectedAgent;
         hideAgentMenu();
         vscode.postMessage({ type: 'setAgent', agent: selectedAgent });
       });
@@ -1595,7 +1595,8 @@ function renderTodoBadges() {
 
       case 'agents-loaded':
         agents = msg.agents || agents;
-        agentLabel.textContent = selectedAgent === 'Research Assistant' ? 'Research' : selectedAgent;
+        agentLabel.textContent = selectedAgent === 'Common Agent' ? 'Common' : selectedAgent === 'Research Assistant' ? 'Research' : selectedAgent;
+        renderAgentMenu();
         break;
 
       case 'models-loaded':

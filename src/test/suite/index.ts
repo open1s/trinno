@@ -9,11 +9,12 @@ export async function run(): Promise<void> {
 	});
 
 	const testsRoot = path.resolve(__dirname, '.');
-  mocha.addFile(path.resolve(testsRoot, 'setup.js'));
+	mocha.addFile(path.resolve(testsRoot, 'setup.js'));
 	mocha.addFile(path.resolve(testsRoot, 'extension.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'file-references.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'write-paper.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'rapid-input-e2e.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'common-agent.test.js'));
 
 	return new Promise<void>((resolve, reject) => {
 		mocha.run((failures: number) => {

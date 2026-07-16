@@ -206,12 +206,12 @@ describe('remote-skill-tools', () => {
   it('createRemoteSkillTools returns all three tools', () => {
     const tools = createRemoteSkillTools(ws);
     assert.strictEqual(tools.length, 3);
-    assert.strictEqual((tools[0] as any)?.name, 'find_remote_skill');
-    assert.strictEqual((tools[1] as any)?.name, 'load_remote_skill');
-    assert.strictEqual((tools[2] as any)?.name, 'load_best_remote_skill');
+    assert.strictEqual((tools[0] as any)?.name, 'find_skill');
+    assert.strictEqual((tools[1] as any)?.name, 'load_offline_skill');
+    assert.strictEqual((tools[2] as any)?.name, 'load_best_skill');
   });
 
-  it('load_remote_skill content is returned raw (no wrapper, no directive)', async function() {
+  it('load_offline_skill content is returned raw (no wrapper, no directive)', async function() {
     this.timeout(30000);
 
     const entries = [{ name: 'mock-skill', description: 'flat test', repo: MOCK_REPO, ref: 'master' }];
@@ -229,7 +229,7 @@ describe('remote-skill-tools', () => {
     assert.doesNotMatch(content, /Follow its instructions precisely/);
   });
 
-  it('find_remote_skill runs without error and returns results or hint', async () => {
+  it('find_skill runs without error and returns results or hint', async () => {
     const findTool = getFindTool();
     const raw = await findTool.callback({ query: 'patent' });
     assert.ok(typeof raw === 'string', 'callback should return string');
@@ -239,7 +239,7 @@ describe('remote-skill-tools', () => {
     assert.ok('data' in parsed);
   });
 
-  it('load_remote_skill returns error for unknown skill (non-empty or empty registry)', async () => {
+  it('load_offline_skill returns error for unknown skill (non-empty or empty registry)', async () => {
     const loadTool = getLoadTool();
     const raw = await loadTool.callback({ name: 'definitely-not-a-real-skill-12345' });
     // err() result is wrapped as "Error: <message>" string
@@ -250,7 +250,7 @@ describe('remote-skill-tools', () => {
     assert.ok(okVariants.test(raw), `unexpected error: ${raw.slice(0, 100)}`);
   });
 
-  it('load_remote_skill via tool returns raw content (no wrapper, no directive)', async function() {
+  it('load_offline_skill via tool returns raw content (no wrapper, no directive)', async function() {
     this.timeout(30000);
     const loadTool = getLoadTool();
     const raw = await loadTool.callback({ name: 'mock-skill' });
@@ -272,20 +272,20 @@ describe('remote-skill-tools', () => {
     assert.doesNotMatch(result.data.content, /Follow its instructions precisely/);
   });
 
-  it('find_remote_skill result includes usage field showing load_remote_skill call', async () => {
+  it('find_skill result includes usage field showing load_offline_skill call', async () => {
     const findTool = getFindTool();
     const raw = await findTool.callback({ query: 'patent', limit: 3 });
     const result = JSON.parse(raw);
     if (result.data?.results?.length > 0) {
       for (const r of result.data.results) {
         assert.ok(r.usage, 'each result should have usage field');
-        assert.match(r.usage, /^load_remote_skill\(\{ name: /);
+        assert.match(r.usage, /^load_offline_skill\(\{ name: /);
         assert.ok(r.usage.includes(r.name), 'usage should reference the result name');
       }
     }
   });
 
-  it('load_best_remote_skill returns found=false + hint when nothing matches', async function() {
+  it('load_best_skill returns found=false + hint when nothing matches', async function() {
     this.timeout(30000);
     const tool = getLoadBestTool();
     const raw = await tool.callback({ query: 'xyznonexistent_12345' });
@@ -302,7 +302,7 @@ describe('remote-skill-tools', () => {
     }
   });
 
-  it('load_best_remote_skill finds and loads top match', async function() {
+  it('load_best_skill finds and loads top match', async function() {
     this.timeout(60000);
     const tool = getLoadBestTool();
     const raw = await tool.callback({ query: 'scholar' });
@@ -324,7 +324,7 @@ describe('remote-skill-tools', () => {
     }
   });
 
-  it('end-to-end: name from find_remote_skill works as input to load_remote_skill', async function() {
+  it('end-to-end: name from find_skill works as input to load_offline_skill', async function() {
     this.timeout(120000);
     const findTool = getFindTool();
     const loadTool = getLoadTool();
@@ -335,7 +335,7 @@ describe('remote-skill-tools', () => {
     const findResult = JSON.parse(findRaw);
     if (!findResult.success || !findResult.data?.results?.length) return;
 
-    // Take the first result's name and pass it to load_remote_skill
+    // Take the first result's name and pass it to load_offline_skill
     const skillName = findResult.data.results[0].name;
     assert.ok(typeof skillName === 'string' && skillName.length > 0, 'find returned a valid name');
 
@@ -357,7 +357,7 @@ describe('remote-skill-tools', () => {
 
   // ── Edge cases ──
 
-  it('find_remote_skill handles empty/whitespace query without error', async () => {
+  it('find_skill handles empty/whitespace query without error', async () => {
     const findTool = getFindTool();
     const rawEmpty = await findTool.callback({ query: '' });
     assert.ok(typeof rawEmpty === 'string');
@@ -367,7 +367,7 @@ describe('remote-skill-tools', () => {
     assert.deepStrictEqual(parsed.data.results, []);
   });
 
-  it('find_remote_skill handles single-char query without error', async () => {
+  it('find_skill handles single-char query without error', async () => {
     const findTool = getFindTool();
     const raw = await findTool.callback({ query: 'a', limit: 1 });
     assert.ok(typeof raw === 'string');
@@ -375,7 +375,7 @@ describe('remote-skill-tools', () => {
     assert.strictEqual(parsed.success, true);
   });
 
-  it('find_remote_skill handles special characters in query without error', async () => {
+  it('find_skill handles special characters in query without error', async () => {
     const findTool = getFindTool();
     const raw = await findTool.callback({ query: 'C++ & .NET framework (2024)', limit: 1 });
     assert.ok(typeof raw === 'string');
@@ -383,21 +383,21 @@ describe('remote-skill-tools', () => {
     assert.strictEqual(parsed.success, true);
   });
 
-  it('load_remote_skill rejects empty name', async () => {
+  it('load_offline_skill rejects empty name', async () => {
     const loadTool = getLoadTool();
     const raw = await loadTool.callback({ name: '' });
     assert.ok(raw.startsWith('Error:'));
     assert.match(raw, /invalid skill address/i);
   });
 
-  it('load_remote_skill rejects path traversal in name', async () => {
+  it('load_offline_skill rejects path traversal in name', async () => {
     const loadTool = getLoadTool();
     const raw = await loadTool.callback({ name: '../../../etc/passwd' });
     assert.ok(raw.startsWith('Error:'));
     assert.match(raw, /invalid skill address/i);
   });
 
-  it('load_remote_skill error message is plain text, not JSON', async () => {
+  it('load_offline_skill error message is plain text, not JSON', async () => {
     const loadTool = getLoadTool();
     const raw = await loadTool.callback({ name: 'I-do-not-exist-in-any-registry' });
     assert.ok(raw.startsWith('Error:'));
@@ -407,7 +407,7 @@ describe('remote-skill-tools', () => {
     assert.ok(!afterPrefix.startsWith('['), `error should be plain text, got JSON-like: ${raw.slice(0, 100)}`);
   });
 
-  it('load_best_remote_skill rejects empty query', async () => {
+  it('load_best_skill rejects empty query', async () => {
     const tool = getLoadBestTool();
     const rawEmpty = await tool.callback({ query: '' });
     assert.ok(rawEmpty.startsWith('Error:'));

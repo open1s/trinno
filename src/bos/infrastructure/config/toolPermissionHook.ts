@@ -21,7 +21,7 @@ function makeRememberKey(toolName: string, _args: Record<string, unknown>): stri
 }
 
 const HIDDEN_TOOLS = new Set([
-  'read_file', 'write_file', 'edit_file', 'load_skill',
+  'read_file', 'write_file', 'edit_file', 'load_offline_skill', 'load_skill',
   'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
   'todoread','todowrite', 'memory_search', 'memory_store',
 ]);

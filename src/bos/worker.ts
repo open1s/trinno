@@ -73,7 +73,7 @@ function readExistingTodos(workspaceRoot: string): TodoEntry[] | null {
 }
 
 const HIDDEN_TOOLS = new Set([
-  'read_file', 'write_file', 'edit_file', 'load_skill',
+  'read_file', 'write_file', 'edit_file', 'load_offline_skill',
   'list_dir', 'grep_search', 'glob_files', 'ast_grep', 'ast_edit', 'apply_patch',
   'todoread', 'todowrite', 'memory_search', 'memory_store',
 ]);
@@ -133,8 +133,8 @@ slashRegistry.register(initCommand, ['setup', 'new']);
 slashRegistry.register(pingCommand);
 slashRegistry.register(undoCommand, ['u']);
 slashRegistry.register(goalCommand, ['g']);
-  slashRegistry.register(autoCommand, ['a', 'autoresearch']);
-  slashRegistry.register(sandboxCommand, ['sb']);
+slashRegistry.register(autoCommand, ['a', 'autoresearch']);
+slashRegistry.register(sandboxCommand, ['sb']);
 
 let pendingSlashOutput: string | null = null;
 
@@ -468,7 +468,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
   });
 
   let config = (agent as any)._config;
-  log.warn({config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey }}, 'model info');
+  log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey } }, 'model info');
   const started = await agent.start();
 
   if (sessionId) {
@@ -921,15 +921,15 @@ P-Population, I-Intervention, C-Comparison, O-Outcome, S-Study design. Template:
 - Output language matches user input (Chinese→Chinese, English→English). Never mix. Valid UTF-8 only.
 
 ## Writing Papers/Patents
-- Panel injects skill proper skill → load_skill.
+- Panel injects skill proper skill → load_offline_skill.
 - todowrite plan sections → write_file initial file with header → edit_file(append=true) per section as generated. **Never accumulate full content before writing.**
 - Ambiguous "write a paper" (no colon+title) → ask for topic.
 - Target: 7-phase paper with contradiction→solution mapping, weighted KPIs, evidence scores, decision factors, risks, ≤3-day validation.
 - Verify each section before marking complete.
 - Always typst compile → fix errors.
 
-## Remote Skills
-- Specialized methodology/framework/workflow/domain task → FIRST find_remote_skill("<keywords>") → load_remote_skill({name}) or load_best_remote_skill({query}).
+## Skill Driven prioritized
+- Specialized methodology/framework/workflow/domain task → FIRST find_skill("<keywords>") → load_offline_skill({name}) or load_best_skill({query}).
 
 ## File Operations
 read_file first, never guess. Large files: paginate offset/limit (200+ lines/chunk). >1MB → apply_patch over edit_file. Long content: write_file initial → edit_file(append=true) per section. edit_file for small/medium changes. write_file only for new files. Every modification MUST use edit tool.
@@ -938,7 +938,7 @@ read_file first, never guess. Large files: paginate offset/limit (200+ lines/chu
 - TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve
 - Papers: search, papers_download, papers_list_downloaded,mcp tools
 - Web: websearch (current events, uncertainties),mcp tools
-- Skills: find_remote_skill, load_remote_skill, load_best_remote_skill,load_skill
+- Skills: find_skill, load_offline_skill, load_best_skill
 - FS: read_file, write_file, edit_file, list_dir, grep_search, glob_files, ast_grep, ast_edit, apply_patch, bash, exec_tool (bash needs approval; FS workspace-scoped)
 - Planning: todowrite/todoread for multi-step writing ONLY (papers/patents) — NOT for single edits or chat
 
@@ -1522,22 +1522,29 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   }
   lastApiKey = apiKey;
 
-  const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
-    ? persona.prompt.trim()
-    : FALLBACK_PERSONA;
-  const methodologyPrompt = buildMethodologyPrompt('');
-  const basePrompt = persona && persona.prompt
-    ? `${methodologyPrompt}\n\n---\n\n${personaPrompt}`
-    : `${personaPrompt}\n\n${methodologyPrompt}`;
-  let systemPrompt = systemSummary
-    ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
-    : basePrompt;
+  let systemPrompt: string;
+  if (skillContent) {
+    const soul = loadSoulMd();
+    const soulSection = soul ? `## SOUL (Must Follow)\n\n${soul}\n\n` : '';
+    systemPrompt = soulSection + skillContent;
+  } else {
+    const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
+      ? persona.prompt.trim()
+      : FALLBACK_PERSONA;
+    const methodologyPrompt = buildMethodologyPrompt('');
+    const basePrompt = persona && persona.prompt
+      ? `${methodologyPrompt}\n\n---\n\n${personaPrompt}`
+      : `${personaPrompt}\n\n${methodologyPrompt}`;
+    systemPrompt = systemSummary
+      ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
+      : basePrompt;
+  }
 
   // Inject Typst LSP diagnostics for all .typ files in workspace
   const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
   const typstDiags = await collectTypstDiagnostics(wsRoot);
   if (typstDiags) {
-systemPrompt += typstDiags;
+    systemPrompt += typstDiags;
   }
 
   // Inject active goal
@@ -1644,7 +1651,7 @@ systemPrompt += typstDiags;
     });
 
     let config = (agent as any)._config;
-    log.warn({config:{model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey}},'model info');
+    log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey } }, 'model info');
     started = await agent.start();
     activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null });
 
@@ -1671,15 +1678,13 @@ systemPrompt += typstDiags;
 
   let userMessage = text;
   if (skillContent) {
-    userMessage = `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n<user_input>\n${text}\n</user_input>`;
-
     const wr = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
     const existingTodos = readExistingTodos(wr);
     if (existingTodos && existingTodos.length > 0) {
       const todoSummary = existingTodos
         .map(t => `- [${t.status}] ${t.content} (${t.priority})`)
         .join('\n');
-      userMessage = userMessage + `\n\n<system_context>\nExisting todos from disk (resume from first incomplete):\n${todoSummary}\n</system_context>`;
+      userMessage = `<user_input>\n${text}\n</user_input>\n\n<system_context>\nExisting todos from disk (resume from first incomplete):\n${todoSummary}\n</system_context>`;
     }
   }
 

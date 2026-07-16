@@ -315,12 +315,6 @@ class AgentFactory {
       builder = builder.with_timeout(config.timeoutSecs);
     }
 
-    for (const dir of skillsDirs) {
-      if (fs.existsSync(dir)) {
-        builder = builder.with_skills_dir(dir);
-      }
-    }
-
     for (const server of mcpServers) {
       if (server.type === 'stdio' && server.command) {
         builder = builder.with_mcp_process(server.name, server.command, server.args || []);

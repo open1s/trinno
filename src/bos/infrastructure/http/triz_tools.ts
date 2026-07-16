@@ -332,16 +332,24 @@ export function createTrizTools(
           return ok({ target: 'patents', count: results.length, results, source: 'api' });
         }
         if (args.target === 'all') {
-          const [patents, papers, tech] = await Promise.all([
+          const [patentsResult, papersResult, techResult] = await Promise.allSettled([
             cachedSearch.searchPatents(args.query, max),
             cachedSearch.searchPapers(args.query, max),
             cachedSearch.searchTechSolutions(args.query, max),
           ]);
+          const patents = patentsResult.status === 'fulfilled' ? patentsResult.value : [];
+          const papers = papersResult.status === 'fulfilled' ? papersResult.value : [];
+          const tech = techResult.status === 'fulfilled' ? techResult.value : [];
+          const errors: string[] = [];
+          if (patentsResult.status === 'rejected') errors.push(`patents: ${patentsResult.reason?.message || patentsResult.reason}`);
+          if (papersResult.status === 'rejected') errors.push(`papers: ${papersResult.reason?.message || papersResult.reason}`);
+          if (techResult.status === 'rejected') errors.push(`tech: ${techResult.reason?.message || techResult.reason}`);
           return ok({
             target: 'all',
             patents: { count: patents.length, results: patents },
             papers: { count: papers.length, results: papers },
             techSolutions: { count: tech.length, results: tech },
+            ...(errors.length > 0 ? { errors } : {}),
           });
         }
         return err(`Unknown target: ${args.target}. Use "papers", "patents", or "all".`);

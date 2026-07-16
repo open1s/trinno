@@ -19,6 +19,7 @@ export const DEFAULT_TOOL_PERMISSIONS: ToolPermissionConfig = {
   glob_files: 'allow',
   ast_grep: 'allow',
   write_file: 'allow',
+  load_offline_skill: 'allow',
   load_skill: 'allow',
   edit_file: 'allow',
   ast_edit: 'allow',

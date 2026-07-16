@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 
@@ -110,6 +111,89 @@ export function loadRemoteSkillsFromBosConfig(): RemoteSkillEntry[] {
   } catch {
     return [];
   }
+}
+
+const LOCAL_SKILLS_DIRS = [
+  path.join(os.homedir(), '.bos', 'skills'),
+  path.join(os.homedir(), '.agents', 'skills'),
+];
+
+export interface LocalSkillEntry {
+  name: string;
+  description: string;
+  filePath: string;
+  tags?: string[];
+}
+
+export function scanLocalSkills(): LocalSkillEntry[] {
+  const results: LocalSkillEntry[] = [];
+  const visited = new Set<string>();
+  for (const dir of LOCAL_SKILLS_DIRS) {
+    if (!fs.existsSync(dir)) continue;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const skillFile = path.join(fullPath, SKILL_FILE);
+        if (!fs.existsSync(skillFile)) continue;
+        if (visited.has(entry.name)) continue;
+        visited.add(entry.name);
+        try {
+          const content = fs.readFileSync(skillFile, 'utf-8');
+          const desc = parseFrontmatterDescription(content);
+          results.push({ name: entry.name, description: desc || entry.name, filePath: skillFile });
+        } catch { /* skip unreadable */ }
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        const name = entry.name.replace(/\.md$/, '');
+        if (visited.has(name)) continue;
+        visited.add(name);
+        try {
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const desc = parseFrontmatterDescription(content);
+          results.push({ name, description: desc || name, filePath: fullPath });
+        } catch { /* skip unreadable */ }
+      }
+    }
+  }
+  return results;
+}
+
+export function searchLocalSkills(query: string, limit: number): LocalSkillEntry[] {
+  const tokens = query.toLowerCase().split(/\s+/).map(t => t.trim()).filter(t => t.length > 0);
+  if (tokens.length === 0) return [];
+  const all = scanLocalSkills();
+  const hits: { entry: LocalSkillEntry; score: number }[] = [];
+  for (const skill of all) {
+    let score = 0;
+    const name = skill.name.toLowerCase();
+    const desc = skill.description.toLowerCase();
+    for (const q of tokens) {
+      if (name === q) score += 10;
+      else if (name.includes(q)) score += 5;
+      if (desc.includes(q)) score += 2;
+    }
+    if (score > 0) hits.push({ entry: skill, score });
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, limit).map(h => h.entry);
+}
+
+export function loadLocalSkill(name: string): { content: string; filePath: string } | null {
+  for (const dir of LOCAL_SKILLS_DIRS) {
+    const dirPath = path.join(dir, name);
+    if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+      const skillFile = path.join(dirPath, SKILL_FILE);
+      if (fs.existsSync(skillFile)) {
+        try { return { content: fs.readFileSync(skillFile, 'utf-8'), filePath: skillFile }; } catch { return null; }
+      }
+    }
+    const mdFile = path.join(dir, name + '.md');
+    if (fs.existsSync(mdFile)) {
+      try { return { content: fs.readFileSync(mdFile, 'utf-8'), filePath: mdFile }; } catch { return null; }
+    }
+  }
+  return null;
 }
 
 function ensureDir(dir: string): void {

@@ -149,7 +149,7 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     purpose: '将研究分析结果整理为可交付的正式文档（论文、报告、演示文稿）。',
     workflow: [
       '根据需求选择输出格式（Typst 论文 / Markdown 报告）',
-      '调用 `load_skill("paper-writer")` 或 `load_skill("patent-writer")` 获取写作指引',
+      '调用 `load_offline_skill("paper-writer")` 或 `load_offline_skill("patent-writer")` 获取写作指引',
       '使用 `todowrite` 规划章节，逐步撰写',
       '交叉验证各章节与 03_Analyze、04_Synthesize 结论的一致性',
     ],
@@ -216,7 +216,7 @@ const PHASE_README: Record<PhaseDir, PhaseReadmeContent> = {
     title: '07_Patent — 专利撰写',
     purpose: '将 TRIZ 解决方案转化为专利申请文件（权利要求书 + 说明书）。',
     workflow: [
-      '调用 `load_skill("patent-writer")` 获取专利写作指引',
+      '调用 `load_offline_skill("patent-writer")` 获取专利写作指引',
       '使用 `todowrite` 规划专利结构',
       '撰写权利要求书（独立权利要求 + 从属权利要求）',
       '撰写说明书（技术领域、背景、发明内容、附图说明、具体实施方式）',
