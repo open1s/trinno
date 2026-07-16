@@ -9,7 +9,7 @@ export interface RaceOptions {
 }
 
 export interface RaceResult {
-  winner: SourceCandidate;
+  candidates: SourceCandidate[];
   failures: { source: string; error: string }[];
 }
 
@@ -38,45 +38,72 @@ export async function raceSources(opts: RaceOptions): Promise<RaceResult | null>
 
   if (candidates.length === 0) return null;
 
-  return new Promise<RaceResult | null>((resolve) => {
-    let settled = false;
-    const remaining = new Set(candidates.map((_, i) => i));
-    let onAbort: (() => void) | null = null;
+  const RACE_WINDOW_MS = 200;
 
-    const finish = (winner: SourceCandidate | null) => {
+return new Promise<RaceResult | null>((resolve) => {
+    let settled = false;
+    const resolved: SourceCandidate[] = [];
+    let windowTimer: NodeJS.Timeout | null = null;
+    let candidateCount = 0;
+    let pendingCandidates = candidates.length;
+
+    const onAbortHandler = () => {
       if (settled) return;
       settled = true;
-      if (onAbort && signal) {
-        signal.removeEventListener('abort', onAbort);
-        onAbort = null;
+      if (windowTimer) clearTimeout(windowTimer);
+signal?.removeEventListener('abort', onAbortHandler);
+      resolve(null);
+    };
+
+    const checkFinish = () => {
+      if (settled) return;
+      if (candidateCount >= pendingCandidates) {
+        if (resolved.length > 0) {
+          settled = true;
+          if (windowTimer) clearTimeout(windowTimer);
+          signal?.removeEventListener('abort', onAbortHandler);
+          resolve({ candidates: resolved, failures });
+        } else {
+          settled = true;
+          if (windowTimer) clearTimeout(windowTimer);
+          signal?.removeEventListener('abort', onAbortHandler);
+          resolve(null);
+        }
       }
-      if (!winner) {
+    };
+
+    const finishNow = () => {
+      if (settled) return;
+      settled = true;
+      if (windowTimer) clearTimeout(windowTimer);
+      signal?.removeEventListener('abort', onAbortHandler);
+      if (resolved.length > 0) {
+        resolve({ candidates: resolved, failures });
+      } else {
         resolve(null);
-        return;
       }
-      resolve({ winner, failures });
     };
 
     for (let i = 0; i < candidates.length; i++) {
       const entry = candidates[i]!;
       entry.run().then((result) => {
-        if (!remaining.has(i)) return;
-        remaining.delete(i);
+        candidateCount++;
         if (result) {
-          finish(result);
-        } else if (remaining.size === 0) {
-          finish(null);
+          resolved.push(result);
+          if (resolved.length === 1) {
+            windowTimer = setTimeout(finishNow, RACE_WINDOW_MS);
+          }
         }
+        checkFinish();
       });
     }
 
     if (signal) {
-      onAbort = () => finish(null);
       if (signal.aborted) {
-        finish(null);
+        finishNow();
         return;
       }
-      signal.addEventListener('abort', onAbort, { once: true });
+      signal.addEventListener('abort', onAbortHandler, { once: true });
     }
   });
 }

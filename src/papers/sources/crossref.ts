@@ -1,4 +1,5 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 const API = 'https://api.crossref.org/works';
 
@@ -48,20 +49,19 @@ export class CrossrefSource implements PaperSource {
     if (id.kind !== 'doi' || !id.doi) return null;
 
     const url = `${API}/${encodeURIComponent(id.doi)}`;
-    const ctrl = new AbortController();
-    const onAbort = () => ctrl.abort();
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
-      const res = await fetch(url, {
-        signal: ctrl.signal,
+      const res = await httpRequest({
+        url,
+        signal,
+        timeoutMs: this.timeoutMs,
+        maxRetries: 0,
         headers: {
           'User-Agent': 'trinno-research/1.0 (mailto:trinno-research@example.com)',
           'Accept': 'application/json',
         },
       });
-      if (!res.ok) return null;
-      const data: any = await res.json();
+      if (res.status < 200 || res.status >= 300) return null;
+      const data: any = JSON.parse(res.body.toString('utf-8'));
       const m = data?.message;
       if (!m) return null;
       const links: any[] = Array.isArray(m.link) ? m.link : [];
@@ -74,9 +74,6 @@ export class CrossrefSource implements PaperSource {
       };
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onAbort);
     }
   }
 }

@@ -10,27 +10,20 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
   const downloadPaperTool = defineTool(
     'papers_download',
     'Download a paper by DOI, arXiv ID, PMID, or any URL (publisher, Zenodo, bioRxiv, ' +
-    'file.scholarin.cn, pubscholar.cn, etc.). Races 11 sources (direct_url, pubscholar, ' +
-    'arXiv, bioRxiv, OpenAlex, Zenodo, publisher-direct, Crossref, Semantic Scholar, ' +
-    'Europe PMC, Unpaywall) and saves the best matching file. Format is auto-detected from ' +
-    'response Content-Type, buffer magic, or URL extension (PDF, DOCX, DOC, PPTX, HTML, ' +
-    'EPUB, RTF, etc.). Default output is the Trinno workspace\'s 06_References/ folder; if ' +
-    'that directory is not writable, falls back to ~/.trinno/papers/ automatically. ' +
-    'Returns the saved file path, source, format, and metadata. ' +
-    'If auto-download fails (e.g., paywalled / no open-access copy), the response still ' +
-    'includes a `manualUrls` array with publisher landing pages, ScienceDirect / IEEE / ' +
-    'Springer / Wiley direct links when applicable, and search URLs (Google Scholar, ' +
-    'Semantic Scholar, ResearchGate, and for Chinese papers: Baidu Scholar, CNKI, Wanfang) ' +
-    'so the user can grab the PDF manually.',
+    'file.scholarin.cn, pubscholar.cn, etc.). ',
   )
     .required('identifier', 'string', 'DOI, arXiv ID, PMID, or any URL (https://...) of the paper to download')
     .param('outputDir', 'string', 'Override output directory (defaults to <workspace>/06_References/, falls back to ~/.trinno/papers/ if unwritable)')
     .handle(async (args) => {
+      const wsRoot = phaseWriter.getWorkspaceRoot() || process.cwd();
       let primary: string;
       if (args.outputDir?.trim()) {
-        const guard = resolveInWorkspace(args.outputDir.trim(), phaseWriter.getWorkspaceRoot() || process.cwd());
-        if (!guard.ok) return err(guard.error);
-        primary = guard.resolved;
+        const guard = resolveInWorkspace(args.outputDir.trim(), wsRoot);
+        if (guard.ok) {
+          primary = guard.resolved;
+        } else {
+          primary = args.outputDir.trim();
+        }
       } else {
         primary = defaultOutputDir(phaseWriter);
       }
@@ -75,10 +68,7 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
 
   const listDownloadedTool = defineTool(
     'papers_list_downloaded',
-    'List papers previously downloaded by Trinno. Includes PDFs and other formats ' +
-    '(DOCX, HTML, EPUB, etc.). Sorted by modification time, newest first. ' +
-    'Searches the workspace 06_References/ folder first, then ~/.trinno/papers/ ' +
-    'as a fallback so downloaded files are always discoverable.',
+    'List papers previously downloaded by Trinno.',
   )
     .param('outputDir', 'string', 'Override output directory (defaults to <workspace>/06_References/)')
     .handle((args) => {

@@ -1,4 +1,5 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 const API = 'https://api.unpaywall.org/v2';
 
@@ -44,22 +45,22 @@ export class UnpaywallSource implements PaperSource {
     if (id.kind !== 'doi' || !id.doi) return null;
     const url = `${API}/${encodeURIComponent(id.doi)}?email=${encodeURIComponent(this.email)}`;
 
-    const ctrl = new AbortController();
-    const onAbort = () => ctrl.abort();
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
-      const res = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': `trinno-research/1.0 (mailto:${this.email})` } });
-      if (!res.ok) return null;
-      const data: any = await res.json();
+      const res = await httpRequest({
+        url,
+        signal,
+        timeoutMs: this.timeoutMs,
+        maxRetries: 0,
+        headers: { 'User-Agent': `trinno-research/1.0 (mailto:${this.email})` },
+        accept: 'application/json',
+      });
+      if (res.status < 200 || res.status >= 300) return null;
+      const data: any = JSON.parse(res.body.toString('utf-8'));
       const pdfUrl = pickPdfUrl(data);
       if (!pdfUrl) return null;
       return { source: 'unpaywall', pdfUrl, meta: metaFromResponse(data) };
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onAbort);
     }
   }
 }

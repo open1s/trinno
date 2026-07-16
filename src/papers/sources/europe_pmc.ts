@@ -1,4 +1,5 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 const BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest/search';
 
@@ -54,15 +55,18 @@ export const europePmcSource: PaperSource = {
     const query = buildQuery(id);
     if (!query) return null;
 
-    const url = `${BASE}?query=${encodeURIComponent(query)}&format=json&resultType=lite`;
-    const ctrl = new AbortController();
-    const onAbort = () => ctrl.abort();
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    const url = `${BASE}?query=${encodeURIComponent(query)}&format=json&resultType=core`;
     try {
-      const res = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'trinno-research/1.0' } });
-      if (!res.ok) return null;
-      const data: any = await res.json();
+      const res = await httpRequest({
+        url,
+        signal,
+        timeoutMs: this.timeoutMs,
+        maxRetries: 0,
+        headers: { 'User-Agent': 'trinno-research/1.0' },
+        accept: 'application/json',
+      });
+      if (res.status < 200 || res.status >= 300) return null;
+      const data: any = JSON.parse(res.body.toString('utf-8'));
       const hits: any[] = data?.response?.result ?? [];
       if (hits.length === 0) return null;
       for (const hit of hits) {
@@ -72,9 +76,6 @@ export const europePmcSource: PaperSource = {
       return null;
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onAbort);
     }
   },
 };

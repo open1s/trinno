@@ -1,4 +1,5 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 interface PublisherPattern {
   name: string;
@@ -63,26 +64,22 @@ function findPattern(doi: string): PublisherPattern | null {
 }
 
 async function checkPdfReachable(url: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<boolean> {
-  const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort();
-  if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await httpRequest({
+      url,
       method: 'HEAD',
-      signal: ctrl.signal,
-      redirect: 'follow',
+      signal,
+      timeoutMs,
+      maxRetries: 0,
+      redirect: 'auto',
       headers: {
         'User-Agent': 'trinno-research/1.0 (mailto:trinno-research@example.com)',
         'Accept': 'application/pdf,*/*',
       },
     });
-    return res.ok;
+    return res.status >= 200 && res.status < 400;
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 

@@ -38,6 +38,7 @@ import {
   takeSnapshot,
   autoCommand,
   sandboxCommand,
+  downloadCommand,
   readGoalForWorker,
   writeGoalForWorker,
   isGoalActive,
@@ -135,6 +136,7 @@ slashRegistry.register(undoCommand, ['u']);
 slashRegistry.register(goalCommand, ['g']);
 slashRegistry.register(autoCommand, ['a', 'autoresearch']);
 slashRegistry.register(sandboxCommand, ['sb']);
+slashRegistry.register(downloadCommand, ['d', 'dl', 'get']);
 
 let pendingSlashOutput: string | null = null;
 

@@ -1,5 +1,6 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
 import { createModuleLogger } from '../../bos/infrastructure/logging/logger';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 const log = createModuleLogger('zenodo');
 const ZENODO_DOI_RE = /^10\.5281\/zenodo\.(\d+)$/i;
@@ -77,20 +78,19 @@ export class ZenodoSource implements PaperSource {
     if (!zenodoId) return null;
 
     const apiUrl = `${API_HOST}/api/records/${encodeURIComponent(zenodoId)}`;
-    const ctrl = new AbortController();
-    const onAbort = () => ctrl.abort();
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
-      const res = await fetch(apiUrl, {
-        signal: ctrl.signal,
+      const res = await httpRequest({
+        url: apiUrl,
+        signal,
+        timeoutMs: this.timeoutMs,
+        maxRetries: 0,
         headers: {
           'User-Agent': 'trinno-research/1.0 (mailto:trinno-research@example.com)',
           'Accept': 'application/json',
         },
       });
-      if (!res.ok) return null;
-      const data: any = await res.json();
+      if (res.status < 200 || res.status >= 300) return null;
+      const data: any = JSON.parse(res.body.toString('utf-8'));
       const files: any[] = Array.isArray(data?.files) ? data.files : [];
       const best = pickBestFile(files);
       if (!best) {
@@ -106,9 +106,6 @@ export class ZenodoSource implements PaperSource {
       };
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onAbort);
     }
   }
 }

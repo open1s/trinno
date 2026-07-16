@@ -1,4 +1,5 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier } from '../types';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 const ARTICLE_HASH_RE = /^https?:\/\/pubscholar\.cn\/articles\/([a-f0-9]{32,128})/i;
 const PATENTS_RE = /^https?:\/\/pubscholar\.cn\/patents\/([a-f0-9]{32,128})(?:\/\d+)?/i;
@@ -6,27 +7,19 @@ const BOOKS_RE = /^https?:\/\/pubscholar\.cn\/books\/([a-f0-9]{32,128})/i;
 const PREVIEW_BASE = 'https://file.scholarin.cn/preview2';
 
 async function probe(url: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<{ ok: boolean; contentType: string | null }> {
-  const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort();
-  if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await httpRequest({
+      url,
       method: 'HEAD',
-      signal: ctrl.signal,
+      signal,
+      timeoutMs,
+      maxRetries: 0,
       headers: { 'User-Agent': 'trinno-research/1.0 (mailto:trinno@example.com)' },
     });
-    if (!res.ok) return { ok: false, contentType: null };
-    const ct = res.headers.get('content-type');
-    return {
-      ok: true,
-      contentType: ct ? ct.split(';')[0]?.trim().toLowerCase() || null : null,
-    };
+    if (res.status < 200 || res.status >= 300) return { ok: false, contentType: null };
+    return { ok: true, contentType: res.contentType };
   } catch {
     return { ok: false, contentType: null };
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 

@@ -15,10 +15,13 @@ import { biorxivSource } from './sources/biorxiv';
 import { publisherDirectSource } from './sources/publisher_direct';
 import { directUrlSource } from './sources/direct_url';
 import { pubscholarSource } from './sources/pubscholar';
+import { sciHubSource } from './sources/sci_hub';
 import { raceSources } from './racer';
 import { buildFilename, dedupeFilename } from './filename';
 import { parseIdentifier, isResolvable } from './identifier';
-import type { DownloadOptions, DownloadResult, PaperSource, PaperMeta, ParsedIdentifier, ManualUrl } from './types';
+import { httpRequest } from '../bos/infrastructure/http/http_client';
+import { extractUrlsFromHtml } from '../bos/infrastructure/http/document_extractor';
+import type { DownloadOptions, DownloadResult, PaperSource, PaperMeta, ParsedIdentifier, ManualUrl, SourceCandidate } from './types';
 
 const ALL_SOURCES: PaperSource[] = [
   directUrlSource,
@@ -31,6 +34,7 @@ const ALL_SOURCES: PaperSource[] = [
   crossrefSource,
   semanticScholarSource,
   europePmcSource,
+  sciHubSource,
 ];
 
 export function getDefaultSources(email?: string): PaperSource[] {
@@ -174,12 +178,16 @@ async function lookupMetadata(parsed: ParsedIdentifier, signal: AbortSignal | un
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => ctrl.abort(), 8_000);
   try {
-    const res = await fetch(url, {
+    const res = await httpRequest({
+      url,
       signal: ctrl.signal,
+      timeoutMs: 8000,
+      maxRetries: 0,
       headers: { 'User-Agent': 'trinno-research/1.0 (mailto:trinno@example.com)' },
+      accept: 'application/json',
     });
-    if (!res.ok) return null;
-    const work: any = await res.json();
+    if (res.status < 200 || res.status >= 300) return null;
+    const work: any = JSON.parse(res.body.toString('utf-8'));
     if (!work) return null;
     const title: string = work.title || work.display_name || '';
     if (!title) return null;
@@ -332,68 +340,18 @@ export function extractFileUrlsFromHtml(html: string, baseUrl: string): string[]
 }
 
 async function fetchFile(url: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<{ buffer: Buffer; contentType: string | null; extHint: string | null }> {
-  const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort();
-  if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-
-  const MAX_REDIRECTS = 15;
-  const cookies = new Map<string, string>();
-  let currentUrl = url;
-  let finalRes: Response | null = null;
-
-  try {
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const cookieHeader = cookies.size > 0
-        ? Array.from(cookies.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
-        : undefined;
-
-      const res = await fetch(currentUrl, {
-        signal: ctrl.signal,
-        redirect: 'manual',
-        headers: {
-          'User-Agent': 'trinno-research/1.0 (mailto:trinno-research@example.com)',
-          'Accept': 'application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,application/epub+zip,application/octet-stream,text/html,text/plain,*/*',
-          ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
-        },
-      });
-
-      const setCookies = res.headers.getSetCookie();
-      for (const cs of setCookies) {
-        const eq = cs.indexOf('=');
-        if (eq > 0) {
-          const name = cs.substring(0, eq).trim();
-          const semi = cs.indexOf(';', eq);
-          const value = semi >= 0 ? cs.substring(eq + 1, semi) : cs.substring(eq + 1);
-          cookies.set(name, value);
-        }
-      }
-
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get('location');
-        if (!location) throw new Error(`Redirect ${res.status} without Location header`);
-        currentUrl = new URL(location, currentUrl).href;
-        continue;
-      }
-
-      finalRes = res;
-      break;
-    }
-
-    if (!finalRes) {
-      throw new Error(`Too many redirects (${MAX_REDIRECTS})`);
-    }
-    if (!finalRes.ok) {
-      throw new Error(`HTTP ${finalRes.status} ${finalRes.statusText}`);
-    }
-    const ab = await finalRes.arrayBuffer();
-    const buffer = Buffer.from(ab);
-    const contentType = (finalRes.headers.get('content-type') || '').split(';')[0]?.trim().toLowerCase() || null;
-    return { buffer, contentType, extHint: contentType };
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onAbort);
-  }
+  const res = await httpRequest({
+    url,
+    ...(signal ? { signal } : {}),
+    timeoutMs,
+    redirect: 'manual',
+    maxRetries: 1,
+  });
+  return {
+    buffer: res.body,
+    contentType: res.contentType,
+    extHint: res.contentType,
+  };
 }
 
 function resolveOutputDir(override?: string): string | null {
@@ -453,7 +411,7 @@ export async function downloadPaper(
   if (opts.signal) raceOpts.signal = opts.signal;
   const race = await raceSources(raceOpts);
 
-  if (!race) {
+  if (!race || race.candidates.length === 0) {
     log.warn({ identifier: opts.identifier }, 'no source resolved the identifier');
     const meta = await lookupMetadata(parsed, opts.signal);
     return {
@@ -465,124 +423,107 @@ export async function downloadPaper(
     };
   }
 
-  const candidate = race.winner;
-  log.debug({ source: candidate.source, url: candidate.pdfUrl }, 'source won race');
-  onProgress?.({ source: candidate.source, status: 'start' });
+  const candidates = race.candidates;
+  log.debug({ winnerCount: candidates.length, sourceCount: race.failures.length }, 'race finished');
 
-  let fetched: { buffer: Buffer; contentType: string | null; extHint: string | null };
-  try {
-    log.debug({ url: candidate.pdfUrl }, 'fetching file');
-    fetched = await fetchFile(candidate.pdfUrl, opts.signal, 120_000);
-    log.debug({ bytes: fetched.buffer.length, contentType: fetched.contentType }, 'file fetched');
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    log.warn({ source: candidate.source, error: msg }, 'download failed');
-    onProgress?.({ source: candidate.source, status: 'fail', error: msg });
-    const failResult: DownloadResult = {
-      ok: false,
-      source: candidate.source,
-      error: `Download failed from ${candidate.source}: ${msg}`,
-    };
-    if (candidate.meta) failResult.meta = candidate.meta;
-    failResult.manualUrls = buildManualDownloadUrls(parsed, candidate.meta);
-    return failResult;
-  }
+  let lastCandidate: SourceCandidate | null = null;
+  let lastError: string = '';
 
-  const { buffer, contentType } = fetched;
+  for (const candidate of candidates) {
+    lastCandidate = candidate;
+    onProgress?.({ source: candidate.source, status: 'start' });
 
-  if (buffer.length < MIN_BYTES) {
-    onProgress?.({
-      source: candidate.source,
-      status: 'fail',
-      error: `Response from ${candidate.source} is too small (${buffer.length} bytes)`,
-    });
-    const failResult: DownloadResult = {
-      ok: false,
-      source: candidate.source,
-      error: `Response from ${candidate.source} is too small (${buffer.length} bytes)`,
-    };
-    if (candidate.meta) failResult.meta = candidate.meta;
-    failResult.manualUrls = buildManualDownloadUrls(parsed, candidate.meta);
-    return failResult;
-  }
+    let fetched: { buffer: Buffer; contentType: string | null; extHint: string | null };
+    try {
+      fetched = await fetchFile(candidate.pdfUrl, opts.signal, 120_000);
+    } catch (e: unknown) {
+      lastError = e instanceof Error ? e.message : String(e);
+      onProgress?.({ source: candidate.source, status: 'fail', error: lastError });
+      continue;
+    }
 
-  const format =
-    candidate.format ||
-    contentType ||
-    detectFormatFromBuffer(buffer) ||
-    detectFormatFromUrl(candidate.pdfUrl) ||
-    'application/octet-stream';
+    const { buffer, contentType } = fetched;
+    if (buffer.length < MIN_BYTES) {
+      lastError = `Response from ${candidate.source} is too small (${buffer.length} bytes)`;
+      onProgress?.({ source: candidate.source, status: 'fail', error: lastError });
+      continue;
+    }
 
-  let resolvedBuffer = buffer;
-  let resolvedFormat: string = format;
-  let resolvedFromExtracted: string | null = null;
+    const format =
+      candidate.format ||
+      contentType ||
+      detectFormatFromBuffer(buffer) ||
+      detectFormatFromUrl(candidate.pdfUrl) ||
+      'application/octet-stream';
 
-  if (resolvedFormat === 'text/html') {
-    const htmlText = buffer.toString('utf8', 0, Math.min(buffer.length, 1_000_000));
-    const candidates = extractFileUrlsFromHtml(htmlText, candidate.pdfUrl).slice(0, 5);
-    for (const fileUrl of candidates) {
-      try {
-        const inner = await fetchFile(fileUrl, opts.signal, 15_000);
-        const innerFormat =
-          inner.contentType ||
-          detectFormatFromBuffer(inner.buffer) ||
-          detectFormatFromUrl(fileUrl) ||
-          'application/octet-stream';
-        if (innerFormat !== 'text/html' && inner.buffer.length >= MIN_BYTES) {
-          resolvedBuffer = inner.buffer;
-          resolvedFormat = innerFormat;
-          resolvedFromExtracted = fileUrl;
-          break;
+    let resolvedBuffer = buffer;
+    let resolvedFormat: string = format;
+    let resolvedFromExtracted: string | null = null;
+
+    if (resolvedFormat === 'text/html') {
+      const htmlText = buffer.toString('utf8', 0, Math.min(buffer.length, 1_000_000));
+      const extracted = extractUrlsFromHtml(htmlText, candidate.pdfUrl).slice(0, 5);
+      for (const e of extracted) {
+        try {
+          const inner = await fetchFile(e.url, opts.signal, 15_000);
+          const innerFormat =
+            inner.contentType ||
+            detectFormatFromBuffer(inner.buffer) ||
+            detectFormatFromUrl(e.url) ||
+            'application/octet-stream';
+          if (innerFormat !== 'text/html' && inner.buffer.length >= MIN_BYTES) {
+            resolvedBuffer = inner.buffer;
+            resolvedFormat = innerFormat;
+            resolvedFromExtracted = e.url;
+            break;
+          }
+        } catch {
         }
-      } catch {
-        // try next candidate
+      }
+      if (!resolvedFromExtracted) {
+        lastError = `${candidate.source} returned an HTML page with no extractable file link`;
+        onProgress?.({ source: candidate.source, status: 'fail', error: lastError });
+        continue;
       }
     }
-    if (!resolvedFromExtracted) {
-      onProgress?.({
-        source: candidate.source,
-        status: 'fail',
-        error: `${candidate.source} returned an HTML page with no extractable PDF/DOC/DOCX/PPT link`,
-      });
-      const failResult: DownloadResult = {
-        ok: false,
-        source: candidate.source,
-        error: `${candidate.source} returned an HTML page (no direct file link found). Try a different identifier or use /download with a direct URL.`,
-      };
-      if (candidate.meta) failResult.meta = candidate.meta;
-      failResult.manualUrls = buildManualDownloadUrls(parsed, candidate.meta);
-      return failResult;
+
+    const outputDir = resolveOutputDir(opts.outputDir);
+    if (!outputDir) {
+      lastError = 'No workspace folder is open. Open a folder to set the download target (06_References).';
+      continue;
     }
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const fallback: PaperMeta = { title: parsed.value, authors: [] };
+    if (parsed.doi) fallback.doi = parsed.doi;
+    if (parsed.arxivId) fallback.arxivId = parsed.arxivId;
+    if (parsed.pmid) fallback.pmid = parsed.pmid;
+    const meta: PaperMeta = candidate.meta ?? fallback;
+    const ext = extForFormat(resolvedFormat);
+    const filename = dedupeFilename(outputDir, buildFilename(meta, ext));
+    const fullPath = path.join(outputDir, filename);
+    fs.writeFileSync(fullPath, resolvedBuffer);
+
+    onProgress?.({ source: candidate.source, status: 'success', filePath: fullPath });
+
+    return {
+      ok: true,
+      source: candidate.source,
+      filePath: fullPath,
+      bytes: resolvedBuffer.length,
+      format: resolvedFormat,
+      meta,
+    };
   }
 
-  const outputDir = resolveOutputDir(opts.outputDir);
-  if (!outputDir) {
-    return { ok: false, error: 'No workspace folder is open. Open a folder to set the download target (06_References).' };
-  }
-  fs.mkdirSync(outputDir, { recursive: true });
-  log.debug({ outputDir }, 'resolved output directory');
-
-  const fallback: PaperMeta = { title: parsed.value, authors: [] };
-  if (parsed.doi) fallback.doi = parsed.doi;
-  if (parsed.arxivId) fallback.arxivId = parsed.arxivId;
-  if (parsed.pmid) fallback.pmid = parsed.pmid;
-  const meta: PaperMeta = candidate.meta ?? fallback;
-  const ext = extForFormat(resolvedFormat);
-  const filename = dedupeFilename(outputDir, buildFilename(meta, ext));
-  const fullPath = path.join(outputDir, filename);
-  fs.writeFileSync(fullPath, resolvedBuffer);
-  log.info({ filePath: fullPath, bytes: resolvedBuffer.length, format: resolvedFormat, source: candidate.source }, 'paper saved');
-
-  onProgress?.({ source: candidate.source, status: 'success', filePath: fullPath });
-
-  return {
-    ok: true,
-    source: candidate.source,
-    filePath: fullPath,
-    bytes: resolvedBuffer.length,
-    format: resolvedFormat,
-    meta,
+  const failResult: DownloadResult = {
+    ok: false,
+    error: lastError || 'All sources failed to download',
+    ...(lastCandidate ? { source: lastCandidate.source } : {}),
   };
+  if (lastCandidate?.meta) failResult.meta = lastCandidate.meta;
+  failResult.manualUrls = buildManualDownloadUrls(parsed, lastCandidate?.meta ?? undefined);
+  return failResult;
 }
 
 export function listDownloadedPapers(outputDir?: string): { filePath: string; size: number; mtime: number }[] {

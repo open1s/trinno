@@ -19,7 +19,7 @@ export function setupProxy(): void {
     const proxyConfig = config?.proxy as Record<string, string> | undefined;
     if (!proxyConfig) return;
 
-    const proxyUrl = proxyConfig.http_proxy || proxyConfig.https_proxy || '';
+    const proxyUrl = proxyConfig.http_proxy || proxyConfig.https_proxy || undefined;
     if (!proxyUrl) return;
 
     const agent = new ProxyAgent(proxyUrl);

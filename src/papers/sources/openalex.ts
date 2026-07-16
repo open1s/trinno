@@ -1,4 +1,5 @@
 import type { PaperSource, SourceCandidate, ParsedIdentifier, PaperMeta } from '../types';
+import { httpRequest } from '../../bos/infrastructure/http/http_client.js';
 
 const BASE = 'https://api.openalex.org';
 
@@ -16,14 +17,17 @@ function reconstructAbstract(inv: Record<string, number[]> | null | undefined): 
 }
 
 function pickPdf(work: any): string | null {
-  const candidates = [
+  const pdfCandidates = [
     work?.best_oa_location?.pdf_url,
     work?.primary_location?.pdf_url,
-    work?.primary_location?.source?.pdf_url,
   ];
-  for (const c of candidates) {
-    if (typeof c === 'string' && c.toLowerCase().endsWith('.pdf')) return c;
+  for (const c of pdfCandidates) {
+    if (typeof c === 'string' && c.length > 0) return c;
   }
+  const oaUrl = work?.open_access?.oa_url;
+  if (typeof oaUrl === 'string' && oaUrl.toLowerCase().endsWith('.pdf')) return oaUrl;
+  const sourceUrl = work?.primary_location?.source?.pdf_url;
+  if (typeof sourceUrl === 'string' && sourceUrl.length > 0) return sourceUrl;
   return null;
 }
 
@@ -63,19 +67,19 @@ async function fetchWork(id: ParsedIdentifier, signal: AbortSignal | undefined, 
   else if (id.kind === 'pmid' && id.pmid) url = `${BASE}/works/pmid:${encodeURIComponent(id.pmid)}`;
   if (!url) return null;
 
-  const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort();
-  if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'trinno-research/1.0 (mailto:trinno@example.com)' } });
-    if (!res.ok) return null;
-    return await res.json();
+    const res = await httpRequest({
+      url,
+      signal,
+      timeoutMs,
+      maxRetries: 0,
+      headers: { 'User-Agent': 'trinno-research/1.0 (mailto:trinno@example.com)' },
+      accept: 'application/json',
+    });
+    if (res.status < 200 || res.status >= 300) return null;
+    return JSON.parse(res.body.toString('utf-8'));
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 

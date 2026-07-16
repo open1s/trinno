@@ -141,7 +141,7 @@ describe('papers/racer', () => {
     const sources = [make('slow', 5, 50, true), make('fast', 1, 5, true), make('medium', 3, 20, true)];
     const result = await raceSources({ identifier: parsed, sources });
     assert.ok(result);
-    assert.equal(result!.winner.source, 'fast');
+    assert.equal(result!.candidates[0]!.source, 'fast');
   });
 
   it('falls back when the fastest source fails', async () => {
@@ -157,7 +157,7 @@ describe('papers/racer', () => {
     const sources = [broken, make('ok', 2, 30, true)];
     const result = await raceSources({ identifier: parsed, sources });
     assert.ok(result);
-    assert.equal(result!.winner.source, 'ok');
+    assert.equal(result!.candidates[0]!.source, 'ok');
     assert.equal(result!.failures.length, 1);
     assert.equal(result!.failures[0]!.source, 'broken');
     assert.match(result!.failures[0]!.error, /upstream 500/);

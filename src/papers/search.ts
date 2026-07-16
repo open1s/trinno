@@ -1,4 +1,5 @@
 import type { PaperMeta, ParsedIdentifier } from './types';
+import { httpRequest } from '../bos/infrastructure/http/http_client.js';
 
 const API = 'https://api.openalex.org';
 
@@ -83,24 +84,21 @@ export async function searchOpenAlex(query: string, limit = 3, signal?: AbortSig
 
   const url = `${API}/works?search=${encodeURIComponent(trimmed)}&per_page=${Math.max(1, Math.min(10, limit))}&select=${fields}`;
 
-  const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort();
-  if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => ctrl.abort(), 10_000);
   try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
+    const res = await httpRequest({
+      url,
+      signal,
+      timeoutMs: 10_000,
+      maxRetries: 0,
       headers: { 'User-Agent': 'trinno-research/1.0 (mailto:trinno-research@example.com)' },
+      accept: 'application/json',
     });
-    if (!res.ok) return [];
-    const data: any = await res.json();
+    if (res.status < 200 || res.status >= 300) return [];
+    const data: any = JSON.parse(res.body.toString('utf-8'));
     const results: any[] = data?.results || [];
     return results.map(toHit);
   } catch {
     return [];
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 

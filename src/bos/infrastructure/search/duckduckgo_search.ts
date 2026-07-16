@@ -1,5 +1,6 @@
 import { SearchResult, SearchQuery, SearchService } from '../../domain/solution/search_port.js';
 import { ReferenceSourceType } from '../../domain/solution/external_reference.js';
+import { httpRequest } from '../http/http_client.js';
 
 export class DuckDuckGoSearchService implements SearchService {
   async search(_query: SearchQuery): Promise<SearchResult[]> {
@@ -31,15 +32,15 @@ export class DuckDuckGoSearchService implements SearchService {
     // Try DuckDuckGo JSON API first
     try {
       const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'TRIZ-Research/1.0 (+https://github.com/triz-tool)',
-        },
-        signal: AbortSignal.timeout(8000),
+      const res = await httpRequest({
+        url,
+        timeoutMs: 8000,
+        userAgent: 'TRIZ-Research/1.0 (+https://github.com/triz-tool)',
+        maxRetries: 1,
       });
 
-      if (response.ok) {
-        const data: any = await response.json();
+      if (res.status >= 200 && res.status < 300) {
+        const data: any = JSON.parse(res.body.toString('utf-8'));
         const results: SearchResult[] = [];
 
         if (data.AbstractText && data.AbstractText.length > 10) {
@@ -71,15 +72,15 @@ export class DuckDuckGoSearchService implements SearchService {
     // Fallback: DuckDuckGo HTML endpoint
     try {
       const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const response = await fetch(htmlUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; TRIZ-Research/1.0)',
-        },
-        signal: AbortSignal.timeout(8000),
+      const res = await httpRequest({
+        url: htmlUrl,
+        timeoutMs: 8000,
+        userAgent: 'Mozilla/5.0 (compatible; TRIZ-Research/1.0)',
+        maxRetries: 1,
       });
 
-      if (response.ok) {
-        const html = await response.text();
+      if (res.status >= 200 && res.status < 300) {
+        const html = res.body.toString('utf-8');
         const results: SearchResult[] = [];
 
         const linkMatches = html.matchAll(/<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi);
@@ -104,17 +105,17 @@ export class DuckDuckGoSearchService implements SearchService {
     // Fallback: Bing CN (accessible from China)
     try {
       const bingUrl = `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
-      const response = await fetch(bingUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        },
-        signal: AbortSignal.timeout(8000),
+      const res = await httpRequest({
+        url: bingUrl,
+        timeoutMs: 8000,
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml',
+        headers: { 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' },
+        maxRetries: 1,
       });
 
-      if (response.ok) {
-        const html = await response.text();
+      if (res.status >= 200 && res.status < 300) {
+        const html = res.body.toString('utf-8');
         const results: SearchResult[] = [];
         const blocks = html.split('<li class="b_algo"');
         for (let i = 1; i < blocks.length && results.length < maxResults; i++) {
