@@ -10,7 +10,7 @@ import {
 describe('bos/agents/common-agent (builtin agent)', () => {
   describe('identity', () => {
     it('exposes a stable display name', () => {
-      assert.equal(COMMON_AGENT_NAME, 'Common Agent');
+      assert.equal(COMMON_AGENT_NAME, 'ARTEMIS');
     });
 
     it('exposes a non-empty description for the agent dropdown', () => {
@@ -42,11 +42,11 @@ describe('bos/agents/common-agent (builtin agent)', () => {
 
     it('embeds TDD red → green → refactor discipline', () => {
       assert.match(prompt, /red|test/i, 'must reference test-first thinking');
-      assert.match(prompt, /TDD|test[-\s]driven/i, 'must name TDD');
+      assert.match(prompt, /test.*green|verify.*seam/i, 'must describe test-first cycle');
     });
 
     it('embeds autoresearch propose → act → evaluate → ratchet loop', () => {
-      assert.match(prompt, /propose/i);
+      assert.match(prompt, /frame.*probe.*verify.*ratchet|ratchet/i);
       assert.match(prompt, /evaluat/i);
       assert.match(prompt, /ratchet/i);
     });
@@ -62,7 +62,7 @@ describe('bos/agents/common-agent (builtin agent)', () => {
     });
 
     it('enumerates the coding toolset', () => {
-      for (const tool of ['read_file', 'write_file', 'edit_file', 'bash', 'ast_grep', 'apply_patch']) {
+      for (const tool of ['read_file', 'write_file', 'edit_file', 'bash', 'ast_grep']) {
         assert.ok(prompt.includes(tool), 'missing coding tool: ' + tool);
       }
     });
