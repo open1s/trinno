@@ -50,7 +50,7 @@ function toHit(work: any): SearchHit {
   const arxivRaw: string | undefined = typeof work?.ids?.arxiv === 'string' ? work.ids.arxiv : undefined;
   const arxivId = arxivRaw ? arxivRaw.replace(/^https?:\/\/arxiv\.org\/abs\//, '') : undefined;
   const openalexRaw: string | undefined = typeof work?.ids?.openalex === 'string' ? work.ids.openalex : undefined;
-  const venue = work?.primary_location?.source?.display_name || work?.host_venue?.display_name;
+  const venue = work?.primary_location?.source?.display_name;
   const pdfUrl = pickPdf(work);
   const abstract = reconstructAbstract(work?.abstract_inverted_index);
   return {
@@ -78,11 +78,10 @@ export async function searchOpenAlex(query: string, limit = 3, signal?: AbortSig
     'ids',
     'primary_location',
     'best_oa_location',
-    'host_venue',
     'abstract_inverted_index',
   ].join(',');
 
-  const url = `${API}/works?search=${encodeURIComponent(trimmed)}&per_page=${Math.max(1, Math.min(10, limit))}&select=${fields}`;
+  const url = `${API}/works?search=${encodeURIComponent(trimmed)}&per_page=${Math.max(1, Math.min(10, limit))}&select=${encodeURIComponent(fields)}`;
 
   try {
     const res = await httpRequest({

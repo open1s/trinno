@@ -219,7 +219,7 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
           const fetchRes = await fetch(currentUrl, {
             method,
             signal: ctrl.signal,
-            redirect: doRedirect ? 'follow' : 'manual',
+            redirect: 'manual', // Always use manual to avoid Node.js fetch hang with large files
             headers: reqHeaders,
             ...(requestBody ? { body: requestBody } : {}),
           });
@@ -234,12 +234,18 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
           }
 
           if (fetchRes.status >= 300 && fetchRes.status < 400) {
-            if (doRedirect) continue;
             const location = fetchRes.headers.get('location');
             if (!location) throw new Error(`Redirect ${fetchRes.status} without Location header`);
             currentUrl = new URL(location, currentUrl).href;
+            if (doRedirect) continue;
+            // When redirect is 'auto', we still need to follow manually
+            // because we need to handle cookies and the body
             continue;
           }
+
+          // Clear timeout before reading body (large files take time to download)
+          clearTimeout(timer);
+          if (signal) signal.removeEventListener('abort', onAbort);
 
           const ab = await fetchRes.arrayBuffer();
           const body = Buffer.from(ab);
@@ -251,9 +257,6 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
           finalResponse = { body, contentType, url: currentUrl, status: fetchRes.status, headers: resHeaders, contentLength: contentLength ? parseInt(contentLength, 10) : null };
           break;
         }
-
-        clearTimeout(timer);
-        if (signal) signal.removeEventListener('abort', onAbort);
 
         if (!finalResponse) {
           throw new Error(`Too many redirects (${maxRedirects})`);

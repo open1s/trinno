@@ -44,7 +44,7 @@ function metaFromWork(work: any): PaperMeta {
   const ids = work?.ids ?? {};
   const arxivId: string | undefined = typeof ids?.arxiv === 'string' ? ids.arxiv.replace(/^https?:\/\/arxiv\.org\/abs\//, '') : undefined;
   const pmid: string | undefined = typeof ids?.pmid === 'string' ? ids.pmid.replace(/^https?:\/\/pubmed\.ncbi\.nlm\.nih\.gov\//, '') : undefined;
-  const venue: string | undefined = work?.primary_location?.source?.display_name || work?.host_venue?.display_name;
+  const venue: string | undefined = work?.primary_location?.source?.display_name;
 
   const meta: PaperMeta = {
     title,

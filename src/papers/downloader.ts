@@ -197,7 +197,7 @@ async function lookupMetadata(parsed: ParsedIdentifier, signal: AbortSignal | un
       .filter((n: unknown): n is string => typeof n === 'string' && n.length > 0);
     const year: number | undefined = typeof work.publication_year === 'number' ? work.publication_year : undefined;
     const doi: string | undefined = typeof work.doi === 'string' ? work.doi.replace(/^https?:\/\/doi\.org\//, '') : (parsed.doi ?? undefined);
-    const venue: string | undefined = work?.primary_location?.source?.display_name || work?.host_venue?.display_name;
+    const venue: string | undefined = work?.primary_location?.source?.display_name;
     const oaUrl: string | undefined = typeof work?.open_access?.oa_url === 'string' ? work.open_access.oa_url : undefined;
     const landingUrl: string | undefined = typeof work?.primary_location?.landing_page_url === 'string' ? work.primary_location.landing_page_url : undefined;
     const meta: PaperMeta = { title, authors };
