@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://open-vsx.org/extension/Open1s/trinno-research"><img alt="Open Vsx" src="https://img.shields.io/badge/VS%20Code-Install-blue?logo=visualstudiocode"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research"><img alt="VS Code Marketplace" src="https://img.shields.io/badge/VS%20Code-Install-blue?logo=visualstudiocode"></a>
   <a href="https://github.com/open1s/trinno/actions"><img alt="CI" src="https://github.com/open1s/trinno/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
@@ -30,7 +30,7 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 | **03_Analyze** | Identify contradictions & ideality gaps | `contradictions.md`, `su_field_analysis.md` |
 | **04_Synthesize** | Apply 40 TRIZ inventive principles | `solutions.md`, `roadmap.md` |
 | **05_Deliver** | Write research paper | `paper.md` |
-| **06_References** | Download & organize references | PDFs, `library.md`, `目录.md` |
+| **06_References** | Download & organize references | PDFs, `library.md`, `catalog.md` |
 | **07_Patent** | Incrementally draft patent | `patent.md` |
 | **08_AutoResearch** | Autonomous iterative research (propose→act→evaluate→ratchet) | `scope.md`, `eval.md`, `experiments/log_N.md` |
 
@@ -46,63 +46,63 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 
 ## Usage
 
-### Walkthrough: 从零到专利草案
+### Walkthrough: Zero to Patent Draft
 
 ```bash
-# 1. 初始化工作区
+# 1. Initialize workspace
 /init
 
-# 2. 搜索现有技术（中英文并行）
-/search 固态电解质 lithium battery
+# 2. Search prior art (EN + ZH in parallel)
+/search solid-state electrolyte lithium battery
 
-# 3. 深度分析：矛盾矩阵 + 物场模型
+# 3. Deep analysis: contradiction matrix + su-field
 /contradiction
 /su-field
 
-# 4. 探索发明原理
+# 4. Explore inventive principles
 /principles
 
-# 5. 评估技术成熟度
+# 5. Assess technology maturity
 /s-curve
 
-# 6. 下载相关论文
+# 6. Download relevant papers
 /get solid-state electrolyte interface stability
 /download 10.1038/nenergy.2016.141
 
-# 7. 撰写专利（增量撰写，每轮一节）
-/patent 一种基于梯度孔隙结构的气体扩散层
+# 7. Draft patent (incremental, one section per turn)
+/patent a gas diffusion layer with gradient pore structure
 ```
 
-### 常规对话
+### General Chat
 
-直接在聊天框输入问题，Trinno 会自动选择合适的研究方法：
+Ask questions directly in the chat — Trinno automatically selects the right research methodology:
 
-| 问题类型 | 自动匹配 |
+| Problem Type | Auto-matched Method |
 |---|---|
-| 技术瓶颈 / 发明问题 | TRIZ 矛盾分析 |
-| 战略 / 竞品分析 | SWOT + PEST |
-| 循证综合 | PRISMA |
-| 临床 / 生物医学 | PICO → PRISMA |
-| 新技术 / 市场格局 | PEST → SWOT |
-| 模糊问题 | 5W1H 结构化 |
+| Technical bottleneck / Inventive problem | TRIZ contradiction analysis |
+| Strategic / Competitor analysis | SWOT + PEST |
+| Evidence synthesis | PRISMA |
+| Clinical / Biomedical | PICO → PRISMA |
+| Emerging tech / Market landscape | PEST → SWOT |
+| Undefined problem | 5W1H structured inquiry |
 
-### 快捷操作
+### Quick Actions
 
-| 操作 | 方式 |
+| Action | How |
 |---|---|
-| 引用文件 | 输入 `@<路径>` 自动补全 |
-| 切换模型 | 点击底部状态栏模型按钮 |
-| 管理会话 | 点击底部状态栏会话名，`Ctrl+N` 新建，`Ctrl+Z` 删除 |
-| 压缩上下文 | `/compact`（对话过长时使用） |
-| 撤销插入 | `Cmd+Shift+Z` |
-| 中断生成 | 按 `Esc` 或点击 ■ 按钮 |
+| Reference a file | Type `@<path>` for auto-complete |
+| Switch model | Click the model button in the status bar |
+| Manage sessions | Click the session name in the status bar, `Ctrl+N` new, `Ctrl+Z` delete |
+| Compact context | `/compact` (when conversation gets long) |
+| Undo insert | `Cmd+Shift+Z` |
+| Interrupt generation | Press `Esc` or click the ■ button |
 
-### 文件引用
+### File References
 
-在消息中通过 `@` 引用工作区文件，Trinno 会自动读取文件内容并纳入上下文：
+Reference workspace files in messages with `@` — Trinno automatically reads the file and includes its content in the context:
 
 ```
-请分析 @01_Discover/patents.json 中的专利，找出与 @src/main.py 实现的技术矛盾
+Please analyze the patents in @01_Discover/patents.json and find the technical contradictions with the technology implemented in @src/main.py
 ```
 
 ---
@@ -149,7 +149,7 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 - **Scope & eval files**: `08_AutoResearch/scope.md` defines the research boundaries; `08_AutoResearch/eval.md` defines the locked evaluation metric
 - **Experiment logging**: every iteration is logged to `08_AutoResearch/experiments/log_{N}.md` with hypothesis, before/after metrics, and verdict
 - **jj-backed undo**: each iteration is snapshot with jj; failed experiments auto-revert
-- **Reference management**: `06_References/目录.md` serves as a living table of contents for all downloaded papers, patents, and datasets
+- **Reference management**: `06_References/catalog.md` serves as a living table of contents for all downloaded papers, patents, and datasets
 
 ### S-Curve Enhancements
 
@@ -161,111 +161,83 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 
 ## Configuration
 
-### API
-
-| Setting | Default | Description |
-|---|---|---|
-| `chat.model.provider` | `openai` | `openai`, `anthropic`, or `openai-compatible` |
-| `chat.model.name` | `gpt-4o` | Model name |
-| `chat.model.baseUrl` | `https://api.openai.com/v1` | API base URL |
-| `chat.model.apiKey` | — | API key (stored in VS Code secrets) |
-
-### Behavior
-
-| Setting | Default |
-|---|---|
-| `chat.context.autoInject` | `true` |
-| `chat.context.maxTotalTokens` | `4000` |
-| `chat.streaming.showThinking` | `true` |
-| `chat.history.enabled` | `true` |
-| `chat.history.maxMessages` | `100` |
-| `trinno.chat.trpWorkspace` | auto-detect |
-
 ### Advanced: `~/.bos/conf/`
 
-Trinno uses two TOML config files and a skills directory under `~/.bos/`:
+Trinno uses TOML config files and a skills directory under `~/.bos/`:
 
 ```
 ~/.bos/
 ├── skills/          # user-installed skills (SKILL.md per sub-directory)
 └── conf/            # TOML configuration files
+    ├── config.toml   # BrainOS core config
+    └── app.toml      # Trinno-specific MCP servers
 ```
-
-#### Skills (`~/.bos/skills/`)
-
-Each skill lives in its own sub-directory with a `SKILL.md` file:
-
-```
-~/.bos/skills/
-├── incremental_write/
-│   └── SKILL.md
-```
-
-The `SKILL.md` file must contain a YAML frontmatter block with a `description` field:
-
-```markdown
----
-name: my-custom-skill
-description: My custom analysis workflow
----
-
-# Skill Instructions
-
-...
-```
-
-Skills appear as slash commands (e.g., `/incremental_write`, `/my-custom-skill`) and the LLM can invoke them via the `load_skill` tool.
-
-#### Global SOUL (`~/.bos/skills/SOUL.md`)
-
-Place a `SOUL.md` file at `~/.bos/skills/SOUL.md` to inject core behavioral guidelines into every conversation. This is merged into the system prompt automatically. You can also place a project-level `SOUL.md` in your workspace root — it takes precedence over the global one.
 
 #### BrainOS Core Config (`~/.bos/conf/config.toml`)
 
-BrainOS reads LLM providers, proxy, agent, and logging settings:
-
 ```toml
+[general]
+name = "TRINNO"
+version = "1.4.10"
+environment = "release"
+
 [global_model]
 model = "nvidia/minimaxai/minimax-m2.7"
 base_url = "http://127.0.0.1:11436/v1"
 api_key = "<stored in secrets>"
 
-[llm.nvidia|openai|google|openrouter]
-#model = "nvidia/minimaxai/minimax-m2.7"
-#base_url = "http://127.0.0.1:11436/v1"
-#api_key = "<stored in secrets>"
+# Additional LLM providers
+[llm.minimax]
+model = "nvidia/minimaxai/minimax-m2.7"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key = "<stored in secrets>"
 
-[proxy]
-http_proxy = "http://127.0.0.1:9981"
-https_proxy = "http://127.0.0.1:9981"
+[llm.glm]
+model = "nvidia/z-ai/glm-5.2"
+base_url = "http://127.0.0.1:11436/v1"
+api_key = "<stored in secrets>"
+
+[llm.deepseek]
+model = "nvidia/deepseek-ai/deepseek-v4-pro"
+base_url = "http://127.0.0.1:11436/v1"
+api_key = "<stored in secrets>"
 
 [agent]
 max_iterations = 100
 timeout_seconds = 30
 
+[proxy]
+http_proxy = "http://127.0.0.1:9981"
+https_proxy = "http://127.0.0.1:9981"
+
 [logging]
-level = "debug"
+level = "trace"
+console = false
+
+[bus]
+max_queue_size = 1000
+
+[sandbox]
+enabled = false
 ```
 
 #### Remote Skills (`~/.bos/conf/config.toml`)
 
-Trinno can discover and load skills from remote git repos. Configure one or more repos under `skills_registry.skills`:
+Trinno can discover and load skills from remote git repos. Configure repos under `skills_registry.skills`:
 
 ```toml
 [[skills_registry.skills]]
-name = "awesome-journal-skills"
-repo = "https://github.com/user/awesome-journal-skills.git"
-description = "Journal-specific paper writing skills"
+name = "Awesome-Journal-Scholar-Skills"
+description = "Research topic selection, core progress identification, strategy planning, tables and figures specs, replication and data availability prep, submission and revision"
+repo = "https://gitee.com/open1s/Awesome-Journal-Skills.git"
 ref = "main"
 
 [[skills_registry.skills]]
 name = "scientific-agent-skills"
-repo = "https://github.com/user/scientific-agent-skills.git"
-description = "Scientific agent workflows"
+description = "Accelerate Your Research"
+repo = "https://gitee.com/open1s/scientific-agent-skills.git"
 ref = "main"
 ```
-
-Each repo is cloned to `.bos/skills-remote/<name>/` and scanned for `SKILL.md` files with YAML frontmatter. Sub-skills are addressed as `<name>/<subpath>`. Use `/find_skill <keyword>` in the chat to search across all configured repos.
 
 For repo mirrors or multi-source aggregation, use the `repos` array:
 

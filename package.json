@@ -1,14 +1,15 @@
 {
   "name": "trinno-research",
   "displayName": "Trinno Research Assist",
-  "description": "Research assistant with AI-powered chat for Jupyter notebooks",
-  "version": "1.4.18",
+  "description": "Research assistant with AI-powered capabilities for academic research, patent analysis, and innovation support.",
+  "version": "1.4.19",
   "publisher": "Open1s",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/open1s/trinno.git"
   },
+  "icon": "logo.ico",
   "homepage": "https://github.com/open1s/trinno#readme",
   "bugs": {
     "url": "https://github.com/open1s/trinno/issues"
@@ -16,19 +17,16 @@
   "keywords": [
     "triz",
     "research",
-    "jupyter",
     "ai-assistant",
-    "paper-download",
     "patent",
-    "innovation",
-    "notebook"
+    "innovation"
   ],
   "engines": {
     "vscode": "^1.120.0"
   },
   "categories": [
     "Other",
-    "Notebooks"
+    "AI"
   ],
   "activationEvents": [
     "onNotebook:jupyter-notebook",
@@ -135,6 +133,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "rm -rf dist/test && tsc -p ./ && rm -rf dist/chat/webview && cp -r src/chat/webview dist/chat/webview",
     "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish",
     "test": "node ./dist/test/runTest.js",
     "test:pipeline": "npx --yes mocha --ui bdd --timeout 30000 \"dist/test/suite/publication-trends-year-extraction.test.js\"",
     "lint": "eslint src/chat/*.ts",
