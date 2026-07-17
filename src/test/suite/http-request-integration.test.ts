@@ -22,6 +22,7 @@ import { europePmcSource } from '../../papers/sources/europe_pmc';
 import { UnpaywallSource } from '../../papers/sources/unpaywall';
 import { publisherDirectSource } from '../../papers/sources/publisher_direct';
 import { pubscholarSource } from '../../papers/sources/pubscholar';
+import { directUrlSource } from '../../papers/sources/direct_url';
 import { httpRequest } from '../../bos/infrastructure/http/http_client';
 import type { ParsedIdentifier, PaperSource } from '../../papers/types';
 
@@ -110,6 +111,50 @@ describe('httpRequest integration: pubscholarSource', function () {
     const id: ParsedIdentifier = { kind: 'doi', value: '10.1/test', doi: '10.1/test' };
     const candidate = await pubscholarSource.resolve(id);
     assert.equal(candidate, null, 'Expected null for non-URL kind');
+  });
+});
+
+describe('httpRequest integration: directUrlSource', function () {
+  this.timeout(30_000);
+
+  it('resolves a direct file URL', async () => {
+    const id: ParsedIdentifier = {
+      kind: 'url',
+      value: 'https://file.scholarin.cn/preview2?file=editor_cj_test.pdf',
+    };
+    const candidate = await directUrlSource.resolve(id);
+    if (candidate) {
+      assert.equal(candidate.source, 'direct_url', 'Expected direct_url source');
+      assert.ok(candidate.pdfUrl.length > 0, 'Expected pdfUrl to be non-empty');
+    }
+  });
+
+  it('returns null for pubscholar.cn hosts', async () => {
+    const id: ParsedIdentifier = {
+      kind: 'url',
+      value: 'https://pubscholar.cn/articles/af1c6d1583347f229da8768f47a77bde',
+    };
+    const candidate = await directUrlSource.resolve(id);
+    assert.equal(candidate, null, 'Expected null for pubscholar host');
+  });
+
+  it('returns null for non-URL kinds', async () => {
+    const id: ParsedIdentifier = { kind: 'doi', value: '10.1/test', doi: '10.1/test' };
+    const candidate = await directUrlSource.resolve(id);
+    assert.equal(candidate, null, 'Expected null for non-URL kind');
+  });
+
+  it('allows both HTTP and HTTPS URLs', async () => {
+    const id: ParsedIdentifier = {
+      kind: 'url',
+      value: 'http://example.com/file.pdf',
+    };
+    const candidate = await directUrlSource.resolve(id);
+    // directUrlSource accepts both HTTP and HTTPS
+    if (candidate) {
+      assert.equal(candidate.source, 'direct_url', 'Expected direct_url source');
+      assert.ok(candidate.pdfUrl.length > 0, 'Expected pdfUrl to be non-empty');
+    }
   });
 });
 
