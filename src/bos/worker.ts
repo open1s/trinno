@@ -112,6 +112,7 @@ let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
 
 const subagentNotifications: string[] = [];
+const busSubagentResults: any[] = [];
 
 function setupSubagentManager(): void {
   if (!deps?.subagentManager) return;
@@ -119,6 +120,12 @@ function setupSubagentManager(): void {
   deps.subagentManager.setEmitFn((subagents) => {
     emit('subagent-status', { subagents });
   });
+  // Subscribe to bus for structured subagent results
+  deps.brain.subscriber('trinno:subagent:result').then(sub => {
+    sub.runJson(async (msg: any) => {
+      busSubagentResults.push(msg);
+    }).catch(() => {});
+  }).catch(() => {});
 }
 
 async function closeDeps(oldDeps: typeof deps): Promise<void> {
@@ -1725,11 +1732,23 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     writeGoalForWorker(preGoal);
   }
 
-  // Inject pending subagent completion notifications
+  // Inject pending subagent completion notifications + bus results
   if (deps?.subagentManager) {
     const notifications = deps.subagentManager.drainNotifications();
+    const busResults = busSubagentResults.splice(0);
+    const parts: string[] = [];
     if (notifications.length > 0) {
-      const notifText = `## Subagent Updates\n\n${notifications.map(n => `- ${n}`).join('\n')}\n\n---\n\n`;
+      parts.push(notifications.map(n => `- ${n}`).join('\n'));
+    }
+    if (busResults.length > 0) {
+      for (const r of busResults) {
+        const status = r.status || 'unknown';
+        const detail = status === 'failed' && r.error ? ` error="${r.error}"` : '';
+        parts.push(`- Subagent "${r.name}" [${r.jobId}] ${status} (${r.elapsedMs}ms, ${r.outputLength} chars)${detail}`);
+      }
+    }
+    if (parts.length > 0) {
+      const notifText = `## Subagent Updates\n\n${parts.join('\n')}\n\n---\n\n`;
       userMessage = notifText + userMessage;
     }
   }

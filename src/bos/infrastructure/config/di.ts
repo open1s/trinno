@@ -137,6 +137,7 @@ export async function composeRoot(options: {
   const subagentManager = new SubagentManager({
     onStatusChange: () => {},
     defaultHooks: [subagentBeforeHook],
+    bus: brain,
   });
   const subagentTools = createSubagentTools(subagentManager);
   const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);

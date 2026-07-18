@@ -42,6 +42,8 @@ export class SubagentManager {
   pendingNotifications: string[];
   private onStatusChange: SubagentCallback;
   private defaultHooks: any[];
+  private bus?: any;
+  private resultPub?: any;
 
   constructor(options?: {
     maxConcurrent?: number;
@@ -49,16 +51,30 @@ export class SubagentManager {
     pendingNotificationsRef?: string[];
     onStatusChange?: SubagentCallback;
     defaultHooks?: any[];
+    bus?: any;
   }) {
     this.maxConcurrent = options?.maxConcurrent ?? 5;
     this.resultTtlMs = options?.resultTtlMs ?? 10 * 60 * 1000;
     this.pendingNotifications = options?.pendingNotificationsRef ?? [];
     this.onStatusChange = options?.onStatusChange ?? (() => {});
     this.defaultHooks = options?.defaultHooks ?? [];
+    this.bus = options?.bus;
   }
 
   setEmitFn(fn: (subagents: SubagentInfo[]) => void): void {
     this.onStatusChange = fn;
+  }
+
+  private async ensureResultPub(): Promise<void> {
+    if (!this.bus || this.resultPub) return;
+    this.resultPub = await this.bus.publisher('trinno:subagent:result');
+  }
+
+  private async publishResult(info: SubagentInfo): Promise<void> {
+    await this.ensureResultPub();
+    if (!this.resultPub) return;
+    const { output, ...safe } = info;
+    this.resultPub.text(JSON.stringify({ ...safe, outputLength: output.length })).catch(() => {});
   }
 
   private emitStatus(): void {
@@ -197,6 +213,7 @@ export class SubagentManager {
           info.elapsedMs = Date.now() - info.startedAt;
           this.emitStatus();
           this.appendNotification(name, info.status);
+          this.publishResult(info);
         }
       } catch (err) {
         if (info.status === 'cancelled') return;
@@ -209,16 +226,17 @@ export class SubagentManager {
         info.elapsedMs = Date.now() - info.startedAt;
         this.emitStatus();
         this.appendNotification(name, 'failed', info.error);
-} finally {
-  const isCompleted = info.status === 'completed';
-  const delay = isCompleted ? COMPLETED_REMOVE_DELAY_MS : this.resultTtlMs;
-  setTimeout(() => {
-    this.subagents.delete(jobId);
-    this.outputs.delete(jobId);
-    this.abortControllers.delete(jobId);
-    if (isCompleted) this.emitStatus();
-  }, delay);
-}
+        this.publishResult(info);
+      } finally {
+        const isCompleted = info.status === 'completed';
+        const delay = isCompleted ? COMPLETED_REMOVE_DELAY_MS : this.resultTtlMs;
+        setTimeout(() => {
+          this.subagents.delete(jobId);
+          this.outputs.delete(jobId);
+          this.abortControllers.delete(jobId);
+          if (isCompleted) this.emitStatus();
+        }, delay);
+      }
     };
 
     run();
@@ -254,6 +272,7 @@ export class SubagentManager {
     info.elapsedMs = Date.now() - info.startedAt;
     this.emitStatus();
     this.appendNotification(info.name, 'cancelled');
+    this.publishResult(info);
     return true;
   }
 
