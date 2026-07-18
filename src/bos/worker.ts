@@ -820,7 +820,7 @@ function handleCancel(): void {
   if (deps?.subagentManager) {
     for (const sa of deps.subagentManager.list()) {
       if (sa.status === 'running') {
-        deps.subagentManager.stop(sa.jobId);
+        try { deps.subagentManager.stop(sa.jobId); } catch { /* skip failed stop */ }
       }
     }
   }
@@ -1736,6 +1736,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   // Inject pending subagent completion notifications + bus results
   if (deps?.subagentManager) {
     const busResults = busSubagentResults.splice(0);
+    // Always drain text notifications to prevent accumulation
+    const notifications = deps.subagentManager.drainNotifications();
     const parts: string[] = [];
     if (busResults.length > 0) {
       // Bus results are structured & richer — prefer them over plain text
@@ -1744,12 +1746,9 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
         const detail = status === 'failed' && r.error ? ` error="${r.error}"` : '';
         parts.push(`- Subagent "${r.name}" [${r.jobId}] ${status} (${r.elapsedMs}ms, ${r.outputLength} chars)${detail}`);
       }
-    } else {
+    } else if (notifications.length > 0) {
       // Fallback: plain text notifications (bus unavailable)
-      const notifications = deps.subagentManager.drainNotifications();
-      if (notifications.length > 0) {
-        parts.push(notifications.map(n => `- ${n}`).join('\n'));
-      }
+      parts.push(notifications.map(n => `- ${n}`).join('\n'));
     }
     if (parts.length > 0) {
       const notifText = `## Subagent Updates\n\n${parts.join('\n')}\n\n---\n\n`;

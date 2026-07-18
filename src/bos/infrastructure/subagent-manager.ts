@@ -19,6 +19,31 @@ type SubagentCallback = (subagents: SubagentInfo[]) => void;
 const MAX_OUTPUT_LENGTH = 100 * 1024;
 const EMIT_THROTTLE_MS = 1000;
 const COMPLETED_REMOVE_DELAY_MS = 3000;
+const MAX_SUBAGENT_RETRIES = 3;
+const SUBAGENT_RETRY_BACKOFF_MS = 2000;
+
+function isRateLimited(msg: string): boolean {
+  return /\b429\b|rate.?limit|too many requests/i.test(msg);
+}
+
+function parseRetryAfter(msg: string): number {
+  const patterns = [
+    /retry.?after\s*[=:]?\s*(\d+)\s*s/i,
+    /try again in (\d+)\s*s/i,
+    /please retry in (\d+)\s*seconds/i,
+    /in (\d+)\s*seconds/i,
+    /retry-after:\s*(\d+)/i,
+    /"retry_after"\s*:\s*(\d+)/i,
+  ];
+  for (const re of patterns) {
+    const m = msg.match(re);
+    if (m && m[1]) {
+      const s = parseInt(m[1], 10);
+      if (s > 0 && s <= 300) return s;
+    }
+  }
+  return 15;
+}
 const SUBAGENT_TOOL_NAMES = new Set([
   // Subagent management (recursion)
   'spawn_subagent', 'list_subagents', 'get_subagent_result', 'stop_subagent',
@@ -155,67 +180,127 @@ export class SubagentManager {
       }, timeout * 1000);
 
       try {
-        const factory = getAgentFactory();
-        const safeTools = factory.getDefaultTools().filter(t => !SUBAGENT_TOOL_NAMES.has(t.name));
-        const agent = factory.create({
-          name: `sa-${name}`,
-          systemPrompt: rules,
-          skipDefaultHooks: true,
-          skipDefaultTools: true,
-          tools: safeTools,
-          hooks: this.defaultHooks,
-        });
-        const started = await agent.start();
-
-        abort.signal.addEventListener('abort', () => {
-          started.stop().catch(() => {});
-        });
-
         let outputText = '';
         let truncated = false;
-        await new Promise<void>((resolve) => {
-          const onAbort = () => { started.stop().catch(() => {}); resolve(); };
-          abort.signal.addEventListener('abort', onAbort, { once: true });
+        let lastError: string | null = null;
 
-          started.stream(goal, (token: any) => {
-            if (abort.signal.aborted) return;
-            switch (token.type) {
-              case 'Text':
-                if (!truncated) {
-                  outputText += token.text;
-                  if (outputText.length > MAX_OUTPUT_LENGTH) {
-                    truncated = true;
-                    outputText = outputText.slice(0, MAX_OUTPUT_LENGTH) + '\n\n[output truncated]';
-                  }
-                  this.outputs.set(jobId, outputText);
-                  this.tryEmitStatus();
-                }
-                break;
-              case 'Stop':
-              case 'Done':
-                resolve();
-                break;
-              case 'Error':
-                resolve();
-                break;
-            }
+        for (let attempt = 0; attempt <= MAX_SUBAGENT_RETRIES; attempt++) {
+          if (info.status !== 'running') break;
+          if (attempt > 0) {
+            if (!lastError || !isRateLimited(lastError)) break;
+            const retryAfter = parseRetryAfter(lastError);
+            const delay = Math.max(retryAfter * 1000, SUBAGENT_RETRY_BACKOFF_MS * Math.pow(2, attempt - 1));
+            await Promise.race([
+              new Promise(r => setTimeout(r, delay)),
+              new Promise(r => abort.signal.addEventListener('abort', r, { once: true })),
+            ]);
+            if (info.status !== 'running') break;
+            outputText = '';
+            truncated = false;
+            this.outputs.set(jobId, '');
+            this.tryEmitStatus();
+          }
+
+          const factory = getAgentFactory();
+          const safeTools = factory.getDefaultTools().filter(t => !SUBAGENT_TOOL_NAMES.has(t.name));
+          const agent = factory.create({
+            name: `sa-${name}`,
+            systemPrompt: rules,
+            skipDefaultHooks: true,
+            skipDefaultTools: true,
+            tools: safeTools,
+            hooks: this.defaultHooks,
           });
-        });
+          const started = await agent.start();
+
+          const abortStop = () => { started.stop().catch(() => {}); };
+          let onAbort: (() => void) | null = null;
+
+          abort.signal.addEventListener('abort', abortStop);
+
+          try {
+            await new Promise<void>((resolve) => {
+              onAbort = () => { started.stop().catch(() => {}); resolve(); };
+              abort.signal.addEventListener('abort', onAbort, { once: true });
+
+              lastError = null;
+              try {
+                started.stream(goal, (token: any) => {
+                  try {
+                    if (abort.signal.aborted) return;
+                    switch (token.type) {
+                      case 'Text':
+                        if (!truncated) {
+                          outputText += token.text;
+                          if (outputText.length > MAX_OUTPUT_LENGTH) {
+                            truncated = true;
+                            outputText = outputText.slice(0, MAX_OUTPUT_LENGTH) + '\n\n[output truncated]';
+                          }
+                          this.outputs.set(jobId, outputText);
+                          this.tryEmitStatus();
+                        }
+                        break;
+                      case 'Stop':
+                      case 'Done':
+                        resolve();
+                        break;
+                      case 'Error':
+                        lastError = token.error || '';
+                        started.stop().catch(() => {});
+                        resolve();
+                        break;
+                    }
+                  } catch (e) {
+                    lastError = String(e);
+                    resolve();
+                  }
+                });
+              } catch (e) {
+                lastError = String(e);
+                resolve();
+              }
+            });
+          } finally {
+            abort.signal.removeEventListener('abort', abortStop);
+            if (onAbort) abort.signal.removeEventListener('abort', onAbort);
+            // If retrying, stop the partial agent
+            if (attempt < MAX_SUBAGENT_RETRIES && lastError && isRateLimited(lastError)) {
+              started.stop().catch(() => {});
+            }
+          }
+
+          if (!lastError || !isRateLimited(lastError)) break;
+        }
 
         clearTimeout(timer);
 
         if (info.status === 'cancelled') {
           // stop() already set status, emitted, and notified
+        } else if (lastError && isRateLimited(lastError)) {
+          info.status = 'failed';
+          info.error = `rate limited after ${MAX_SUBAGENT_RETRIES + 1} attempts: ${lastError}`;
+          info.elapsedMs = Date.now() - info.startedAt;
+          this.emitStatus();
+          this.appendNotification(name, 'failed', info.error);
+          this.publishResult(info);
+        } else if (timedOut) {
+          info.status = 'failed';
+          info.error = `timeout after ${timeout}s`;
+          info.output = outputText;
+          info.elapsedMs = Date.now() - info.startedAt;
+          this.emitStatus();
+          this.appendNotification(name, info.status);
+          this.publishResult(info);
+        } else if (abort.signal.aborted) {
+          info.status = 'failed';
+          info.error = 'aborted';
+          info.output = outputText;
+          info.elapsedMs = Date.now() - info.startedAt;
+          this.emitStatus();
+          this.appendNotification(name, info.status);
+          this.publishResult(info);
         } else {
-          if (timedOut) {
-            info.status = 'failed';
-            info.error = `timeout after ${timeout}s`;
-          } else if (abort.signal.aborted) {
-            info.status = 'failed';
-            info.error = 'aborted';
-          } else {
-            info.status = 'completed';
-          }
+          info.status = 'completed';
           info.output = outputText;
           info.elapsedMs = Date.now() - info.startedAt;
           this.emitStatus();
@@ -225,10 +310,13 @@ export class SubagentManager {
       } catch (err) {
         if (info.status === 'cancelled') return;
         info.status = 'failed';
-        if (timedOut) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (isRateLimited(errMsg)) {
+          info.error = `rate limited after ${MAX_SUBAGENT_RETRIES + 1} attempts: ${errMsg}`;
+        } else if (timedOut) {
           info.error = `timeout after ${timeout}s`;
         } else {
-          info.error = err instanceof Error ? err.message : String(err);
+          info.error = errMsg;
         }
         info.elapsedMs = Date.now() - info.startedAt;
         this.emitStatus();
@@ -259,17 +347,21 @@ export class SubagentManager {
     const now = Date.now();
     return Array.from(this.subagents.entries())
       .filter(([, info]) => info.status !== 'completed')
-      .map(([id, info]) => ({
-        ...info,
-        elapsedMs: info.status === 'running' ? now - info.startedAt : info.elapsedMs,
-      }));
+      .map(([id, info]) => {
+        const { displayExpired: _, ...rest } = info;
+        return {
+          ...rest,
+          elapsedMs: info.status === 'running' ? now - info.startedAt : info.elapsedMs,
+        };
+      });
   }
 
   getResult(jobId: string): SubagentInfo | undefined {
     const info = this.subagents.get(jobId);
     if (!info) return undefined;
+    const { displayExpired: _, ...rest } = info;
     const elapsedMs = info.status === 'running' ? Date.now() - info.startedAt : info.elapsedMs;
-    return { ...info, elapsedMs, output: this.outputs.get(jobId) ?? '' };
+    return { ...rest, elapsedMs, output: this.outputs.get(jobId) ?? '' };
   }
 
   stop(jobId: string): boolean {
