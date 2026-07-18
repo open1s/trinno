@@ -221,7 +221,7 @@ process.stderr.on('error', (err) => {
 process.stdout.write(JSON.stringify({ type: 'ready' }) + '\n');
 
 function emit(type: string, data: any): void {
-  if (abortController?.signal.aborted && type !== 'done' && type !== 'error') return;
+  if (abortController?.signal.aborted && type !== 'done' && type !== 'error' && type !== 'subagent-status') return;
   const line = JSON.stringify({ type, ...data }) + '\n';
   if (emitQueue.length < EMIT_QUEUE_MAX) {
     emitQueue.push(line);
@@ -808,7 +808,6 @@ function withMockInjector(
 
 function handleCancel(): void {
   log.warn({ hasAbortController: !!abortController, hasCurrentAgent: !!currentAgent }, '[DEBUG-DC] handleCancel called');
-  abortController?.abort();
   cancelAllPendingApprovals();
   if (currentAgent) {
     currentAgent.stop().catch(() => { });
@@ -816,7 +815,7 @@ function handleCancel(): void {
   }
   // Discard all cached agents so next message creates fresh
   activeAgents.clear();
-  // Stop all running subagents
+  // Stop all running subagents BEFORE aborting so emitStatus() can reach stdout
   if (deps?.subagentManager) {
     for (const sa of deps.subagentManager.list()) {
       if (sa.status === 'running') {
@@ -824,6 +823,9 @@ function handleCancel(): void {
       }
     }
   }
+  // Force-flush the emit queue so subagent-status reaches stdout synchronously
+  flushEmitQueueSync();
+  abortController?.abort();
 }
 
 function emitMcpStatus(): void {
