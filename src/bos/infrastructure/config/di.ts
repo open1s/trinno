@@ -22,7 +22,7 @@ import { createRemoteSkillTools } from '../http/remote_skill_tools.js';
 import { createSubagentTools } from '../http/subagent_tools.js';
 import { SubagentManager } from '../subagent-manager.js';
 import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
-import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
+import { createToolPermissionHook, createSubagentToolHook, wrapAllTools } from './toolPermissionHook.js';
 import { detectSandboxType } from '../sandbox.js';
 import { LocaleConfig, DEFAULT_LOCALE } from '../../domain/shared/i18n.js';
 import { ContradictionAnalysisService } from '../../domain/contradiction/services.js';
@@ -133,8 +133,10 @@ export async function composeRoot(options: {
   const todoTools = createTodoTools(workspaceRoot);
   const typstTools = createTypstTools(workspaceRoot);
   const remoteSkillTools = createRemoteSkillTools(workspaceRoot);
+  const { beforeHook: subagentBeforeHook } = createSubagentToolHook(toolPermissions);
   const subagentManager = new SubagentManager({
     onStatusChange: () => {},
+    defaultHooks: [subagentBeforeHook],
   });
   const subagentTools = createSubagentTools(subagentManager);
   const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);

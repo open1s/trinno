@@ -1,4 +1,3 @@
-import { BrainOS } from '@open1s/ezbos';
 import { getAgentFactory } from './agent-factory.js';
 import { loadLocalSkill } from './remote_skills.js';
 
@@ -16,25 +15,33 @@ export interface SubagentInfo {
 
 type SubagentCallback = (subagents: SubagentInfo[]) => void;
 
+const MAX_OUTPUT_LENGTH = 100 * 1024;
+const EMIT_THROTTLE_MS = 1000;
+const SUBAGENT_TOOL_NAMES = new Set(['spawn_subagent', 'list_subagents', 'get_subagent_result', 'stop_subagent', 'bash', 'exec_tool']);
+
 export class SubagentManager {
   private subagents = new Map<string, SubagentInfo>();
   private outputs = new Map<string, string>();
   private abortControllers = new Map<string, AbortController>();
   private maxConcurrent: number;
   private resultTtlMs: number;
+  private lastEmitTime = 0;
   pendingNotifications: string[];
   private onStatusChange: SubagentCallback;
+  private defaultHooks: any[];
 
   constructor(options?: {
     maxConcurrent?: number;
     resultTtlMs?: number;
     pendingNotificationsRef?: string[];
     onStatusChange?: SubagentCallback;
+    defaultHooks?: any[];
   }) {
     this.maxConcurrent = options?.maxConcurrent ?? 5;
     this.resultTtlMs = options?.resultTtlMs ?? 10 * 60 * 1000;
     this.pendingNotifications = options?.pendingNotificationsRef ?? [];
     this.onStatusChange = options?.onStatusChange ?? (() => {});
+    this.defaultHooks = options?.defaultHooks ?? [];
   }
 
   setEmitFn(fn: (subagents: SubagentInfo[]) => void): void {
@@ -42,7 +49,8 @@ export class SubagentManager {
   }
 
   private emitStatus(): void {
-    const now = Date.now();
+    this.lastEmitTime = Date.now();
+    const now = this.lastEmitTime;
     const list = Array.from(this.subagents.entries()).map(([id, info]) => {
       const liveOutput = this.outputs.get(id);
       return {
@@ -54,6 +62,13 @@ export class SubagentManager {
     this.onStatusChange(list);
   }
 
+  private tryEmitStatus(): void {
+    const now = Date.now();
+    if (now - this.lastEmitTime >= EMIT_THROTTLE_MS) {
+      this.emitStatus();
+    }
+  }
+
   async spawn(name: string, skillName: string, goal: string, timeoutSecs?: number): Promise<SubagentInfo> {
     if (this.subagents.size >= this.maxConcurrent) {
       throw new Error(`Max concurrent subagents reached (${this.maxConcurrent})`);
@@ -61,9 +76,20 @@ export class SubagentManager {
 
     const jobId = `sa_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const skillContent = loadLocalSkill(skillName);
-    const systemPrompt = skillContent?.content
-      ? `You are "${name}", a specialized subagent using the "${skillName}" skill.\n\n${skillContent.content}\n\nYour goal: ${goal}`
-      : `You are "${name}". Your goal: ${goal}`;
+    const skillSection = skillContent?.content
+      ? `\n## Skill Instructions\n\n${skillContent.content}\n`
+      : '';
+    const rules = [
+      `You are a focused subagent named "${name}".`,
+      skillSection,
+      `## Task\n\n${goal}`,
+      ``,
+      `## Rules`,
+      `- Use tools directly. Prefer write_file/edit_file over bash.`,
+      `- After finishing, output the result and do NOT call more tools.`,
+      `- Do NOT ask for approval — act autonomously.`,
+      `- Keep output concise.`,
+    ].filter(Boolean).join('\n');
 
     const info: SubagentInfo = {
       jobId,
@@ -94,9 +120,14 @@ export class SubagentManager {
 
       try {
         const factory = getAgentFactory();
+        const safeTools = factory.getDefaultTools().filter(t => !SUBAGENT_TOOL_NAMES.has(t.name));
         const agent = factory.create({
           name: `sa-${name}`,
-          systemPrompt,
+          systemPrompt: rules,
+          skipDefaultHooks: true,
+          skipDefaultTools: true,
+          tools: safeTools,
+          hooks: this.defaultHooks,
         });
         const started = await agent.start();
 
@@ -104,7 +135,8 @@ export class SubagentManager {
           started.stop().catch(() => {});
         });
 
-        const textParts: string[] = [];
+        let outputText = '';
+        let truncated = false;
         await new Promise<void>((resolve) => {
           const onAbort = () => { started.stop().catch(() => {}); resolve(); };
           abort.signal.addEventListener('abort', onAbort, { once: true });
@@ -113,8 +145,15 @@ export class SubagentManager {
             if (abort.signal.aborted) return;
             switch (token.type) {
               case 'Text':
-                textParts.push(token.text);
-                this.outputs.set(jobId, textParts.join(''));
+                if (!truncated) {
+                  outputText += token.text;
+                  if (outputText.length > MAX_OUTPUT_LENGTH) {
+                    truncated = true;
+                    outputText = outputText.slice(0, MAX_OUTPUT_LENGTH) + '\n\n[output truncated]';
+                  }
+                  this.outputs.set(jobId, outputText);
+                  this.tryEmitStatus();
+                }
                 break;
               case 'Stop':
               case 'Done':
@@ -129,33 +168,39 @@ export class SubagentManager {
 
         clearTimeout(timer);
 
-        if (timedOut) {
-          info.status = 'failed';
-          info.error = `timeout after ${timeout}s`;
-        } else if (abort.signal.aborted) {
-          info.status = 'failed';
-          info.error = 'aborted';
+        if (info.status === 'cancelled') {
+          // stop() already set status, emitted, and notified
         } else {
-          info.status = 'completed';
+          if (timedOut) {
+            info.status = 'failed';
+            info.error = `timeout after ${timeout}s`;
+          } else if (abort.signal.aborted) {
+            info.status = 'failed';
+            info.error = 'aborted';
+          } else {
+            info.status = 'completed';
+          }
+          info.output = outputText;
+          info.elapsedMs = Date.now() - info.startedAt;
+          this.emitStatus();
+          this.appendNotification(name, info.status);
         }
-        info.output = textParts.join('');
-        info.elapsedMs = Date.now() - info.startedAt;
-        this.emitStatus();
-        this.appendNotification(name, jobId, info.status);
       } catch (err) {
         if (info.status === 'cancelled') return;
-        const now = Date.now();
         info.status = 'failed';
-        info.error = err instanceof Error ? err.message : String(err);
-        info.elapsedMs = now - info.startedAt;
+        if (timedOut) {
+          info.error = `timeout after ${timeout}s`;
+        } else {
+          info.error = err instanceof Error ? err.message : String(err);
+        }
+        info.elapsedMs = Date.now() - info.startedAt;
         this.emitStatus();
-        this.appendNotification(name, jobId, 'failed', info.error);
+        this.appendNotification(name, 'failed', info.error);
       } finally {
         setTimeout(() => {
           this.subagents.delete(jobId);
           this.outputs.delete(jobId);
           this.abortControllers.delete(jobId);
-          this.emitStatus();
         }, this.resultTtlMs);
       }
     };
@@ -166,21 +211,17 @@ export class SubagentManager {
 
   list(): SubagentInfo[] {
     const now = Date.now();
-    for (const info of this.subagents.values()) {
-      if (info.status === 'running') {
-        info.elapsedMs = now - info.startedAt;
-      }
-    }
-    return Array.from(this.subagents.values());
+    return Array.from(this.subagents.values()).map(info => ({
+      ...info,
+      elapsedMs: info.status === 'running' ? now - info.startedAt : info.elapsedMs,
+    }));
   }
 
   getResult(jobId: string): SubagentInfo | undefined {
     const info = this.subagents.get(jobId);
     if (!info) return undefined;
-    if (info.status === 'running') {
-      info.elapsedMs = Date.now() - info.startedAt;
-    }
-    return { ...info, output: this.outputs.get(jobId) ?? '' };
+    const elapsedMs = info.status === 'running' ? Date.now() - info.startedAt : info.elapsedMs;
+    return { ...info, elapsedMs, output: this.outputs.get(jobId) ?? '' };
   }
 
   stop(jobId: string): boolean {
@@ -194,16 +235,14 @@ export class SubagentManager {
     info.status = 'cancelled';
     info.elapsedMs = Date.now() - info.startedAt;
     this.emitStatus();
-    this.appendNotification(info.name, jobId, 'cancelled');
+    this.appendNotification(info.name, 'cancelled');
     return true;
   }
 
-  private appendNotification(name: string, jobId: string, status: string, error?: string): void {
-    const msg = status === 'completed'
-      ? `Subagent "${name}" completed (${jobId})`
-      : status === 'failed'
-        ? `Subagent "${name}" failed: ${error || 'unknown error'} (${jobId})`
-        : `Subagent "${name}" ${status} (${jobId})`;
+  private appendNotification(name: string, status: string, error?: string): void {
+    const msg = status === 'failed'
+      ? `Subagent "${name}" failed: ${error || 'unknown error'}`
+      : `Subagent "${name}" ${status}`;
     this.pendingNotifications.push(msg);
   }
 

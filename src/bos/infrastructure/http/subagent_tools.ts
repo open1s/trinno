@@ -4,12 +4,12 @@ import { SubagentManager } from '../subagent-manager.js';
 export function createSubagentTools(manager: SubagentManager) {
   const spawn = defineTool(
     'spawn_subagent',
-    'Spawn a subagent to work on a task in the background. The subagent gets the full tool set and runs independently. It uses a skill as its system prompt. Monitor with list_subagents or get_subagent_result. Cancel with stop_subagent.',
+    'Spawn a background subagent with a skill. Use list_subagents / get_subagent_result / stop_subagent to manage.',
   )
-    .required('name', 'string', 'A short name for this subagent instance (used in status display)')
-    .required('skill_name', 'string', 'Name of the skill to load as the subagent\'s system prompt (e.g. "research", "patent-writer"). Skills live in ~/.bos/skills/ or ~/.agents/skills/.')
-    .required('goal', 'string', 'The task or objective for the subagent to accomplish')
-    .param('timeout_seconds', 'number', 'Max runtime in seconds (default 300). The subagent is killed and marked failed if it exceeds this.')
+    .required('name', 'string', 'Short display name')
+    .required('skill_name', 'string', 'Skill name from ~/.bos/skills/')
+    .required('goal', 'string', 'Task to complete')
+    .param('timeout_seconds', 'number', 'Max seconds (default 300)')
     .handle(async (args) => {
       try {
         const result = await manager.spawn(
@@ -24,7 +24,7 @@ export function createSubagentTools(manager: SubagentManager) {
           skillName: result.skillName,
           status: result.status,
           startedAt: result.startedAt,
-          hint: `Subagent "${result.name}" started (${result.jobId}). Use list_subagents to check status, get_subagent_result("${result.jobId}") when done.`,
+          hint: `"${result.name}" started. Use list_subagents or get_subagent_result("${result.jobId}") to check.`,
         });
       } catch (e: any) {
         return err(e.message || String(e));
@@ -33,7 +33,7 @@ export function createSubagentTools(manager: SubagentManager) {
 
   const list = defineTool(
     'list_subagents',
-    'List all subagents and their status.',
+    'List all subagents.',
   )
     .handle(() => {
       const agents = manager.list();
@@ -51,26 +51,26 @@ export function createSubagentTools(manager: SubagentManager) {
 
   const getResult = defineTool(
     'get_subagent_result',
-    'Get the result of a completed subagent. Returns current output even if still running.',
+    'Get subagent output and status (works for running too).',
   )
-    .required('jobId', 'string', 'The job ID returned by spawn_subagent')
+    .required('jobId', 'string', 'ID from spawn_subagent')
     .handle((args) => {
       const result = manager.getResult(args.jobId as string);
       if (!result) {
-        return err(`No subagent found with jobId "${args.jobId}". Use list_subagents to see active subagents.`);
+        return err(`No subagent "${args.jobId}". Use list_subagents.`);
       }
       return ok(result);
     });
 
   const stop = defineTool(
     'stop_subagent',
-    'Stop a running subagent. It will be marked as cancelled.',
+    'Cancel a running subagent.',
   )
-    .required('jobId', 'string', 'The job ID returned by spawn_subagent')
+    .required('jobId', 'string', 'ID from spawn_subagent')
     .handle((args) => {
       const ok_result = manager.stop(args.jobId as string);
       if (!ok_result) {
-        return err(`No running subagent found with jobId "${args.jobId}". Use list_subagents to see active subagents.`);
+        return err(`Not found or not running: "${args.jobId}". Use list_subagents.`);
       }
       return ok({ jobId: args.jobId, status: 'cancelled' });
     });

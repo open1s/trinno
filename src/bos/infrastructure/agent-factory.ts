@@ -35,6 +35,8 @@ export interface AgentConfig {
   sessionId?: string;
   brainOsSession?: string;
   onMcpStatus?: McpStatusCallback;
+  skipDefaultHooks?: boolean;
+  skipDefaultTools?: boolean;
 }
 export interface SessionConfig {
   brainOsSession: string;
@@ -279,8 +281,12 @@ class AgentFactory {
     const temperature = config.temperature ?? 0.7;
     const maxTokens = config.maxTokens ?? 16384;
 
-    const allTools = [...this.defaultTools, ...(config.tools ?? []), ...(config.extraTools ?? [])];
-    const allHooks = [...this.defaultHooks, ...(config.hooks ?? [])];
+    const allTools = config.skipDefaultTools
+      ? [...(config.tools ?? []), ...(config.extraTools ?? [])]
+      : [...this.defaultTools, ...(config.tools ?? []), ...(config.extraTools ?? [])];
+    const allHooks = config.skipDefaultHooks
+      ? [...(config.hooks ?? [])]
+      : [...this.defaultHooks, ...(config.hooks ?? [])];
     const allPlugins = [...this.defaultPlugins, ...(config.plugins ?? [])];
     const mcpServers = config.mcpServers ?? this.defaultMcpServers;
     const skillsDirs = config.skillsDirs ?? DEFAULT_SKILLS_DIRS;

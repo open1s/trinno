@@ -61,6 +61,23 @@ function tryParseJson(s: string): Record<string, unknown> {
   try { return JSON.parse(s); } catch { return {}; }
 }
 
+export function createSubagentToolHook(permissions: ToolPermissionConfig) {
+  const beforeHook = defineHook(HookEvent.BeforeToolCall, async (ctx: any) => {
+    const toolName = (ctx.data?.tool_name || ctx.data?.toolName || '') as string;
+    const perm = permissions[toolName];
+
+    if (perm === 'deny') {
+      log.warn({ toolName }, 'subagent tool denied');
+      return HookDecision.Abort;
+    }
+
+    ctx.data.toolId = `sa_auto_${++approvalCounter}`;
+    return HookDecision.Continue;
+  });
+
+  return { beforeHook, afterHook: undefined };
+}
+
 export function createToolPermissionHook(permissions: ToolPermissionConfig) {
   const beforeHook = defineHook(HookEvent.BeforeToolCall, async (ctx: any) => {
     const data = ctx.data || {};
