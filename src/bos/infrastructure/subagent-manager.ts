@@ -323,13 +323,14 @@ export class SubagentManager {
         this.appendNotification(name, 'failed', info.error);
         this.publishResult(info);
       } finally {
-        // Display eviction: completed agents disappear from UI after short delay
-        if (info.status === 'completed') {
+        // Display eviction: all terminal states disappear from UI after short delay
+        if (info.status === 'completed' || info.status === 'failed') {
           setTimeout(() => {
             info.displayExpired = true;
             this.emitStatus();
           }, COMPLETED_REMOVE_DELAY_MS);
         }
+        // (cancelled agents are handled by stop() with the same delay)
         // Data eviction: free memory after full TTL
         setTimeout(() => {
           this.subagents.delete(jobId);
@@ -377,6 +378,11 @@ export class SubagentManager {
     this.emitStatus();
     this.appendNotification(info.name, 'cancelled');
     this.publishResult(info);
+    // Display eviction: cancelled agents disappear from UI after short delay
+    setTimeout(() => {
+      info.displayExpired = true;
+      this.emitStatus();
+    }, COMPLETED_REMOVE_DELAY_MS);
     return true;
   }
 
