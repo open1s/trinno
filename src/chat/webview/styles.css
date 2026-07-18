@@ -721,6 +721,211 @@ body {
   opacity: 0.8;
 }
 
+.subagents-pinned {
+  flex-shrink: 0;
+  border-top: 1px solid var(--header-border);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.sa-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid transparent;
+}
+
+.sa-header:hover {
+  background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.08));
+}
+
+.sa-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sa-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--vscode-textBlockQuote-border, #888);
+  border-top-color: var(--vscode-activityBarBadge-background, #3794ff);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+.sa-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.sa-count {
+  font-size: 11px;
+  opacity: 0.6;
+  background: var(--vscode-badge-background, rgba(127,127,127,0.15));
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 18px;
+}
+
+.sa-count-done {
+  opacity: 0.7;
+  background: var(--vscode-testing-iconPassed, rgba(46,160,67,0.2));
+  color: var(--vscode-testing-iconPassed, #2ea043);
+}
+
+.sa-toggle {
+  font-size: 10px;
+  opacity: 0.4;
+  transition: transform 0.2s;
+}
+
+.sa-body {
+  transition: max-height 0.25s ease;
+  max-height: 800px;
+  overflow: hidden;
+}
+
+.sa-body-collapsed {
+  max-height: 0;
+}
+
+.sa-agent {
+  border-top: 1px solid var(--border);
+}
+
+.sa-agent-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.sa-agent-header:hover {
+  background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.06));
+}
+
+.sa-agent-name {
+  font-weight: 500;
+  color: var(--fg);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  line-height: 16px;
+}
+
+.sa-badge-running {
+  background: rgba(55, 148, 255, 0.15);
+  color: var(--vscode-activityBarBadge-background, #3794ff);
+}
+
+.sa-badge-completed {
+  background: rgba(46, 160, 67, 0.15);
+  color: var(--vscode-testing-iconPassed, #2ea043);
+}
+
+.sa-badge-failed {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.sa-badge-cancelled {
+  background: rgba(127, 127, 127, 0.12);
+  color: var(--vscode-disabledForeground, #888);
+}
+
+.sa-elapsed {
+  font-size: 11px;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+  min-width: 45px;
+  text-align: right;
+}
+
+.sa-arrow {
+  font-size: 9px;
+  opacity: 0.35;
+  margin-left: 2px;
+  transition: transform 0.2s;
+}
+
+.sa-detail {
+  transition: max-height 0.25s ease;
+}
+
+.sa-detail-inner {
+  padding: 6px 12px 10px 24px;
+  background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.04));
+  border-top: 1px solid var(--border);
+}
+
+.sa-detail-row {
+  display: flex;
+  gap: 6px;
+  margin: 3px 0;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.sa-detail-label {
+  font-weight: 600;
+  opacity: 0.55;
+  min-width: 36px;
+  flex-shrink: 0;
+}
+
+.sa-detail-val {
+  opacity: 0.85;
+  word-break: break-word;
+}
+
+.sa-detail-error .sa-detail-val {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.sa-output {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.08));
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  opacity: 0.8;
+  line-height: 16px;
+  transition: opacity 0.2s;
+}
+
+.sa-output:empty::before {
+  content: '(no output yet)';
+  opacity: 0.35;
+  font-style: italic;
+}
+
+.sa-agent-expanded > .sa-agent-header {
+  background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.04));
+}
+
 .todo-spinner-inline {
   display: inline-block;
   width: 10px;

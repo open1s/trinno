@@ -43,6 +43,7 @@ export const AgentEvent = {
   LspStatus: 'lsp-status',
   TodoUpdate: 'todo-update',
   GoalProgress: 'goal-progress',
+  SubagentStatus: 'subagent-status',
 } as const;
 
 let workerProcess: childProcess.ChildProcess | null = null;
@@ -212,6 +213,10 @@ async function ensureWorker(): Promise<void> {
           }
           if (msg.type === 'goal-progress') {
             setImmediate(() => agentEvents.emit(AgentEvent.GoalProgress, msg));
+          }
+          if (msg.type === 'subagent-status') {
+            const subagents = msg.subagents || [];
+            setImmediate(() => agentEvents.emit(AgentEvent.SubagentStatus, subagents));
           }
         } catch { /* ignore non-JSON */ }
       }

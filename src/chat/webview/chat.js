@@ -21,6 +21,7 @@
   const statusMcpEl = document.getElementById('status-mcp');
   const toolsStatusBarEl = document.getElementById('tools-status-bar');
   const todoPinnedEl = document.getElementById('todo-pinned');
+  const subagentsPinnedEl = document.getElementById('subagents-pinned');
   const statusSandboxEl = document.getElementById('status-sandbox');
   let lspStatus = null;
 
@@ -88,6 +89,8 @@
   let selectedModel = 'Auto';
   let tokenUsage = { input: 0, output: 0, total: 0 };
   let todoData = [];
+  let subagentData = [];
+  let subagentOutputs = {};
   let messageQueue = [];
   let queuePanelEl = null;
   const vscode = acquireVsCodeApi();
@@ -277,6 +280,130 @@ function renderTodoBadges() {
       };
       document.addEventListener('click', hide);
     }, 0);
+  }
+
+  let subagentTimer = null;
+
+  function startSubagentTimer() {
+    if (subagentTimer) return;
+    subagentTimer = setInterval(() => {
+      if (!subagentData.some(s => s.status === 'running')) {
+        clearInterval(subagentTimer);
+        subagentTimer = null;
+        return;
+      }
+      // Update elapsed times in-place
+      const now = Date.now();
+      subagentData.forEach(s => {
+        if (s.status === 'running' && s.startedAt) {
+          s.elapsedMs = now - s.startedAt;
+        }
+      });
+      renderSubagentList(subagentData);
+    }, 1000);
+  }
+
+  function renderSubagentList(subagents) {
+    if (!subagentsPinnedEl) return;
+    if (!subagents || subagents.length === 0) {
+      subagentsPinnedEl.style.display = 'none';
+      if (subagentTimer) { clearInterval(subagentTimer); subagentTimer = null; }
+      return;
+    }
+    subagentsPinnedEl.style.display = '';
+
+    const running = subagents.filter(s => s.status === 'running').length;
+    const completed = subagents.filter(s => s.status === 'completed').length;
+    const total = subagents.length;
+    const allDone = running === 0;
+
+    let html = '<div class="sa-header">';
+    html += '<span class="sa-header-left">';
+    if (running > 0) html += '<span class="sa-spinner"></span> ';
+    html += `<span class="sa-title">Subagents</span>`;
+    html += `<span class="sa-count ${allDone ? 'sa-count-done' : ''}">${completed}/${total}</span>`;
+    html += '</span>';
+    html += `<span class="sa-toggle" id="sa-toggle-btn">\u25BC</span>`;
+    html += '</div>';
+    html += '<div class="sa-body" id="sa-body">';
+    for (const s of subagents) {
+      const expanded = subagentOutputs[s.jobId] && subagentOutputs[s.jobId].expanded;
+      const elapsed = formatElapsed(s.elapsedMs || 0);
+      const statusClass = 'sa-badge-' + s.status;
+      const badgeText = s.status === 'completed' ? 'Done' : s.status === 'running' ? 'Running' : s.status === 'failed' ? 'Failed' : 'Cancelled';
+      html += `<div class="sa-agent ${expanded ? 'sa-agent-expanded' : ''}" data-jobid="${escapeHtml(s.jobId)}">
+        <div class="sa-agent-header">
+          <span class="sa-agent-name">${escapeHtml(s.name)}</span>
+          <span class="sa-badge ${statusClass}">${badgeText}</span>
+          <span class="sa-elapsed">${elapsed}</span>
+          <span class="sa-arrow">${expanded ? '\u25BC' : '\u25B6'}</span>
+        </div>
+        <div class="sa-detail" style="max-height:${expanded ? '600px' : '0'}; overflow:hidden; transition:max-height 0.25s ease">
+          <div class="sa-detail-inner">
+            <div class="sa-detail-row"><span class="sa-detail-label">Goal:</span><span class="sa-detail-val">${escapeHtml(s.goal)}</span></div>
+            <div class="sa-detail-row"><span class="sa-detail-label">Skill:</span><span class="sa-detail-val">${escapeHtml(s.skillName)}</span></div>
+            <div class="sa-detail-row"><span class="sa-detail-label">ID:</span><span class="sa-detail-val" style="font-family:monospace;font-size:11px;opacity:0.6">${escapeHtml(s.jobId)}</span></div>
+            ${s.error ? `<div class="sa-detail-row sa-detail-error"><span class="sa-detail-label">Error:</span><span class="sa-detail-val">${escapeHtml(s.error)}</span></div>` : ''}
+            <div class="sa-output">${escapeHtml(s.output || '(no output yet)')}</div>
+          </div>
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+
+    subagentsPinnedEl.innerHTML = html;
+
+    // Header click toggles collapse all
+    const header = subagentsPinnedEl.querySelector('.sa-header');
+    if (header) {
+      header.addEventListener('click', function(e) {
+        if (e.target.closest('.sa-agent-header')) return;
+        const body = document.getElementById('sa-body');
+        const btn = document.getElementById('sa-toggle-btn');
+        if (!body || !btn) return;
+        const collapsed = body.classList.toggle('sa-body-collapsed');
+        btn.textContent = collapsed ? '\u25B2' : '\u25BC';
+      });
+    }
+
+    // Per-agent expand/collapse
+    subagentsPinnedEl.querySelectorAll('.sa-agent-header').forEach(el => {
+      el.addEventListener('click', function() {
+        const agent = this.closest('.sa-agent');
+        if (!agent) return;
+        const jobId = agent.dataset.jobid;
+        const detail = agent.querySelector('.sa-detail');
+        const arrow = agent.querySelector('.sa-arrow');
+        if (!detail || !arrow) return;
+        const expanded = agent.classList.toggle('sa-agent-expanded');
+        detail.style.maxHeight = expanded ? '600px' : '0';
+        arrow.textContent = expanded ? '\u25BC' : '\u25B6';
+        if (jobId) {
+          if (!subagentOutputs[jobId]) subagentOutputs[jobId] = {};
+          subagentOutputs[jobId].expanded = expanded;
+        }
+        // Auto-scroll when expanding running agent
+        if (expanded && jobId) {
+          const output = agent.querySelector('.sa-output');
+          if (output) setTimeout(() => { output.scrollTop = output.scrollHeight; }, 280);
+        }
+      });
+    });
+
+    // Start timer if running subagents exist
+    if (running > 0) startSubagentTimer();
+  }
+
+  function formatElapsed(ms) {
+    if (ms < 1000) return '0s';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return sec + 's';
+    const min = Math.floor(sec / 60);
+    const s = sec % 60;
+    if (min < 60) return min + 'm ' + s + 's';
+    const hr = Math.floor(min / 60);
+    const m = min % 60;
+    return hr + 'h ' + m + 'm';
   }
 
   function updateLspStatus(msg) {
@@ -1618,6 +1745,21 @@ function renderTodoBadges() {
         todoData = msg.todos || [];
         updateTodoList(todoData);
         renderTodoBadges();
+        break;
+
+      case 'subagent-status':
+        subagentData = msg.subagents || [];
+        // Preserve startedAt for elapsed timer
+        subagentData.forEach(s => {
+          const prev = subagentOutputs[s.jobId];
+          if (prev && prev.startedAt) s.startedAt = prev.startedAt;
+          else if (s.status === 'running') {
+            if (!subagentOutputs[s.jobId]) subagentOutputs[s.jobId] = {};
+            subagentOutputs[s.jobId].startedAt = Date.now() - s.elapsedMs;
+            s.startedAt = subagentOutputs[s.jobId].startedAt;
+          }
+        });
+        renderSubagentList(subagentData);
         break;
 
       case 'goal-progress':

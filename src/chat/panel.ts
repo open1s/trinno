@@ -258,6 +258,11 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
         sendGoalStatus();
       }
     });
+    agentEvents.on(AgentEvent.SubagentStatus, (subagents: Array<{ jobId: string; name: string; status: string; elapsedMs: number; output: string }>) => {
+      if (chatView) {
+        chatView.webview.postMessage({ type: 'subagent-status', subagents } as any);
+      }
+    });
 
     chatView.onDidChangeVisibility(() => {
       if (chatView?.visible) {
@@ -2521,6 +2526,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
   <div id="app">
     <div id="messages" class="messages"></div>
     <div id="todo-pinned" class="todo-pinned" style="display:none"></div>
+    <div id="subagents-pinned" class="subagents-pinned" style="display:none"></div>
     <div id="tools-status-bar" class="tools-status-bar" style="display:none"></div>
     <div class="input-area">
       <div id="attachments" class="attachments"></div>

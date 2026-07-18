@@ -19,6 +19,8 @@ import { createTodoTools } from '../http/todo_tools.js';
 import { createTypstTools } from '../http/typst_tools.js';
 import { createWebsearchTools } from '../http/websearch_tools.js';
 import { createRemoteSkillTools } from '../http/remote_skill_tools.js';
+import { createSubagentTools } from '../http/subagent_tools.js';
+import { SubagentManager } from '../subagent-manager.js';
 import { ToolPermissionConfig, DEFAULT_TOOL_PERMISSIONS } from './toolPermissions.js';
 import { createToolPermissionHook, wrapAllTools } from './toolPermissionHook.js';
 import { detectSandboxType } from '../sandbox.js';
@@ -65,6 +67,7 @@ export interface TrizDeps {
   searchService: CachedSearchService;
   summarizer: AISummarizer;
   phaseWriter: PhaseWriter;
+  subagentManager: SubagentManager;
   tools: any[];
   toolPermissionHook: any;
   afterToolHook: any;
@@ -130,6 +133,10 @@ export async function composeRoot(options: {
   const todoTools = createTodoTools(workspaceRoot);
   const typstTools = createTypstTools(workspaceRoot);
   const remoteSkillTools = createRemoteSkillTools(workspaceRoot);
+  const subagentManager = new SubagentManager({
+    onStatusChange: () => {},
+  });
+  const subagentTools = createSubagentTools(subagentManager);
   const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
   const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
   const idealityHandler = new EvaluateIdealityHandler(locale);
@@ -137,7 +144,7 @@ export async function composeRoot(options: {
 
   const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
   const websearchTools = createWebsearchTools();
-  const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools, ...todoTools, ...typstTools, ...websearchTools, ...remoteSkillTools];
+  const allTools = [...trizTools, ...codingTools, ...papersTools, ...memoryTools, ...todoTools, ...typstTools, ...websearchTools, ...remoteSkillTools, ...subagentTools];
   const tools = wrapAllTools(allTools, toolPermissions, workspaceRoot);
 
   const sandboxType = detectSandboxType();
@@ -172,6 +179,7 @@ export async function composeRoot(options: {
     searchService,
     summarizer,
     phaseWriter,
+    subagentManager,
     tools,
     toolPermissionHook: beforeHook,
     afterToolHook: afterHook,

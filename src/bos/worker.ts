@@ -111,6 +111,16 @@ let currentJobId = 0;
 let currentAgent: any = null;
 let currentSessionIdForCancel: string | null = null;
 
+const subagentNotifications: string[] = [];
+
+function setupSubagentManager(): void {
+  if (!deps?.subagentManager) return;
+  deps.subagentManager.pendingNotifications = subagentNotifications;
+  deps.subagentManager.setEmitFn((subagents) => {
+    emit('subagent-status', { subagents });
+  });
+}
+
 async function closeDeps(oldDeps: typeof deps): Promise<void> {
   if (!oldDeps) return;
   try { await oldDeps.aiAgent.dispose(); } catch { }
@@ -348,6 +358,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   if (!deps) {
     const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
     deps = await composeRoot({ workspaceRoot: wsRoot });
+    setupSubagentManager();
     await initApprovalBus(deps.brain);
     // Start Typst LSP eagerly so first lint call is fast
     getTypstLspClient(wsRoot).catch(() => { });
@@ -398,6 +409,7 @@ async function handleChat(text: string, context?: string | null, persona?: { nam
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
     brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
+    setupSubagentManager();
     await initApprovalBus(deps.brain);
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
@@ -796,6 +808,14 @@ function handleCancel(): void {
   }
   // Discard all cached agents so next message creates fresh
   activeAgents.clear();
+  // Stop all running subagents
+  if (deps?.subagentManager) {
+    for (const sa of deps.subagentManager.list()) {
+      if (sa.status === 'running') {
+        deps.subagentManager.stop(sa.jobId);
+      }
+    }
+  }
 }
 
 function emitMcpStatus(): void {
@@ -1077,6 +1097,7 @@ async function handleCompact(
     const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
     if (apiKey) brainOptions.apiKey = apiKey;
     deps = await composeRoot(brainOptions);
+    setupSubagentManager();
     await initApprovalBus(deps.brain);
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
   }
@@ -1226,6 +1247,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 brainOptions.sandboxEnabled = msg.sandboxEnabled !== false;
                 const d = await composeRoot(brainOptions);
                 deps = d;
+                setupSubagentManager();
                 lastApiKey = msg.apiKey;
                 await initApprovalBus(deps.brain);
                 getTypstLspClient(wsRoot).catch(() => { });
@@ -1520,6 +1542,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
     brainOptions.sandboxEnabled = sandboxEnabled !== false;
     deps = await composeRoot(brainOptions);
+    setupSubagentManager();
     await initApprovalBus(deps.brain);
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
     log.trace({ phase: 'deps-init', elapsedMs: Date.now() - phaseT0 }, '[PHASE] deps initialized');
@@ -1700,6 +1723,15 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     delete preGoal.editedAt;
     delete preGoal.previousText;
     writeGoalForWorker(preGoal);
+  }
+
+  // Inject pending subagent completion notifications
+  if (deps?.subagentManager) {
+    const notifications = deps.subagentManager.drainNotifications();
+    if (notifications.length > 0) {
+      const notifText = `## Subagent Updates\n\n${notifications.map(n => `- ${n}`).join('\n')}\n\n---\n\n`;
+      userMessage = notifText + userMessage;
+    }
   }
 
   // Inject pending AutoResearch hypothesis into agent context (set by /auto)
