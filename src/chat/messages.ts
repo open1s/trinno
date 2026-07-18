@@ -44,7 +44,7 @@ export type ExtToWebViewMessage =
   | { type: 'session-updated'; sessionId: string; sessionTitle: string; sessions: SessionInfo[]; isCompacted: boolean }
   | { type: 'session-list-updated'; sessions: SessionInfo[] }
   | { type: 'session-title-updated'; sessionId: string; title: string }
-  | { type: 'rate-limited'; messageId: string; retryAfter: number }
+  | { type: 'rate-limited'; messageId: string; retryAfter: number; userText?: string }
   | { type: 'rate-limited-tick'; messageId: string; remaining: number }
   | { type: 'insert-to-input'; attachment: { mode: 'inline' | 'reference'; filePath: string; lineRange: string | null; startLine?: number; endLine?: number; language: string; content: string } }
   | { type: 'agents-loaded'; agents: { name: string; description: string }[] }
@@ -94,6 +94,7 @@ export type WebViewToExtMessage =
   | { type: 'deleteSession'; sessionId: string }
   | { type: 'renameSession'; sessionId: string; title: string }
   | { type: 'rate-limited-retry'; messageId: string }
+  | { type: 'rate-limited-stop'; messageId: string }
   | { type: 'sendSelection' }
   | { type: 'sendFile' }
   | { type: 'chooseFile' }

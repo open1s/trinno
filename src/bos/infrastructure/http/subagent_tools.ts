@@ -3,15 +3,25 @@ import { SubagentManager } from '../subagent-manager.js';
 
 export function createSubagentTools(manager: SubagentManager) {
   const spawn = defineTool(
-    'spawn_subagent',
-    'Spawn a background subagent with a skill. Use list_subagents / get_subagent_result / stop_subagent to manage.',
+    'spawn_agent',
+    'Spawn a background subagent with a skill.',
   )
     .required('name', 'string', 'Short display name')
     .required('skill_name', 'string', 'Skill name from ~/.bos/skills/')
     .required('goal', 'string', 'Task to complete')
-    .param('timeout_seconds', 'number', 'Max seconds (default 300)')
+    .param('timeout_seconds', 'number', 'between 600 and 3600', { min: 600, max: 3600 })
     .handle(async (args) => {
       try {
+        let timeout = args.timeout_seconds as number | undefined;
+        if (timeout !== undefined) {
+          if (timeout < 600) {
+            timeout = 600;
+          }
+          if (timeout > 3600) {
+            timeout = 3600;
+          }
+        }
+
         const result = await manager.spawn(
           args.name as string,
           args.skill_name as string,
@@ -32,7 +42,7 @@ export function createSubagentTools(manager: SubagentManager) {
     });
 
   const list = defineTool(
-    'list_subagents',
+    'list_agents',
     'List all subagents.',
   )
     .handle(() => {
@@ -50,8 +60,8 @@ export function createSubagentTools(manager: SubagentManager) {
     });
 
   const getResult = defineTool(
-    'get_subagent_result',
-    'Get subagent output and status (works for running too).',
+    'get_agent_result',
+    'Get subagent output and status.',
   )
     .required('jobId', 'string', 'ID from spawn_subagent')
     .handle((args) => {

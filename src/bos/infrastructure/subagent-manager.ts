@@ -202,6 +202,7 @@ export class SubagentManager {
           }
 
           const factory = getAgentFactory();
+          const modelConfig: any = (globalThis as any).__TRP_MODEL_CONFIG || {};
           const safeTools = factory.getDefaultTools().filter(t => !SUBAGENT_TOOL_NAMES.has(t.name));
           const agent = factory.create({
             name: `sa-${name}`,
@@ -210,6 +211,9 @@ export class SubagentManager {
             skipDefaultTools: true,
             tools: safeTools,
             hooks: this.defaultHooks,
+            model: modelConfig.model,
+            baseUrl: modelConfig.baseUrl,
+            apiKey: modelConfig.apiKey,
           });
           const started = await agent.start();
 

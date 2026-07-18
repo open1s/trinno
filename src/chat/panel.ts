@@ -847,6 +847,9 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
   } else if (msg.type === 'rate-limited-retry') {
     log.info({ messageId: msg.messageId }, '[RATE-LIMIT] webview clicked Retry Now — check rateLimitRetryCallback exists and call it');
     handleRateLimitedRetry();
+  } else if (msg.type === 'rate-limited-stop') {
+    log.info({ messageId: msg.messageId }, '[RATE-LIMIT] webview clicked Stop retry');
+    handleRateLimitedStop();
   } else if (msg.type === 'write-topic-confirm') {
     const topic = msg.topic.trim();
     if (!topic) {
@@ -1285,7 +1288,6 @@ export function _getRateLimitRetryStateForTest(): { count: number; max: number }
 
 function handleRateLimited(retryAfter: number, error: string): void {
   log.warn({ retryAfter, error }, '[RATE-LIMIT] LLM returned 429 — pausing generation');
-  void error;
   if (!currentStreamingId) return;
   const messageId = currentStreamingId;
   const seconds = Math.max(1, Math.round(retryAfter)) * Math.pow(2, rateLimitRetryCount);
@@ -1295,6 +1297,7 @@ function handleRateLimited(retryAfter: number, error: string): void {
       type: 'rate-limited',
       messageId,
       retryAfter: seconds,
+      userText: lastUserMessageText,
     } as any);
     // Also notify queue panel about rate-limit pause
     if (currentQueueId) {
@@ -1415,6 +1418,27 @@ function handleRateLimitedRetry(): void {
     rateLimitRetryCallback();
     rateLimitRetryCallback = null;
   }
+}
+
+function handleRateLimitedStop(): void {
+  log.trace('[RATE-LIMIT] handleRateLimitedStop called');
+  if (rateLimitTimer) clearInterval(rateLimitTimer);
+  rateLimitTimer = null;
+  rateLimitRetryCallback = null;
+  finalizeCurrentMessage();
+  if (chatView && currentStreamingId) {
+    chatView.webview.postMessage({
+      type: 'error',
+      messageId: currentStreamingId,
+      error: '用户取消了重试。',
+    } as any);
+  }
+  if (currentQueueId) {
+    markQueueError(currentQueueId, '用户取消了重试。');
+    currentQueueId = null;
+    dequeuedItemText = null;
+  }
+  setImmediate(() => processQueue());
 }
 
 let _autoCompactInProgress = false;

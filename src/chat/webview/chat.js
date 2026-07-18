@@ -1806,7 +1806,7 @@ function renderTodoBadges() {
         break;
 
       case 'rate-limited':
-        showRateLimited(msg.messageId, msg.retryAfter);
+        showRateLimited(msg.messageId, msg.retryAfter, msg.userText);
         break;
 
       case 'rate-limited-tick':
@@ -2540,7 +2540,7 @@ window.__denyTool = function(id) {
     renderToolBadges();
   }
 
-  function showRateLimited(messageId, retryAfter) {
+  function showRateLimited(messageId, retryAfter, userText) {
     const msgEl = document.getElementById(messageId);
     if (!msgEl) return;
 
@@ -2554,18 +2554,28 @@ window.__denyTool = function(id) {
     wrapper.innerHTML = `
       <div class="rate-limited-icon">⏳</div>
       <div class="rate-limited-text">
-        <div class="rate-limited-title">Rate Limited (429)</div>
+        <div class="rate-limited-title">${userText ? escapeHtml(userText) : 'Rate Limited'}</div>
         <div class="rate-limited-countdown">Retrying in <span id="rate-countdown-${messageId}">${retryAfter}</span>s…</div>
       </div>`;
+    const btnGroup = document.createElement('div');
+    btnGroup.className = 'rate-limited-btn-group';
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'rate-limited-stop-btn';
+    stopBtn.textContent = 'STOP';
+    stopBtn.addEventListener('click', () => {
+      wrapper.style.display = 'none';
+      vscode.postMessage({ type: 'rate-limited-stop', messageId });
+    });
+    btnGroup.appendChild(stopBtn);
     const retryBtn = document.createElement('button');
     retryBtn.className = 'rate-limited-retry-btn';
     retryBtn.textContent = 'Retry Now';
     retryBtn.addEventListener('click', () => {
-      console.log('[WEBVIEW] Retry Now clicked', messageId);
       wrapper.style.display = 'none';
       vscode.postMessage({ type: 'rate-limited-retry', messageId });
     });
-    wrapper.appendChild(retryBtn);
+    btnGroup.appendChild(retryBtn);
+    wrapper.appendChild(btnGroup);
     contentEl.appendChild(wrapper);
     scrollToBottom();
   }

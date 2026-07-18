@@ -2304,6 +2304,28 @@ body {
   opacity: 0.85;
 }
 
+.rate-limited-btn-group {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.rate-limited-stop-btn {
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--vscode-errorForeground, #e45454);
+  border: 1px solid var(--vscode-errorForeground, #e45454);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.rate-limited-stop-btn:hover {
+  background: color-mix(in srgb, var(--vscode-errorForeground, #e45454) 12%, transparent);
+}
+
 .write-topic-prompt {
   margin-top: 8px;
   padding: 12px 14px;
