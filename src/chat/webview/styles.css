@@ -422,25 +422,23 @@ body {
 }
 
 .tool-section {
-  margin: 8px 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  margin: 0;
+  border: none;
 }
 
 .tool-summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: var(--thinking-bg);
+  gap: 6px;
+  padding: 6px 12px;
   cursor: pointer;
   user-select: none;
   font-size: 12px;
+  border-bottom: 1px solid transparent;
 }
 
 .tool-summary:hover {
-  background: var(--vscode-list-hoverBackground, #e8e8e8);
+  background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.08));
 }
 
 .tool-count {
@@ -448,14 +446,40 @@ body {
   align-items: center;
   gap: 6px;
   color: var(--fg);
-  min-width: 0;
-  flex: 1 1 auto;
+  flex: 1;
+}
+
+.tool-count-label {
+  font-weight: 600;
+}
+
+.tool-running-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  line-height: 16px;
+  background: rgba(55, 148, 255, 0.15);
+  color: var(--vscode-activityBarBadge-background, #3794ff);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.tool-error-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  line-height: 16px;
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--vscode-errorForeground, #f85149);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 .tool-running-list {
-  margin-left: 6px;
-  padding-left: 6px;
-  border-left: 1px solid var(--border, rgba(127,127,127,0.3));
+  margin-left: auto;
+  padding: 0 6px;
   color: var(--fg-muted, rgba(127,127,127,0.9));
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;
@@ -469,7 +493,9 @@ body {
 .tool-toggle {
   transition: transform 0.2s;
   font-size: 10px;
-  opacity: 0.5;
+  opacity: 0.4;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .goal-block-label {
@@ -522,7 +548,8 @@ body {
 .tool-list {
   max-height: 600px;
   overflow-y: auto;
-  transition: max-height 0.2s;
+  transition: max-height 0.25s ease;
+  max-height: 800px;
 }
 
 .tool-list.collapsed {
@@ -556,14 +583,13 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 5px 12px;
   cursor: pointer;
   user-select: none;
-  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.08));
 }
 
 .tool-item-header:hover {
-  background: var(--vscode-list-hoverBackground, #e8e8e8);
+  background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.06));
 }
 
 .tool-item-prompt {
@@ -571,7 +597,6 @@ body {
   font-weight: 600;
   flex-shrink: 0;
   user-select: none;
-  font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
   font-size: 13px;
 }
 
@@ -617,7 +642,7 @@ body {
 .tool-item-body {
   max-height: 400px;
   overflow: hidden;
-  transition: max-height 0.2s;
+  transition: max-height 0.2s ease;
 }
 
 .tool-item-body.collapsed {
@@ -627,12 +652,13 @@ body {
 
 .tool-item-output {
   margin: 0;
-  padding: 8px 12px;
+  padding: 6px 12px 10px 24px;
   font-family: var(--vscode-editor-font-family, 'Menlo', 'Consolas', monospace);
   font-size: 11px;
   line-height: 1.5;
   color: var(--fg);
-  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.08));
+  opacity: 0.8;
+  background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.04));
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 400px;
@@ -647,35 +673,24 @@ body {
 
 .todo-pinned {
   flex-shrink: 0;
-  padding: 0 12px;
+  padding: 0;
   border-top: 1px solid var(--header-border);
   background: var(--bg);
-}
-
-.todo-pinned .todo-section {
-  margin: 0;
-}
-
-.todo-section {
-  margin: 8px 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
 }
 
 .todo-summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: var(--thinking-bg);
+  gap: 6px;
+  padding: 6px 12px;
   cursor: pointer;
   user-select: none;
   font-size: 12px;
+  border-bottom: 1px solid transparent;
 }
 
 .todo-summary:hover {
-  background: var(--vscode-list-hoverBackground, #e8e8e8);
+  background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.08));
 }
 
 .todo-count {
@@ -683,18 +698,36 @@ body {
   align-items: center;
   gap: 6px;
   color: var(--fg);
+  flex: 1;
+}
+
+.todo-count-label {
+  font-weight: 600;
+}
+
+.todo-running-count {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  line-height: 16px;
+  background: rgba(55, 148, 255, 0.15);
+  color: var(--vscode-activityBarBadge-background, #3794ff);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 .todo-toggle {
   transition: transform 0.2s;
   font-size: 10px;
-  opacity: 0.5;
+  opacity: 0.4;
+  flex-shrink: 0;
 }
 
 .todo-list {
   max-height: 600px;
   overflow-y: auto;
-  transition: max-height 0.2s;
+  transition: max-height 0.25s ease;
 }
 
 .todo-list.collapsed {
@@ -706,14 +739,50 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 5px 12px;
   font-size: 12px;
   border-top: 1px solid var(--border);
 }
 
+.todo-item.in_progress {
+  border-left: 2px solid var(--accent);
+}
+
+.todo-item.completed {
+  border-left: 2px solid var(--success-color);
+}
+
+.todo-item.cancelled {
+  border-left: 2px solid var(--border);
+  opacity: 0.5;
+}
+
+.todo-item.high {
+  background: rgba(248, 81, 73, 0.04);
+}
+
+.todo-item.medium {
+  background: rgba(204, 167, 0, 0.04);
+}
+
 .todo-icon {
-  font-size: 11px;
+  font-size: 12px;
   flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.todo-icon.completed {
+  color: var(--success-color);
+  font-weight: 700;
+}
+
+.todo-icon.in_progress {
+  color: var(--accent);
+}
+
+.todo-icon.cancelled {
+  opacity: 0.35;
 }
 
 .todo-text {
@@ -946,17 +1015,6 @@ body {
 
 .sa-agent-expanded > .sa-agent-header {
   background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.04));
-}
-
-.todo-spinner-inline {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-  vertical-align: middle;
 }
 
 .tool-spinner-inline {
@@ -1231,13 +1289,15 @@ body {
 }
 
 .tools-status-bar {
-  padding: 8px 12px 0;
+  padding: 0;
   border-top: 1px solid var(--header-border);
   flex-shrink: 0;
   background: var(--bg);
 }
+
 .tools-status-bar .tool-section {
   margin: 0;
+  border: none;
 }
 
 .attachments {

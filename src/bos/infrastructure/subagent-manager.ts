@@ -17,6 +17,7 @@ type SubagentCallback = (subagents: SubagentInfo[]) => void;
 
 const MAX_OUTPUT_LENGTH = 100 * 1024;
 const EMIT_THROTTLE_MS = 1000;
+const COMPLETED_REMOVE_DELAY_MS = 3000;
 const SUBAGENT_TOOL_NAMES = new Set([
   // Subagent management (recursion)
   'spawn_subagent', 'list_subagents', 'get_subagent_result', 'stop_subagent',
@@ -208,13 +209,16 @@ export class SubagentManager {
         info.elapsedMs = Date.now() - info.startedAt;
         this.emitStatus();
         this.appendNotification(name, 'failed', info.error);
-      } finally {
-        setTimeout(() => {
-          this.subagents.delete(jobId);
-          this.outputs.delete(jobId);
-          this.abortControllers.delete(jobId);
-        }, this.resultTtlMs);
-      }
+} finally {
+  const isCompleted = info.status === 'completed';
+  const delay = isCompleted ? COMPLETED_REMOVE_DELAY_MS : this.resultTtlMs;
+  setTimeout(() => {
+    this.subagents.delete(jobId);
+    this.outputs.delete(jobId);
+    this.abortControllers.delete(jobId);
+    if (isCompleted) this.emitStatus();
+  }, delay);
+}
     };
 
     run();
@@ -223,10 +227,12 @@ export class SubagentManager {
 
   list(): SubagentInfo[] {
     const now = Date.now();
-    return Array.from(this.subagents.values()).map(info => ({
-      ...info,
-      elapsedMs: info.status === 'running' ? now - info.startedAt : info.elapsedMs,
-    }));
+    return Array.from(this.subagents.entries())
+      .filter(([, info]) => info.status !== 'completed')
+      .map(([id, info]) => ({
+        ...info,
+        elapsedMs: info.status === 'running' ? now - info.startedAt : info.elapsedMs,
+      }));
   }
 
   getResult(jobId: string): SubagentInfo | undefined {

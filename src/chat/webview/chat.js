@@ -243,16 +243,21 @@ function renderTodoBadges() {
     const done = todos.filter(t => t.status === 'completed').length;
     const running = todos.filter(t => t.status === 'in_progress').length;
     const total = todos.length;
+    const collapsedDefault = running === 0;
 
     let html = '<div class="todo-summary" onclick="this.parentElement.querySelector(\'.todo-list\').classList.toggle(\'collapsed\')">';
     html += '<span class="todo-count">';
-    if (running > 0) html += '<span class="todo-spinner-inline"></span> ';
-    html += `${done}/${total} tasks`;
-    html += '</span><span class="todo-toggle">▼</span></div>';
-    html += '<div class="todo-list collapsed">';
+    if (running > 0) html += '<span class="sa-spinner"></span> ';
+    html += '<span class="todo-count-label">TODOs</span>';
+    html += `<span class="sa-count ${running > 0 ? 'sa-count-done' : ''}">${done}/${total}</span>`;
+    if (running > 0) html += `<span class="todo-running-count">${running} running</span>`;
+    html += '</span>';
+    html += `<span class="todo-toggle">\u25BC</span></div>`;
+    html += `<div class="todo-list ${collapsedDefault ? 'collapsed' : ''}">`;
     for (const t of todos) {
-      const icon = t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : t.status === 'cancelled' ? '❌' : '⬜';
-      html += `<div class="todo-item"><span class="todo-icon">${icon}</span><span class="todo-text">${escapeHtml(t.content)}</span></div>`;
+      const icon = t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◷' : t.status === 'cancelled' ? '−' : '○';
+      const pri = t.priority || '';
+      html += `<div class="todo-item ${t.status} ${pri}"><span class="todo-icon ${t.status}">${icon}</span><span class="todo-text">${escapeHtml(t.content)}</span></div>`;
     }
     html += '</div>';
 
@@ -2021,12 +2026,16 @@ function renderTodoBadges() {
     let html = `<div class="tool-section">`;
     html += `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-list').classList.toggle('collapsed')">`;
     html += `<span class="tool-count">`;
-    if (runningCount > 0) html += `<span class="tool-spinner-inline"></span> `;
-    html += `${doneCount}/${totalCount} tools`;
-    if (runningCount > 0) html += ` (${runningCount} running)`;
-    html += runningToolsSummary(tools, 3);
-    if (errorCount > 0) html += ` (${errorCount} failed)`;
-    html += `</span><span class="tool-toggle">▼</span></div>`;
+    if (runningCount > 0) html += `<span class="sa-spinner"></span> `;
+    html += `<span class="tool-count-label">Tools</span>`;
+    html += `<span class="sa-count">${doneCount}/${totalCount}</span>`;
+    if (runningCount > 0) html += ` <span class="tool-running-badge">${runningCount} running</span>`;
+    if (errorCount > 0) html += ` <span class="tool-error-badge">${errorCount} failed</span>`;
+    html += `</span>`;
+    if (runningCount > 0) {
+      html += runningToolsSummary(tools, 3);
+    }
+    html += `<span class="tool-toggle">\u25BC</span></div>`;
     html += `<div class="tool-list collapsed">`;
     for (const t of tools) {
       html += renderToolItem(t);
@@ -2322,16 +2331,15 @@ function renderTodoBadges() {
     const status = tool.status === 'result' ? 'done' : tool.status === 'called' ? 'running' : tool.status;
     const cls = status === 'done' ? 'done' : status === 'error' ? 'error' : status === 'waiting' ? 'waiting' : 'running';
     const command = formatToolCommand(tool.name, tool.args);
-    console.debug('[tool-render]', tool.name, status, 'id:', tool.id, 'args:', JSON.stringify(tool.args));
     const result = tool.result || '';
     const resultHtml = result
       ? `<pre class="tool-item-output">${escapeHtml(result)}</pre>`
-      : (cls === 'running' ? `<pre class="tool-item-output tool-item-output-pending">running…</pre>` : '');
+      : (cls === 'running' ? `<pre class="tool-item-output tool-item-output-pending">running\u2026</pre>` : '');
 
     let statusHtml;
-    if (status === 'done') statusHtml = '<span class="tool-item-status done">✓</span>';
-    else if (status === 'error') statusHtml = '<span class="tool-item-status error">✗</span>';
-    else if (status === 'waiting') statusHtml = '<span class="tool-item-status waiting">⏸</span>';
+    if (status === 'done') statusHtml = '<span class="tool-item-status done">\u2713</span>';
+    else if (status === 'error') statusHtml = '<span class="tool-item-status error">\u2717</span>';
+    else if (status === 'waiting') statusHtml = '<span class="tool-item-status waiting">\u23F8</span>';
     else statusHtml = '<span class="tool-item-spinner"></span>';
 
     return `<div class="tool-item ${cls}">
