@@ -17,7 +17,19 @@ type SubagentCallback = (subagents: SubagentInfo[]) => void;
 
 const MAX_OUTPUT_LENGTH = 100 * 1024;
 const EMIT_THROTTLE_MS = 1000;
-const SUBAGENT_TOOL_NAMES = new Set(['spawn_subagent', 'list_subagents', 'get_subagent_result', 'stop_subagent', 'bash', 'exec_tool']);
+const SUBAGENT_TOOL_NAMES = new Set([
+  // Subagent management (recursion)
+  'spawn_subagent', 'list_subagents', 'get_subagent_result', 'stop_subagent',
+  // Shell execution
+  'bash', 'exec_tool',
+  // Write to disk
+  'write_file', 'edit_file', 'ast_edit', 'apply_patch',
+  'download_paper',
+  // Write to store
+  'store_memory', 'clear_memory', 'todowrite',
+  // Write goal
+  'update_goal',
+]);
 
 export class SubagentManager {
   private subagents = new Map<string, SubagentInfo>();
@@ -85,7 +97,7 @@ export class SubagentManager {
       `## Task\n\n${goal}`,
       ``,
       `## Rules`,
-      `- Use tools directly. Prefer write_file/edit_file over bash.`,
+      `- Read-only: you can read/search files and the web, but cannot modify anything.`,
       `- After finishing, output the result and do NOT call more tools.`,
       `- Do NOT ask for approval — act autonomously.`,
       `- Keep output concise.`,
