@@ -320,7 +320,7 @@ function renderTodoBadges() {
     let html = '<div class="sa-header">';
     html += '<span class="sa-header-left">';
     if (running > 0) html += '<span class="sa-spinner"></span> ';
-    html += `<span class="sa-title">Subagents</span>`;
+    html += `<span class="sa-title">Agents</span>`;
     html += `<span class="sa-count ${allDone ? 'sa-count-done' : ''}">${completed}/${total}</span>`;
     html += '</span>';
     html += `<span class="sa-toggle" id="sa-toggle-btn">\u25BC</span>`;
@@ -331,20 +331,23 @@ function renderTodoBadges() {
       const elapsed = formatElapsed(s.elapsedMs || 0);
       const statusClass = 'sa-badge-' + s.status;
       const badgeText = s.status === 'completed' ? 'Done' : s.status === 'running' ? 'Running' : s.status === 'failed' ? 'Failed' : 'Cancelled';
+      const goalShort = s.goal.length > 80 ? escapeHtml(s.goal.slice(0, 80)) + '…' : escapeHtml(s.goal);
       html += `<div class="sa-agent ${expanded ? 'sa-agent-expanded' : ''}" data-jobid="${escapeHtml(s.jobId)}">
         <div class="sa-agent-header">
-          <span class="sa-agent-name">${escapeHtml(s.name)}</span>
-          <span class="sa-badge ${statusClass}">${badgeText}</span>
-          <span class="sa-elapsed">${elapsed}</span>
-          <span class="sa-arrow">${expanded ? '\u25BC' : '\u25B6'}</span>
+          <span class="sa-agent-meta">
+            <span class="sa-agent-name">${escapeHtml(s.name)}</span>
+            <span class="sa-agent-goal">${goalShort}</span>
+          </span>
+          <span class="sa-agent-right">
+            <span class="sa-badge ${statusClass}">${badgeText}</span>
+            <span class="sa-elapsed">${elapsed}</span>
+            <span class="sa-arrow">${expanded ? '\u25BC' : '\u25B6'}</span>
+          </span>
         </div>
         <div class="sa-detail" style="max-height:${expanded ? '600px' : '0'}; overflow:hidden; transition:max-height 0.25s ease">
           <div class="sa-detail-inner">
-            <div class="sa-detail-row"><span class="sa-detail-label">Goal:</span><span class="sa-detail-val">${escapeHtml(s.goal)}</span></div>
-            <div class="sa-detail-row"><span class="sa-detail-label">Skill:</span><span class="sa-detail-val">${escapeHtml(s.skillName)}</span></div>
-            <div class="sa-detail-row"><span class="sa-detail-label">ID:</span><span class="sa-detail-val" style="font-family:monospace;font-size:11px;opacity:0.6">${escapeHtml(s.jobId)}</span></div>
             ${s.error ? `<div class="sa-detail-row sa-detail-error"><span class="sa-detail-label">Error:</span><span class="sa-detail-val">${escapeHtml(s.error)}</span></div>` : ''}
-            <div class="sa-output">${escapeHtml(s.output || '(no output yet)')}</div>
+            <div class="sa-output">${escapeHtml(s.output || '')}</div>
           </div>
         </div>
       </div>`;
