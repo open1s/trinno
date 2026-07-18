@@ -11,6 +11,7 @@ export interface SubagentInfo {
   elapsedMs: number;
   output: string;
   error?: string;
+  displayExpired?: boolean;
 }
 
 type SubagentCallback = (subagents: SubagentInfo[]) => void;
@@ -71,16 +72,22 @@ export class SubagentManager {
   }
 
   private async publishResult(info: SubagentInfo): Promise<void> {
-    await this.ensureResultPub();
-    if (!this.resultPub) return;
-    const { output, ...safe } = info;
-    this.resultPub.text(JSON.stringify({ ...safe, outputLength: output.length })).catch(() => {});
+    try {
+      await this.ensureResultPub();
+      if (!this.resultPub) return;
+      const { output, ...safe } = info;
+      this.resultPub.text(JSON.stringify({ ...safe, outputLength: output.length })).catch(() => {});
+    } catch {
+      // bus unavailable — silently skip
+    }
   }
 
   private emitStatus(): void {
     this.lastEmitTime = Date.now();
     const now = this.lastEmitTime;
-    const list = Array.from(this.subagents.entries()).map(([id, info]) => {
+    const list = Array.from(this.subagents.entries())
+      .filter(([, info]) => !info.displayExpired)
+      .map(([id, info]) => {
       const liveOutput = this.outputs.get(id);
       return {
         ...info,
@@ -228,14 +235,19 @@ export class SubagentManager {
         this.appendNotification(name, 'failed', info.error);
         this.publishResult(info);
       } finally {
-        const isCompleted = info.status === 'completed';
-        const delay = isCompleted ? COMPLETED_REMOVE_DELAY_MS : this.resultTtlMs;
+        // Display eviction: completed agents disappear from UI after short delay
+        if (info.status === 'completed') {
+          setTimeout(() => {
+            info.displayExpired = true;
+            this.emitStatus();
+          }, COMPLETED_REMOVE_DELAY_MS);
+        }
+        // Data eviction: free memory after full TTL
         setTimeout(() => {
           this.subagents.delete(jobId);
           this.outputs.delete(jobId);
           this.abortControllers.delete(jobId);
-          if (isCompleted) this.emitStatus();
-        }, delay);
+        }, this.resultTtlMs);
       }
     };
 

@@ -124,6 +124,7 @@ function setupSubagentManager(): void {
   deps.brain.subscriber('trinno:subagent:result').then(sub => {
     sub.runJson(async (msg: any) => {
       busSubagentResults.push(msg);
+      if (busSubagentResults.length > 100) busSubagentResults.splice(0, busSubagentResults.length - 100);
     }).catch(() => {});
   }).catch(() => {});
 }
@@ -1734,17 +1735,20 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
 
   // Inject pending subagent completion notifications + bus results
   if (deps?.subagentManager) {
-    const notifications = deps.subagentManager.drainNotifications();
     const busResults = busSubagentResults.splice(0);
     const parts: string[] = [];
-    if (notifications.length > 0) {
-      parts.push(notifications.map(n => `- ${n}`).join('\n'));
-    }
     if (busResults.length > 0) {
+      // Bus results are structured & richer — prefer them over plain text
       for (const r of busResults) {
         const status = r.status || 'unknown';
         const detail = status === 'failed' && r.error ? ` error="${r.error}"` : '';
         parts.push(`- Subagent "${r.name}" [${r.jobId}] ${status} (${r.elapsedMs}ms, ${r.outputLength} chars)${detail}`);
+      }
+    } else {
+      // Fallback: plain text notifications (bus unavailable)
+      const notifications = deps.subagentManager.drainNotifications();
+      if (notifications.length > 0) {
+        parts.push(notifications.map(n => `- ${n}`).join('\n'));
       }
     }
     if (parts.length > 0) {
