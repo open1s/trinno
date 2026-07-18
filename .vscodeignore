@@ -20,12 +20,3 @@ AGENTS.md
 CLAUDE.md
 CONTEXT.md
 .yarnrc.yml
-# node_modules/**
-# !node_modules/@open1s/**
-# !node_modules/global-agent/**
-# !node_modules/i18next/**
-# !node_modules/marked/**
-# !node_modules/mermaid/**
-# !node_modules/pino/**
-# !node_modules/toml/**
-# !node_modules/undici/**
