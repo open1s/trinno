@@ -248,7 +248,7 @@ function renderTodoBadges() {
     let html = '<div class="todo-summary" onclick="this.parentElement.querySelector(\'.todo-list\').classList.toggle(\'collapsed\')">';
     html += '<span class="todo-count">';
     if (running > 0) html += '<span class="sa-spinner"></span> ';
-    html += '<span class="todo-count-label">TODOs</span>';
+    html += '<span class="todo-count-label">TODO</span>';
     html += `<span class="sa-count ${running > 0 ? 'sa-count-done' : ''}">${done}/${total}</span>`;
     if (running > 0) html += `<span class="todo-running-count">${running} running</span>`;
     html += '</span>';
@@ -275,7 +275,7 @@ function renderTodoBadges() {
       </div>`;
     }).join('');
     mcpDropdownEl.innerHTML = `
-      <div class="mcp-dropdown-header">TODOs</div>
+      <div class="mcp-dropdown-header">TODO</div>
       <div class="mcp-dropdown-list">${items || '<div class="mcp-dropdown-empty">No tasks</div>'}</div>`;
     mcpDropdownEl.classList.add('visible');
     setTimeout(() => {
@@ -325,7 +325,7 @@ function renderTodoBadges() {
     let html = '<div class="sa-header">';
     html += '<span class="sa-header-left">';
     if (running > 0) html += '<span class="sa-spinner"></span> ';
-    html += `<span class="sa-title">Agents</span>`;
+    html += `<span class="sa-title">AGENT</span>`;
     html += `<span class="sa-count ${allDone ? 'sa-count-done' : ''}">${completed}/${total}</span>`;
     html += '</span>';
     html += `<span class="sa-toggle" id="sa-toggle-btn">\u25BC</span>`;
@@ -2027,7 +2027,7 @@ function renderTodoBadges() {
     html += `<div class="tool-summary" onclick="this.parentElement.querySelector('.tool-list').classList.toggle('collapsed')">`;
     html += `<span class="tool-count">`;
     if (runningCount > 0) html += `<span class="sa-spinner"></span> `;
-    html += `<span class="tool-count-label">Tools</span>`;
+    html += `<span class="tool-count-label">TOOL</span>`;
     html += `<span class="sa-count">${doneCount}/${totalCount}</span>`;
     if (runningCount > 0) html += ` <span class="tool-running-badge">${runningCount} running</span>`;
     if (errorCount > 0) html += ` <span class="tool-error-badge">${errorCount} failed</span>`;

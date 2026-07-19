@@ -323,6 +323,13 @@ export class SubagentManager {
           this.emitStatus();
           this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, output: outputText, elapsedMs: info.elapsedMs });
           this.publishResult(info);
+        } else if (!outputText && !lastError) {
+          info.status = 'failed';
+          info.error = 'subagent returned no output — model may have failed silently or skill instructions are incompatible';
+          info.elapsedMs = Date.now() - info.startedAt;
+          this.emitStatus();
+          this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, elapsedMs: info.elapsedMs });
+          this.publishResult(info);
         } else {
           info.status = 'completed';
           info.output = outputText;
@@ -395,6 +402,7 @@ export class SubagentManager {
       abort.abort();
     }
     info.status = 'cancelled';
+    info.output = this.outputs.get(jobId) ?? info.output;
     info.elapsedMs = Date.now() - info.startedAt;
     this.emitStatus();
     this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: 'cancelled', output: info.output, elapsedMs: info.elapsedMs });
