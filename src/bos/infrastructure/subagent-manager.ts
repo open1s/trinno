@@ -16,6 +16,17 @@ export interface SubagentInfo {
 
 type SubagentCallback = (subagents: SubagentInfo[]) => void;
 
+export interface SubagentNotification {
+  name: string;
+  jobId: string;
+  skillName: string;
+  goal: string;
+  status: string;
+  error?: string;
+  output?: string;
+  elapsedMs: number;
+}
+
 const MAX_OUTPUT_LENGTH = 100 * 1024;
 const EMIT_THROTTLE_MS = 1000;
 const COMPLETED_REMOVE_DELAY_MS = 3000;
@@ -46,7 +57,7 @@ function parseRetryAfter(msg: string): number {
 }
 const SUBAGENT_TOOL_NAMES = new Set([
   // Subagent management (recursion)
-  'spawn_subagent', 'list_subagents', 'get_subagent_result', 'stop_subagent',
+  'spawn_agent', 'list_agents', 'get_agent_result', 'stop_subagent',
   // Shell execution
   'bash', 'exec_tool',
   // Write to disk
@@ -63,9 +74,8 @@ export class SubagentManager {
   private outputs = new Map<string, string>();
   private abortControllers = new Map<string, AbortController>();
   private maxConcurrent: number;
-  private resultTtlMs: number;
   private lastEmitTime = 0;
-  pendingNotifications: string[];
+  pendingNotifications: SubagentNotification[];
   private onStatusChange: SubagentCallback;
   private defaultHooks: any[];
   private bus?: any;
@@ -73,14 +83,12 @@ export class SubagentManager {
 
   constructor(options?: {
     maxConcurrent?: number;
-    resultTtlMs?: number;
-    pendingNotificationsRef?: string[];
+    pendingNotificationsRef?: SubagentNotification[];
     onStatusChange?: SubagentCallback;
     defaultHooks?: any[];
     bus?: any;
   }) {
     this.maxConcurrent = options?.maxConcurrent ?? 5;
-    this.resultTtlMs = options?.resultTtlMs ?? 10 * 60 * 1000;
     this.pendingNotifications = options?.pendingNotificationsRef ?? [];
     this.onStatusChange = options?.onStatusChange ?? (() => {});
     this.defaultHooks = options?.defaultHooks ?? [];
@@ -131,6 +139,10 @@ export class SubagentManager {
   }
 
   async spawn(name: string, skillName: string, goal: string, timeoutSecs?: number): Promise<SubagentInfo> {
+    if (!name || !name.trim()) throw new Error('name is required');
+    if (!skillName || !skillName.trim()) throw new Error('skill_name is required');
+    if (!goal || !goal.trim()) throw new Error('goal is required');
+    if (timeoutSecs !== undefined && (timeoutSecs < 1 || !Number.isFinite(timeoutSecs))) throw new Error('timeout_seconds must be a positive number');
     if (this.subagents.size >= this.maxConcurrent) {
       throw new Error(`Max concurrent subagents reached (${this.maxConcurrent})`);
     }
@@ -139,7 +151,7 @@ export class SubagentManager {
     const skillContent = loadLocalSkill(skillName);
     const skillSection = skillContent?.content
       ? `\n## Skill Instructions\n\n${skillContent.content}\n`
-      : '';
+      : `\n## Note: Skill "${skillName}" not found — proceeding without skill instructions.\n`;
     const rules = [
       `You are a focused subagent named "${name}".`,
       skillSection,
@@ -285,7 +297,7 @@ export class SubagentManager {
           info.error = `rate limited after ${MAX_SUBAGENT_RETRIES + 1} attempts: ${lastError}`;
           info.elapsedMs = Date.now() - info.startedAt;
           this.emitStatus();
-          this.appendNotification(name, 'failed', info.error);
+          this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, elapsedMs: info.elapsedMs });
           this.publishResult(info);
         } else if (timedOut) {
           info.status = 'failed';
@@ -293,7 +305,7 @@ export class SubagentManager {
           info.output = outputText;
           info.elapsedMs = Date.now() - info.startedAt;
           this.emitStatus();
-          this.appendNotification(name, info.status);
+          this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, output: outputText, elapsedMs: info.elapsedMs });
           this.publishResult(info);
         } else if (abort.signal.aborted) {
           info.status = 'failed';
@@ -301,14 +313,22 @@ export class SubagentManager {
           info.output = outputText;
           info.elapsedMs = Date.now() - info.startedAt;
           this.emitStatus();
-          this.appendNotification(name, info.status);
+          this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, output: outputText, elapsedMs: info.elapsedMs });
+          this.publishResult(info);
+        } else if (lastError) {
+          info.status = 'failed';
+          info.error = lastError;
+          info.output = outputText;
+          info.elapsedMs = Date.now() - info.startedAt;
+          this.emitStatus();
+          this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, output: outputText, elapsedMs: info.elapsedMs });
           this.publishResult(info);
         } else {
           info.status = 'completed';
           info.output = outputText;
           info.elapsedMs = Date.now() - info.startedAt;
           this.emitStatus();
-          this.appendNotification(name, info.status);
+          this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, output: outputText, elapsedMs: info.elapsedMs });
           this.publishResult(info);
         }
       } catch (err) {
@@ -324,23 +344,20 @@ export class SubagentManager {
         }
         info.elapsedMs = Date.now() - info.startedAt;
         this.emitStatus();
-        this.appendNotification(name, 'failed', info.error);
+        this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: info.status, error: info.error, output: info.output, elapsedMs: info.elapsedMs });
         this.publishResult(info);
       } finally {
-        // Display eviction: all terminal states disappear from UI after short delay
+        // Eviction: hide from UI + free memory after short delay
         if (info.status === 'completed' || info.status === 'failed') {
           setTimeout(() => {
             info.displayExpired = true;
+            this.subagents.delete(jobId);
+            this.outputs.delete(jobId);
+            this.abortControllers.delete(jobId);
             this.emitStatus();
           }, COMPLETED_REMOVE_DELAY_MS);
         }
         // (cancelled agents are handled by stop() with the same delay)
-        // Data eviction: free memory after full TTL
-        setTimeout(() => {
-          this.subagents.delete(jobId);
-          this.outputs.delete(jobId);
-          this.abortControllers.delete(jobId);
-        }, this.resultTtlMs);
       }
     };
 
@@ -351,7 +368,7 @@ export class SubagentManager {
   list(): SubagentInfo[] {
     const now = Date.now();
     return Array.from(this.subagents.entries())
-      .filter(([, info]) => info.status !== 'completed')
+      .filter(([, info]) => !info.displayExpired)
       .map(([id, info]) => {
         const { displayExpired: _, ...rest } = info;
         return {
@@ -380,24 +397,24 @@ export class SubagentManager {
     info.status = 'cancelled';
     info.elapsedMs = Date.now() - info.startedAt;
     this.emitStatus();
-    this.appendNotification(info.name, 'cancelled');
+    this.appendNotification({ name: info.name, jobId: info.jobId, skillName: info.skillName, goal: info.goal, status: 'cancelled', output: info.output, elapsedMs: info.elapsedMs });
     this.publishResult(info);
-    // Display eviction: cancelled agents disappear from UI after short delay
+    // Eviction: hide from UI + free memory after short delay
     setTimeout(() => {
       info.displayExpired = true;
+      this.subagents.delete(jobId);
+      this.outputs.delete(jobId);
+      this.abortControllers.delete(jobId);
       this.emitStatus();
     }, COMPLETED_REMOVE_DELAY_MS);
     return true;
   }
 
-  private appendNotification(name: string, status: string, error?: string): void {
-    const msg = status === 'failed'
-      ? `Subagent "${name}" failed: ${error || 'unknown error'}`
-      : `Subagent "${name}" ${status}`;
-    this.pendingNotifications.push(msg);
+  private appendNotification(n: SubagentNotification): void {
+    this.pendingNotifications.push(n);
   }
 
-  drainNotifications(): string[] {
+  drainNotifications(): SubagentNotification[] {
     const drained = [...this.pendingNotifications];
     this.pendingNotifications.length = 0;
     return drained;
