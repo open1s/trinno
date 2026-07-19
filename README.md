@@ -40,7 +40,7 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 
 1. **Install** from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research)
 2. **Open** a workspace folder — Trinno auto-detects or creates the 8-phase directory structure
-3. **Set your API key** in VS Code settings: `chat.model.apiKey`
+3. **Set your API key** in `~/.bos/conf/config.toml` under `[global_model]` / `[llm.<provider>]` (or run `Open Trinno Config` from the command palette to scaffold the file)
 4. **Open the panel** — click the Research Assistant icon in the activity bar or press `Cmd+Shift+C`
 5. **Start with `/init`** to scaffold your project, then `/search <topic>` to find prior art
 
@@ -65,13 +65,16 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 # 5. Assess technology maturity
 /s-curve
 
-# 6. Download relevant papers
+# 6. Download relevant papers (alias for /download)
 /get solid-state electrolyte interface stability
 /download 10.1038/nenergy.2016.141
 
-# 7. Draft patent (incremental, one section per turn)
-/patent a gas diffusion layer with gradient pore structure
+# 7. Draft patent — handled by the master agent (incremental, section by section)
+#    Type it in chat; the agent writes the patent file one section at a time.
+patent a gas diffusion layer with gradient pore structure
 ```
+
+> Note: `/init`, `/search`, `/contradiction`, `/download`, etc. are explicit slash commands dispatched by Trinno. Plain phrases like `patent ...` or `write me a paper ...` are free-form prompts the master agent interprets in context.
 
 ### General Chat
 
@@ -114,19 +117,20 @@ Please analyze the patents in @01_Discover/patents.json and find the technical c
 | Command | Description |
 |---|---|
 | `/init` | Scaffold 8-phase workspace |
-| `/search <query>` | Search patents, papers, and solutions |
-| `/contradiction` | TRIZ contradiction matrix analysis |
-| `/principles` | Browse 40 inventive principles |
-| `/s-curve` | Technology maturity assessment with S-curve + Hype Cycle |
-| `/ideality` | Evaluate system ideality |
-| `/su-field` | Substance-Field model analysis |
-| `/patent <title>` | Incremental patent drafting (LLM-driven, section by section) |
-| `/download <DOI>` | Download a paper by DOI / arXiv ID / PMID / URL |
-| `/get <query>` | Search & auto-download top match |
-| `/papers` | List downloaded papers |
-| `/auto <hypothesis>` | Start AutoResearch iteration loop (propose→act→evaluate→ratchet) |
-| `/undo` | Undo the last AI prompt (jj-based, supports chained undo) |
-| `/goal` | Set, view, and track a persistent research goal |
+| `/search <query>` | Search patents, papers, and solutions (aliases: `/s`, `/find`) |
+| `/contradiction` | TRIZ contradiction matrix analysis (aliases: `/c`, `/contra`) |
+| `/principles` | Browse 40 inventive principles (aliases: `/p`, `/princ`) |
+| `/s-curve` | Technology maturity assessment with S-curve + Hype Cycle (aliases: `/sc`, `/scurve`) |
+| `/ideality` | Evaluate system ideality (aliases: `/i`, `/ideal`) |
+| `/su-field` | Substance-Field model analysis (aliases: `/sf`, `/sufield`) |
+| `/download <DOI>` | Download a paper by DOI / arXiv ID / PMID / URL (aliases: `/d`, `/dl`, `/get`) |
+| `/auto <hypothesis>` | Start AutoResearch iteration loop — propose→act→evaluate→ratchet (aliases: `/a`, `/autoresearch`) |
+| `/undo` | Undo the last AI prompt — jj-based, supports chained undo (alias: `/u`) |
+| `/goal` | Set, view, and track a persistent research goal (alias: `/g`) |
+| `/ping` | Probe LLM token limits (context window, max output, working limit) |
+| `/sandbox` | Toggle / inspect sandbox mode (alias: `/sb`) |
+| `/compact` | Compact current session: summarize old messages when context grows long |
+| `/recover` | Recover from token limit: trim stale messages and large tool results |
 
 ### AI Research Assistant
 
@@ -135,6 +139,23 @@ Please analyze the patents in @01_Discover/patents.json and find the technical c
 - **Context-aware**: automatically reads your notebook and workspace files
 - **Tool-augmented**: file read/write/edit, web search, paper download, bash execution
 - **Session management**: persistent chat history, compact summaries, multi-session switching
+
+### Subagent Orchestration
+
+The master agent can delegate bounded, read-only research tasks to background subagents that run in parallel and report back via notifications:
+
+| Tool | Purpose |
+|---|---|
+| `spawn_agent` | Launch a subagent with a chosen skill + goal, returns a `jobId` |
+| `list_agents` | List currently tracked subagents and their statuses |
+| `get_agent_result` | Pull a subagent's output, error, and elapsed time |
+| `stop_subagent` | Cancel a still-running subagent |
+
+- **Read-only by design** — write tools (`write_file`, `edit_file`, `bash`, etc.) are filtered out before the subagent sees them
+- **Skill loading** — every spawn injects `~/.bos/skills/<name>/SKILL.md` into the subagent system prompt; missing skills surface a warning rather than failing silently
+- **Rich notifications** — when a subagent finishes, the master agent receives a structured payload (status, output, error, goal, skill name, elapsed time) instead of a bare string
+- **Self-rate-limit handling** — subagent streams automatically retry on 429/rate-limit responses (up to 3 attempts with exponential backoff); non-rate-limit errors are reported as `failed` with the error message
+- **Display + memory lifecycle** — completed subagents stay visible for 3 s so the UI can flash them, then are evicted from memory
 
 ### Patent & Paper Writing
 
@@ -178,7 +199,7 @@ Trinno uses TOML config files and a skills directory under `~/.bos/`:
 ```toml
 [general]
 name = "TRINNO"
-version = "1.4.10"
+version = "1.4.21"
 environment = "release"
 
 [global_model]
@@ -278,13 +299,19 @@ MCP status is shown in the bottom status bar. Connected servers' tools are avail
 ## Development
 
 ```bash
-npm ci
-npm run compile     # build to dist/
-npm run watch       # incremental build
-npm run lint        # eslint
-npm run test:pipeline  # fast pipeline tests (no VS Code)
-npm run test        # full suite (launches VS Code via @vscode/test-electron)
+npm ci                      # install dependencies (use npm; lockfile coexistence)
+npm run compile             # build to dist/
+npm run watch               # incremental build (tsc -watch)
+npm run lint                # eslint src/chat/*.ts
+npm run test:pipeline       # fast pipeline tests (no VS Code, no LLM)
+npm run test:agent-notify   # unit tests for subagent notification pipeline
+npm run test:undo           # E2E undo verification (spawns worker + real jj repo)
+npm run test:token          # per-message token cost linearity (real API call)
+npm run test                # full suite (launches VS Code via @vscode/test-electron)
+npm run cold-start          # run cold-start probe to verify the worker can boot
 ```
+
+> **Note:** Although `package.json` declares `packageManager: yarn@4.13.0`, the project conventionally uses **npm** for compile, lint and tests. Three lockfiles coexist (`bun.lock`, `package-lock.json`, `yarn.lock`); pick npm unless the build pipeline specifically chooses otherwise.
 
 ### Project structure
 
@@ -295,8 +322,16 @@ src/
   papers/            # paper downloader (9+ sources raced concurrently)
   bos/               # BOS framework: slash commands, TRIZ domain, AI infra
     worker.ts         # agent process (JSON-over-stdio)
-    slash-commands/   # /init, /search, /contradiction, /patent, ...
-    infrastructure/   # AI tools, config, persistence, search
+    main.ts           # BOS root composition
+    slash-commands/   # /init, /search, /contradiction, /auto, /goal, ...
+    domain/           # pure logic: contradiction, s-curve, principle, su-field
+    application/      # use-cases: analyze_contradiction, evaluate_ideality
+    infrastructure/   # AI tools, config, persistence, search, subagent
+      http/           # TRIZ / paper / coding / subagent / remote-skill / websearch tool routers
+      config/         # DI composition, tool permission hook, model config
+      ai/             # agent factory, streaming wrappers
+      subagent-manager.ts  # spawn / list / get_result / stop for sub-agent orchestration
+  test/suite/        # Mocha + @vscode/test-electron unit & e2e tests
 ```
 
 ---
