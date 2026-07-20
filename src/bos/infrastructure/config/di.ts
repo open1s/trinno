@@ -108,26 +108,31 @@ export async function composeRoot(options: {
   const trlAssessor = new TRLAssessor(brain, locale);
   const aiSCurveEstimator = new AiSCurveEstimator(brain, locale);
 
-  const trizTools = createTrizTools(
-    principleEngine,
-    suFieldService,
-    undefined as any,
-    undefined as any,
-    aiAgent,
-    searchService,
-    undefined as any,
-    aiSCurveEstimator,
-    aiSCurveDataExtractor,
-  );
-
-  const codingTools = createCodingTools(workspaceRoot, sandboxEnabled);
-
   const analysisService = new ContradictionAnalysisService();
   const contradictionRepo = new InMemoryContradictionRepository();
   const solutionRepo = new InMemorySolutionRepository();
   const sCurveRepo = new InMemorySCurveRepository();
   const rawFactsSaver = new RawFactsSaver();
   const phaseWriter = new PhaseWriter(workspaceRoot);
+  const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
+  const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
+  const idealityHandler = new EvaluateIdealityHandler(locale);
+  const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver, phaseWriter);
+
+  const trizTools = createTrizTools(
+    principleEngine,
+    suFieldService,
+    analyzeContradictionHandler,
+    idealityHandler,
+    aiAgent,
+    searchService,
+    sCurveHandler,
+    aiSCurveEstimator,
+    aiSCurveDataExtractor,
+  );
+
+  const codingTools = createCodingTools(workspaceRoot, sandboxEnabled);
+
   const papersTools = createPapersTools(phaseWriter);
   const memoryTools = createMemoryTools(workspaceRoot);
   const todoTools = createTodoTools(workspaceRoot);
@@ -140,10 +145,6 @@ export async function composeRoot(options: {
     bus: brain,
   });
   const subagentTools = createSubagentTools(subagentManager);
-  const analyzeContradictionHandler = new AnalyzeContradictionHandler(analysisService, contradictionRepo);
-  const generateSolutionsHandler = new GenerateSolutionsHandler(contradictionRepo, principleEngine, solutionRepo);
-  const idealityHandler = new EvaluateIdealityHandler(locale);
-  const sCurveHandler = new AnalyzeSCurveHandler(trlAssessor, locale, sCurveRepo, rawFactsSaver, phaseWriter);
 
   const { beforeHook, afterHook } = createToolPermissionHook(toolPermissions);
   const websearchTools = createWebsearchTools();

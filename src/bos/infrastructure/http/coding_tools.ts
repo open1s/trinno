@@ -1,10 +1,54 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { spawn, execSync, type ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import { SandboxManager } from '../sandbox.js';
 import { isWorkspacePath, isSecretPath, isDangerousCommand } from '../config/workspaceGuard.js';
+import { createModuleLogger } from '../logging/logger.js';
+
+const log = createModuleLogger('coding-tools');
+
+const bgProcesses = new Map<string, ChildProcess>();
+
+function killProcessGroup(pid: number, signal: NodeJS.Signals = 'SIGKILL') {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try { process.kill(pid, signal); } catch { /* already dead */ }
+  }
+}
+
+/**
+ * Kill the background process spawned by the given tool call_id. Background
+ * jobs return from the engine immediately, so the engine deregisters their
+ * call_id and never forwards a cancel to onCancel; the worker calls this
+ * directly as a fallback after publishing the bus cancel.
+ */
+export function cancelBackgroundJob(callId: string): boolean {
+  const bg = bgProcesses.get(callId);
+  if (bg && bg.pid) {
+    log.debug({ callId, pid: bg.pid }, '[TOOL-STATUS] cancelBackgroundJob killing bg process');
+    killProcessGroup(bg.pid);
+    bgProcesses.delete(callId);
+    return true;
+  }
+  return false;
+}
+
+type BgExitHandler = (toolName: string, pid: number, exitCode: number | null, signal: string | null) => void;
+let onBgExit: BgExitHandler = () => {};
+
+export function setOnBgExit(handler: BgExitHandler): void {
+  onBgExit = handler;
+}
+
+type BgStartHandler = (toolName: string, callId: string, pid: number) => void;
+let onBgStart: BgStartHandler = () => {};
+
+export function setOnBgStart(handler: BgStartHandler): void {
+  onBgStart = handler;
+}
 
 export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolean) {
   const sandbox = new SandboxManager({ enabled: sandboxEnabled !== false, workspaceRoot });
@@ -208,33 +252,168 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
       }
     });
 
+  const runningProcesses = new Map<string, ChildProcess>();
+
+  /**
+   * Spawn a foreground command. Captures stdout/stderr. The child is spawned
+   * detached so it has its own process group, allowing the whole tree to be
+   * killed by group pid. If timeoutMs is given, the group is SIGTERM'd at the
+   * timeout, escalated to SIGKILL after a 3s grace period, and a fail-safe
+   * resolution after a further 2s. Resolves on exit; rejects on spawn error.
+   */
+  function spawnCapture(
+    callId: string,
+    command: string,
+    cwd: string,
+    env?: Record<string, string | undefined>,
+    timeoutMs?: number,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number | null; signal: NodeJS.Signals | null; timedOut: boolean }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, [], {
+        cwd,
+        shell: true,
+        env: env ? { ...process.env, ...env } : undefined,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
+      });
+
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let settled = false;
+      let timedOut = false;
+
+      const killGroup = (signal: NodeJS.Signals) => {
+        if (!child.pid) return;
+        killProcessGroup(child.pid, signal);
+      };
+
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      let graceTimer: NodeJS.Timeout | undefined;
+      let failSafeTimer: NodeJS.Timeout | undefined;
+
+      const cleanup = () => {
+        runningProcesses.delete(callId);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (graceTimer) clearTimeout(graceTimer);
+        if (failSafeTimer) clearTimeout(failSafeTimer);
+      };
+
+      const settleTimeout = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({
+          stdout: Buffer.concat(stdout).toString('utf-8'),
+          stderr: Buffer.concat(stderr).toString('utf-8'),
+          exitCode: null,
+          signal: 'SIGTERM',
+          timedOut: true,
+        });
+      };
+
+      if (timeoutMs !== undefined) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          killGroup('SIGTERM');
+          // Grace period: escalate to SIGKILL after 3s.
+          graceTimer = setTimeout(() => {
+            killGroup('SIGKILL');
+            // Fail-safe: resolve even if the process refuses to die.
+            failSafeTimer = setTimeout(settleTimeout, 2000);
+          }, 3000);
+        }, timeoutMs);
+      }
+
+      child.stdout!.on('data', (chunk: Buffer) => { stdout.push(chunk); });
+      child.stderr!.on('data', (chunk: Buffer) => { stderr.push(chunk); });
+
+      child.on('error', (error) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      });
+
+      child.on('close', (exitCode, signal) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          resolve({
+            stdout: Buffer.concat(stdout).toString('utf-8'),
+            stderr: Buffer.concat(stderr).toString('utf-8'),
+            exitCode: exitCode ?? -1,
+            signal: signal ?? null,
+            timedOut,
+          });
+        }
+      });
+
+      runningProcesses.set(callId, child);
+    });
+  }
+
   const bash = defineTool(
     'bash',
-    'Execute a shell command in the workspace directory. Returns stdout and stderr.',
+    'Execute a shell command in the workspace directory. Returns stdout and stderr. Commands ending with "&" run in background (detached, killed on cancel). Supports cancellation.',
   )
     .required('command', 'string', 'Shell command to execute')
-    .param('timeout', 'number', 'Timeout in milliseconds (default: 30000)')
-    .handle((args) => {
+    .param('timeout', 'number', 'Max seconds to wait for a foreground command (5-3600, default 600). Ignored for background commands.')
+    .cancelable()
+    .onCancel((callId) => {
+      const proc = runningProcesses.get(callId);
+      if (proc && proc.pid) killProcessGroup(proc.pid);
+      runningProcesses.delete(callId);
+      const bg = bgProcesses.get(callId);
+      if (bg && bg.pid) killProcessGroup(bg.pid);
+      bgProcesses.delete(callId);
+    })
+    .handle(async (args) => {
       try {
         if (isDangerousCommand(args.command)) {
           return err('Command blocked: potentially dangerous operation');
         }
-        const timeout = args.timeout || 30000;
-        const { command: safeCommand, timeout: safeTimeout } = sandbox.wrapCommand(args.command);
+        const isBackground = /&\s*$/.test(args.command.trim());
+        const cmd = isBackground ? args.command.trim().replace(/&\s*$/, '').trim() : args.command;
+        const { command: safeCommand } = sandbox.wrapCommand(cmd);
         const env = sandbox.isEnabled() ? sandbox.getRestrictedEnv() : undefined;
-        const result = execSync(safeCommand, {
-          cwd: workspaceRoot,
-          timeout: Math.max(timeout, safeTimeout),
-          encoding: 'utf-8',
-          maxBuffer: 10 * 1024 * 1024,
-          env: env ? { ...process.env, ...env } : undefined,
-        });
-        return ok({ stdout: result, exitCode: 0 });
-      } catch (e: any) {
-        if (e.signal === 'SIGTERM') {
-          return err(`Command timed out after ${args.timeout || 30000}ms`);
+        const callId = (args as any).__call_id__ || 'unknown';
+        const timeoutSec = Math.min(3600, Math.max(5, args.timeout ?? 600));
+        const timeoutMs = timeoutSec * 1000;
+
+        if (isBackground) {
+          const child = spawn(safeCommand, [], {
+            cwd: workspaceRoot,
+            shell: true,
+            env: env ? { ...process.env, ...env } : undefined,
+            stdio: 'ignore',
+            detached: true,
+          });
+          child.unref();
+          bgProcesses.set(callId, child);
+          if (child.pid) {
+            log.debug({ callId, pid: child.pid }, '[TOOL-STATUS] bash background job spawned');
+            onBgStart('bash', callId, child.pid);
+          }
+          child.on('exit', (exitCode, signal) => {
+            if (bgProcesses.get(callId) === child) bgProcesses.delete(callId);
+            if (child.pid) onBgExit('bash', child.pid, exitCode, signal);
+          });
+          return ok({ pid: child.pid, background: true });
         }
-        return ok({ stdout: e.stdout || '', stderr: e.stderr || '', exitCode: e.status || 1 });
+
+        const result = await spawnCapture(callId, safeCommand, workspaceRoot, env, timeoutMs);
+        if (result.timedOut) {
+          const partial = result.stdout + result.stderr;
+          const tail = partial ? '\nPartial output:\n' + partial.slice(-4000) : '';
+          return err(`Command timed out after ${timeoutSec}s${tail}`);
+        }
+        if (result.signal === 'SIGTERM' || result.signal === 'SIGKILL') {
+          return err('Command cancelled');
+        }
+        return ok({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode });
+      } catch (e: any) {
+        return err(e.message);
       }
     });
 
@@ -417,29 +596,63 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
   )
     .required('command', 'string', 'Command or binary to execute')
     .required('args', 'array', 'List of arguments to pass to the command')
-    .param('timeout', 'number', 'Timeout in milliseconds (default: 30000)')
-    .handle((args) => {
+    .param('timeout', 'number', 'Max seconds to wait for a foreground command (5-3600, default 600). Ignored for background commands.')
+    .cancelable()
+    .onCancel((callId) => {
+      const proc = runningProcesses.get(callId);
+      if (proc && proc.pid) killProcessGroup(proc.pid);
+      runningProcesses.delete(callId);
+      const bg = bgProcesses.get(callId);
+      if (bg && bg.pid) killProcessGroup(bg.pid);
+      bgProcesses.delete(callId);
+    })
+    .handle(async (args) => {
       try {
         const fullCommand = `${args.command} ${args.args.map((a: string) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`;
         if (isDangerousCommand(fullCommand)) {
           return err('Command blocked: potentially dangerous operation');
         }
-        const timeout = args.timeout || 30000;
-        const { command: safeCommand, timeout: safeTimeout } = sandbox.wrapCommand(fullCommand);
+        const isBackground = /&\s*$/.test(fullCommand.trim());
+        const cmd = isBackground ? fullCommand.trim().replace(/&\s*$/, '').trim() : fullCommand;
+        const { command: safeCommand } = sandbox.wrapCommand(cmd);
         const env = sandbox.isEnabled() ? sandbox.getRestrictedEnv() : undefined;
-        const result = execSync(safeCommand, {
-          cwd: workspaceRoot,
-          timeout: Math.max(timeout, safeTimeout),
-          encoding: 'utf-8',
-          maxBuffer: 10 * 1024 * 1024,
-          env: env ? { ...process.env, ...env } : undefined,
-        });
-        return ok({ stdout: result, exitCode: 0 });
-      } catch (e: any) {
-        if (e.signal === 'SIGTERM') {
-          return err(`Command timed out after ${args.timeout || 30000}ms`);
+        const callId = (args as any).__call_id__ || 'unknown';
+        const timeoutSec = Math.min(3600, Math.max(5, args.timeout ?? 600));
+        const timeoutMs = timeoutSec * 1000;
+
+        if (isBackground) {
+          const child = spawn(safeCommand, [], {
+            cwd: workspaceRoot,
+            shell: true,
+            env: env ? { ...process.env, ...env } : undefined,
+            stdio: 'ignore',
+            detached: true,
+          });
+          child.unref();
+          bgProcesses.set(callId, child);
+          if (child.pid) {
+            log.debug({ callId, pid: child.pid }, '[TOOL-STATUS] exec_tool background job spawned');
+            onBgStart('exec_tool', callId, child.pid);
+          }
+          child.on('exit', (exitCode, signal) => {
+            if (bgProcesses.get(callId) === child) bgProcesses.delete(callId);
+            if (child.pid) onBgExit('exec_tool', child.pid, exitCode, signal);
+          });
+          return ok({ pid: child.pid, background: true });
         }
-        return ok({ stdout: e.stdout || '', stderr: e.stderr || '', exitCode: e.status || 1 });
+
+        const result = await spawnCapture(callId, safeCommand, workspaceRoot, env, timeoutMs);
+        if (result.timedOut) {
+          const partial = result.stdout + result.stderr;
+          const tail = partial ? '\nPartial output:\n' + partial.slice(-4000) : '';
+          return err(`Command timed out after ${timeoutSec}s${tail}`);
+        }
+        if (result.signal === 'SIGTERM' || result.signal === 'SIGKILL') {
+          return err('Command cancelled');
+        }
+        return ok({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode });
+      } catch (e: any) {
+        return err(e.message);
       }
     });
 

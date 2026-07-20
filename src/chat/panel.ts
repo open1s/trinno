@@ -7,8 +7,9 @@ import { getChatConfig, openConfig } from './settings';
 import * as jsbos from '@open1s/jsbos';
 
 const log = createModuleLogger('chat-panel');
+const webviewLog = log.child({ module: 'webview' }, { level: 'debug' });
 import type { CompactMessage } from './agent';
-import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, sendRecoverSession, setLastWorkspaceRoot } from './agent';
+import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, sendRecoverSession, setLastWorkspaceRoot, cancelTool } from './agent';
 import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus } from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
@@ -469,6 +470,16 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
       chatView.webview.postMessage({ type: 'lsp-status', ...status } as any);
     }
   });
+  agentEvents.on('bg-exit', (msg: { toolName: string; pid: number; exitCode: number | null; signal: string | null }) => {
+    if (chatView) {
+      chatView.webview.postMessage({ type: 'bg-exit', ...msg } as any);
+    }
+  });
+  agentEvents.on('bg-start', (msg: { toolName: string; callId: string; pid: number }) => {
+    if (chatView) {
+      chatView.webview.postMessage({ type: 'bg-start', ...msg } as any);
+    }
+  });
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -793,6 +804,11 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
     log.trace({ textLength: msg.textLength, text: msg.text }, 'webview trace');
     return;
   }
+  if (msg.type === 'trinno-log') {
+    const level = msg.level === 'warn' ? 'warn' : msg.level === 'error' ? 'error' : 'debug';
+    webviewLog[level]({ source: 'webview', ...msg.payload }, '[TOOL-STATUS] webview');
+    return;
+  }
   if (msg.type === 'userMessage') {
     await handleUserMessage(msg.text);
   } else if (msg.type === 'cancel') {
@@ -807,6 +823,9 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
       dequeuedItemText = null;
     }
     clearQueue();
+  } else if (msg.type === 'cancelTool') {
+    log.debug({ toolName: msg.toolName, toolId: msg.toolId }, '[TOOL-STATUS] webview→panel cancelTool');
+    cancelTool(msg.toolName, msg.toolId);
   } else if (msg.type === 'undoInsert') {
     await undoLastAiInsert();
   } else if (msg.type === 'contextRequest') {
@@ -1730,7 +1749,10 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
       (tokenMsg) => { chatView?.webview.postMessage(tokenMsg); },
       async () => {
         if (!currentSession || !currentStreamingMsg) return;
-        const llmSummary = currentStreamingMsg.content.trim();
+        let llmSummary = currentStreamingMsg.content.trim();
+        if (!llmSummary) {
+          llmSummary = `Session compacted — ${currentSession.messages.length} previous messages summarized.`;
+        }
         const messagesCount = currentSession.messages.length;
         currentSession.compactedSummary = llmSummary;
         currentSession.isCompacted = true;
@@ -1889,12 +1911,13 @@ async function handleUserMessage(text: string): Promise<void> {
               },
             } as any);
           } else if (tokenMsg.tokenType === 'ToolCall') {
-            (currentStreamingMsg.toolCalls as any[]).push({ name: tokenMsg.text, status: 'running', result: '', ...(tokenMsg.args !== undefined ? { args: tokenMsg.args } : {}) });
+            (currentStreamingMsg.toolCalls as any[]).push({ name: tokenMsg.text, status: 'running', result: '', id: tokenMsg.toolId, ...(tokenMsg.args !== undefined ? { args: tokenMsg.args } : {}) });
           } else if (tokenMsg.tokenType === 'ToolResult') {
             const lastTool = [...(currentStreamingMsg.toolCalls as any[])].reverse().find(t => t.status === 'running');
             if (lastTool) {
+              const isBackground = tokenMsg.text && tokenMsg.text.includes('"background":true');
               lastTool.result = tokenMsg.text || 'Completed';
-              lastTool.status = 'done';
+              lastTool.status = isBackground ? 'running' : 'done';
             }
           }
         }
@@ -1907,7 +1930,10 @@ async function handleUserMessage(text: string): Promise<void> {
         if (!currentSession) return;
 
         if (currentStreamingMsg) {
-          const llmSummary = currentStreamingMsg.content.trim();
+          let llmSummary = currentStreamingMsg.content.trim();
+          if (!llmSummary) {
+            llmSummary = `Session compacted — ${beforeCount} previous messages summarized.`;
+          }
           currentStreamingMsg.status = 'complete';
           currentStreamingMsg = null;
 
@@ -1917,6 +1943,8 @@ async function handleUserMessage(text: string): Promise<void> {
           currentSession.messages = [summaryMsg];
           currentSession.compactedSummary = llmSummary;
           currentSession.isCompacted = true;
+          currentSession.totalInputTokens = 0;
+          currentSession.totalOutputTokens = 0;
           delete currentSession.brainOsSession;
           updateSessionTimestamp(currentSession);
           await saveSession(currentSession);
@@ -2313,6 +2341,10 @@ async function handleUserMessage(text: string): Promise<void> {
       if (currentSession) {
         currentSession.totalInputTokens = (currentSession.totalInputTokens ?? 0) + inputTokens;
         currentSession.totalOutputTokens = (currentSession.totalOutputTokens ?? 0) + outputTokens;
+        // Persist brainOsSession from worker so session state survives worker restart
+        if (doneData?.brainOsSession) {
+          currentSession.brainOsSession = doneData.brainOsSession;
+        }
       }
 
       if (chatView) {
@@ -2371,7 +2403,10 @@ async function handleUserMessage(text: string): Promise<void> {
           (tokenMsg) => { chatView?.webview.postMessage(tokenMsg); },
           async () => {
             if (!currentSession || !currentStreamingMsg) return;
-            const llmSummary = currentStreamingMsg.content.trim();
+            let llmSummary = currentStreamingMsg.content.trim();
+            if (!llmSummary) {
+              llmSummary = `Session compacted — ${currentSession.messages.length} previous messages summarized.`;
+            }
             const messagesCount = currentSession.messages.length;
             currentSession.compactedSummary = llmSummary;
             currentSession.isCompacted = true;

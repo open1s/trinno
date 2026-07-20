@@ -115,7 +115,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
 
       if (rememberedApprovals.has(makeRememberKey(toolName, args))) {
         log.trace({ toolName }, 'remembered approval, auto-approving');
-        const rId = `auto_${++approvalCounter}`;
+        const rId = data.call_id || data.tool_id || data.toolId || `auto_${++approvalCounter}`;
         ctx.data.toolId = rId;
         if (onEmit) {
           onEmit('token', { tokenType: 'ToolCall', text: toolName, toolId: rId, args });
@@ -134,7 +134,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
         return HookDecision.Abort;
       }
 
-      const originalId = data.tool_id || data.toolId || '';
+      const originalId = data.call_id || data.tool_id || data.toolId || '';
       const id = originalId || `approval_${++approvalCounter}`;
       log.trace({ toolName, id, originalId }, 'tool-call (ask)');
 
@@ -161,7 +161,7 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
       return approved ? HookDecision.Continue : HookDecision.Abort;
     }
 
-const id = `auto_${++approvalCounter}`;
+const id = data.call_id || data.tool_id || data.toolId || `auto_${++approvalCounter}`;
   log.trace({ toolName, id }, 'tool-call (auto)');
   ctx.data.toolId = id;
   let rawArgs2 = data.tool_args || data.args;
@@ -187,8 +187,8 @@ const id = `auto_${++approvalCounter}`;
   const afterHook = defineHook(HookEvent.AfterToolCall, async (ctx: any) => {
     const data = ctx.data || {};
     const toolName = data.tool_name || data.toolName || '';
-    const toolId = data.tool_id || data.toolId || '';
-    const result = data.result;
+    const toolId = data.call_id || data.tool_id || data.toolId || '';
+    const result = data.tool_result !== undefined ? data.tool_result : data.result;
     const error = data.error;
 
     let resultText = '';

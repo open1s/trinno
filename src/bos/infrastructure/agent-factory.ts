@@ -291,7 +291,7 @@ class AgentFactory {
     const mcpServers = config.mcpServers ?? this.defaultMcpServers;
     const skillsDirs = config.skillsDirs ?? DEFAULT_SKILLS_DIRS;
 
-    let builder = this.brain.agent(config.name, config.onMcpStatus ? { onMcpStatus: config.onMcpStatus as any } : {})
+    let builder = this.brain.agent(config.name, (config.onMcpStatus ? { onMcp: config.onMcpStatus } : {}) as any)
       .with_systemPrompt(config.systemPrompt)
       .with_temperature(temperature)
       .with_maxTokens(maxTokens);

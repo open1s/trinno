@@ -88,11 +88,16 @@ function syslogLine(line: string): string {
     const months = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
     const ts = `${months[d.getUTCMonth()]} ${String(d.getUTCDate()).padStart(2, ' ')} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
     const tag = o.module || o.name || 'trinno';
+    const KNOWN = new Set(['level', 'time', 'pid', 'hostname', 'name', 'module', 'msg', 'file', 'line']);
     const extras: string[] = [];
     if (o.file && o.line) extras.push(`${o.file}:${o.line}`);
     if (o.msgType) extras.push(`msgType=${o.msgType}`);
-    if (o.config) extras.push(`config=${JSON.stringify(o.config)}`);
-    if (o.effectiveModel) extras.push(`model=${o.effectiveModel}`);
+    for (const k of Object.keys(o)) {
+      if (KNOWN.has(k)) continue;
+      let v = o[k];
+      if (typeof v === 'string' && v.length > 300) v = v.slice(0, 300) + '…';
+      extras.push(`${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
+    }
     const extraStr = extras.length ? ` [${extras.join(' ')}]` : '';
     return `${ts} ${label} ${tag}[${_pid}]:${extraStr} ${o.msg || o.message || ''}`;
   } catch {

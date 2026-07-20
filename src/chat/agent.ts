@@ -18,6 +18,14 @@ interface InsertedCell {
 type TokenCallback = (msg: ExtToWebViewMessage) => void;
 
 function buildTokenMsg(raw: any): ExtToWebViewMessage {
+  if (raw.tokenType === 'ToolCall' || raw.tokenType === 'ToolResult') {
+    log.debug({
+      tokenType: raw.tokenType,
+      toolId: raw.toolId,
+      text: typeof raw.text === 'string' ? raw.text.slice(0, 200) : raw.text,
+      isBackground: typeof raw.text === 'string' && raw.text.includes('"background":true'),
+    }, '[TOOL-STATUS] worker→panel token relay');
+  }
   return {
     type: 'token' as const,
     role: 'assistant' as const,
@@ -218,6 +226,12 @@ async function ensureWorker(): Promise<void> {
             const subagents = msg.subagents || [];
             setImmediate(() => agentEvents.emit(AgentEvent.SubagentStatus, subagents));
           }
+          if (msg.type === 'bg-exit') {
+            setImmediate(() => agentEvents.emit('bg-exit', msg));
+          }
+          if (msg.type === 'bg-start') {
+            setImmediate(() => agentEvents.emit('bg-start', msg));
+          }
         } catch { /* ignore non-JSON */ }
       }
     };
@@ -378,6 +392,13 @@ export function cancelGeneration(): void {
   // would trigger onDone → processQueue → auto-drain before the panel has
   // a chance to handle in-flight removal and status updates.
   currentCallbacks = null;
+}
+
+export function cancelTool(toolName: string, toolId?: string): void {
+  log.debug({ toolName, toolId, hasStdin: !!workerProcess?.stdin }, '[TOOL-STATUS] panel→worker cancelTool');
+  if (workerProcess?.stdin) {
+    workerProcess.stdin.write(JSON.stringify({ type: 'cancelTool', toolName, toolId }) + '\n');
+  }
 }
 
 export function sendToolApproval(id: string, approved: boolean, remember?: boolean): void {

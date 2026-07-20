@@ -86,6 +86,7 @@ export interface SessionInfo {
 export type WebViewToExtMessage =
   | { type: 'userMessage'; text: string; attachments?: string[] }
   | { type: 'cancel' }
+  | { type: 'cancelTool'; toolName: string; toolId?: string }
   | { type: 'undoInsert' }
   | { type: 'contextRequest' }
   | { type: 'insertCell'; cellType: 'code' | 'markdown'; content: string; position?: 'cursor' | 'end' }
@@ -107,7 +108,8 @@ export type WebViewToExtMessage =
   | { type: 'request-file-list' }
   | { type: 'queue-remove'; queueId: string }
   | { type: 'queue-force-execute'; queueId: string }
-  | { type: 'trace'; message: string; textLength?: number; text?: string };
+  | { type: 'trace'; message: string; textLength?: number; text?: string }
+  | { type: 'trinno-log'; level: 'debug' | 'warn' | 'error'; payload: Record<string, unknown> };
 
 export type TokenType = 'Text' | 'ReasoningContent' | 'ToolCall' | 'ToolResult' | 'Usage';
 

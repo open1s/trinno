@@ -19,6 +19,7 @@
  */
 
 import { composeRoot } from './infrastructure/config/di.js';
+import { setOnBgExit, cancelBackgroundJob, setOnBgStart } from './infrastructure/http/coding_tools.js';
 import { SubagentNotification } from './infrastructure/subagent-manager.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
 import { getAgentFactory } from './infrastructure/agent-factory.js';
@@ -278,6 +279,14 @@ function flushEmitQueueSync(): void {
 }
 
 process.on('exit', flushEmitQueueSync);
+setOnBgExit((toolName: string, pid: number, exitCode: number | null, signal: string | null) => {
+  log.debug({ toolName, pid, exitCode, signal }, '[TOOL-STATUS] bg-exit emitted → webview');
+  emit('bg-exit', { toolName, pid, exitCode, signal });
+});
+setOnBgStart((toolName: string, callId: string, pid: number) => {
+  log.debug({ toolName, callId, pid }, '[TOOL-STATUS] bg-start emitted → webview');
+  emit('bg-start', { toolName, callId, pid });
+});
 function exitAfterGracefulAbort(): void {
   // Give event loop time for Rust NAPI started.stop() callbacks to complete
   // before exiting. Without this delay, process.exit() kills the TCP connection
@@ -299,8 +308,34 @@ async function initBrain(): Promise<any> {
   return brain;
 }
 
+// Monitor tool lifecycle events on the agent bus (the "started"/"completed"/
+// "failed"/"cancelled" hooks the engine emits on agent/<name>/tool/events) so
+// cancelTool can resolve a running tool's call_id even when the webview didn't
+// capture one. Map is keyed by tool name -> most recent running call_id.
+const toolCallIds = new Map<string, string>();
+let toolEventsMonitoredBrain: any = null;
+
+async function startToolEventMonitor(brain: any): Promise<void> {
+  if (!brain || toolEventsMonitoredBrain === brain) return;
+  toolEventsMonitoredBrain = brain;
+  for (const topic of ['agent/trinno-chat/tool/events', 'agent/trinno-slash/tool/events']) {
+    try {
+      const sub = await brain.subscriber(topic);
+      sub.runJson((data: any) => {
+        const { tool, call_id, status } = data || {};
+        if (status === 'started' && tool && call_id) {
+          toolCallIds.set(tool, call_id);
+        } else if ((status === 'completed' || status === 'failed' || status === 'cancelled') && tool) {
+          if (toolCallIds.get(tool) === call_id) toolCallIds.delete(tool);
+        }
+      }).catch(() => {});
+    } catch { /* topic not available yet */ }
+  }
+}
+
 async function runJobWithPubSub(
   jobId: string,
+  agentName: string,
   handler: (signal: AbortSignal, emit: (type: string, data: any) => void) => Promise<void>
 ): Promise<void> {
   const localBrain = await initBrain();
@@ -309,6 +344,13 @@ async function runJobWithPubSub(
 
   const statusPub = await localBrain.publisher(statusTopic);
   const commandSub = await localBrain.subscriber(commandTopic);
+
+  // Agents run on deps.brain's bus session. Use that exact session for tool
+  // events + cancel so the Rust engine receives them deterministically via
+  // same-session routing, rather than relying on Zenoh cross-session scouting
+  // between two separate BrainOS instances.
+  if (depsInitPromise) await depsInitPromise;
+  const agentBus = deps?.brain ?? localBrain;
 
   const localAbort = new AbortController();
   abortController = localAbort;
@@ -319,10 +361,35 @@ async function runJobWithPubSub(
     emit(type, data);
   };
 
+  // Subscribe to tool lifecycle events to capture real call_ids for cancellation
+  const toolCallIds = new Map<string, string>();
+  let eventsSub: Awaited<ReturnType<typeof localBrain.subscriber>> | null = null;
+  try {
+    eventsSub = await agentBus.subscriber(`agent/${agentName}/tool/events`);
+    eventsSub.runJson((data: any) => {
+      const { tool, call_id, status } = data || {};
+      if (status === 'started' && tool && call_id) {
+        toolCallIds.set(tool, call_id);
+      } else if ((status === 'completed' || status === 'failed' || status === 'cancelled') && tool) {
+        if (toolCallIds.get(tool) === call_id) {
+          toolCallIds.delete(tool);
+        }
+      }
+    }).catch(() => {});
+  } catch { /* events not available */ }
+
   commandSub.runJson(async (msg: any) => {
     if (msg.type === 'cancel') {
       localAbort.abort();
       await commandSub.stop();
+    }
+    if (msg.type === 'cancelTool') {
+      try {
+        const callId = msg.toolId || toolCallIds.get(msg.toolName);
+        if (callId) {
+          await agentBus.publish(`agent/${agentName}/tool/cancel`, { call_id: callId }, true);
+        }
+      } catch { /* cancel propagation is best-effort */ }
     }
   }).catch(() => { });
 
@@ -361,6 +428,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
     deps = await composeRoot({ workspaceRoot: wsRoot });
     setupSubagentManager();
     await initApprovalBus(deps.brain);
+    await startToolEventMonitor(deps.brain);
     // Start Typst LSP eagerly so first lint call is fast
     getTypstLspClient(wsRoot).catch(() => { });
   }
@@ -388,333 +456,6 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   }
 
   return true;
-}
-
-async function handleChat(text: string, context?: string | null, persona?: { name: string; prompt: string }, apiKey?: string, systemSummary?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
-  text = `[You reference Current Time: ${new Date().toISOString()}]\n${text}`;
-  log.error({ model, baseUrl, apiKeyPrefix: apiKey?.slice(0, 8), lastApiKeyPrefix: lastApiKey?.slice(0, 8) }, 'DEBUG handleChat: params');
-  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
-  abortController = new AbortController();
-  const signal = abortController.signal;
-
-  if (depsInitPromise) await depsInitPromise;
-  if (deps && apiKey !== lastApiKey) {
-    log.error({ old: lastApiKey?.slice(0, 4), new: apiKey?.slice(0, 4) }, 'DEBUG handleChat: apiKey changed, recreating deps');
-    await closeDeps(deps);
-    deps = null;
-    depsInitPromise = null;
-  }
-  if (!deps) {
-    const brainOptions: any = { workspaceRoot: (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd() };
-    if (apiKey) brainOptions.apiKey = apiKey;
-    if (toolPermissions) brainOptions.toolPermissions = toolPermissions;
-    brainOptions.sandboxEnabled = sandboxEnabled !== false;
-    deps = await composeRoot(brainOptions);
-    setupSubagentManager();
-    await initApprovalBus(deps.brain);
-    getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
-  }
-  lastApiKey = apiKey;
-
-  const slashList = slashRegistry.list().map(c => '- /' + c.name + ': ' + c.description).join('\n');
-  const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
-    ? persona.prompt.trim()
-    : FALLBACK_PERSONA;
-  const methodologyPrompt = buildMethodologyPrompt(slashList);
-  const basePrompt = `${personaPrompt}\n\n${methodologyPrompt}`;
-
-  let systemPrompt = systemSummary
-    ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
-    : basePrompt;
-
-  // Inject Typst LSP diagnostics for all .typ files in workspace
-  const typstWsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
-  const typstDiags2 = await collectTypstDiagnostics(typstWsRoot);
-  if (typstDiags2) {
-    systemPrompt += typstDiags2;
-  }
-
-  // Inject relevant memories from the memory store
-  const ws = (globalThis as any).__TRP_WORKSPACE_ROOT;
-  if (ws) {
-    try {
-      // Strip skill/agent wrappers for cleaner search query
-      const cleanText = text.replace(/<\/?trinno_skill>/g, '').replace(/<\/?user_input>/g, '').trim();
-      const byQuery = searchMemories(ws, cleanText, { limit: 6 });
-      const memoriesText = byQuery.length > 0
-        ? byQuery.map((m: any) => `- [${m.type}] ${m.content}`).join('\n')
-        : listMemories(ws, { limit: 4, type: 'summary' }).map((m: any) => `- [summary] ${m.content}`).join('\n');
-      if (memoriesText) {
-        systemPrompt += `\n\n## Relevant Memories\n${memoriesText}\n\nUse \`memory_search\` for deeper queries, \`memory_store\` to persist important findings.`;
-      }
-    } catch (e) {
-      // memory store unavailable, proceed without it
-    }
-  }
-
-  // Inject active goal
-  const goal = readGoalForWorker();
-  if (goal && goal.status === 'active') {
-    systemPrompt += `\n\n## Current Research Goal\n\n${goal.text}\n${goal.note ? `\n**User note:** ${goal.note}\n` : ''}\n**Goal rules (exact Codex state machine):**\n- Agent may ONLY call \`update_goal\` with status **"complete"** or **"blocked"**. Pause/resume are user/system operations.\n- **"complete"**: only after completion audit proves every requirement satisfied.\n- **"blocked"**: only after 3 consecutive goal turns with same blocking condition.\n\n**Fidelity:**\n- Keep the full objective intact. Do not shrink or redefine success.\n- Optimize each turn for movement toward the requested end state, not for the easiest passing change.\n- Temporary rough edges are acceptable while moving in the right direction.\n\n**Completion audit:**\nBefore calling update_goal complete, verify each requirement against current-state evidence. Do not rely on intent, partial progress, or memory. Only mark complete when ALL requirements are proven with auditable evidence — each criterion must be matched to a concrete artifact: file at path with expected content, command stdout, passing test name, or measured metric value. Subjective statements (\"looks good\", \"I checked\") do NOT count as evidence.\n\n**Blocked audit:**\nDo NOT call blocked on first blocker. 3 consecutive same-reason turns required. Resume resets count. Never use blocked for "hard/slow/uncertain/incomplete" reasons.\n\n**Decomposition & acceptance criteria (mandatory first step):**\nOn your FIRST turn for a new goal, decompose the objective into sub-tasks AND quantify acceptance criteria. Track every sub-task via todowrite with embedded acceptance criteria. Required workflow:\n1. Decompose the goal into concrete, independently-executable sub-tasks. Each sub-task must be small enough to finish in one turn.\n2. For each sub-task, define MEASURABLE acceptance criteria — not subjective statements. Each criterion MUST be one of:\n   - **File artifact:** exact path + expected content/structure (e.g. \"06_References/drone.pdf exists and starts with %PDF-1.4\")\n   - **Command output:** exact command + expected stdout pattern (e.g. \"npm run compile exits 0 with no errors\")\n   - **Test pass:** named test case passes (e.g. \"test 'extracts year from YYYY-MM-DD' in publication-trends.test.js is green\")\n   - **Numerical threshold:** metric value within range (e.g. \"TRL score = 7\", \"ideality ratio > 1.5\")\n   - **Structural conformance:** spec match (e.g. \"output .typ file contains sections: Problem, Context, Evidence, Modeling, TRIZ, Validation, Execution\")\n   FORBIDDEN as criteria: \"I reviewed it\", \"looks correct\", \"seems complete\", \"the code is good\". These are subjective and unmeasurable.\n3. Use todowrite with status: pending / in_progress / completed. Embed acceptance criteria in each todo's content field.\n4. EXECUTE one sub-task per turn. Before marking a sub-task completed: RUN the verification (execute the command, read the file, run the test, check the metric), and PASTE the actual output as evidence in your response. Only then mark status=completed.\n5. Do not move to next sub-task until current one has ALL criteria verified with pasted evidence.\n6. Aggregate sub-task verification across the whole goal. Only call update_goal complete when EVERY sub-task has status=completed, and your update_goal reasoning lists each criterion alongside its evidence (command output / file content / test result).`;
-  }
-
-  let effectiveMcp = mcpServers;
-  if (!effectiveMcp || effectiveMcp.length === 0) {
-    effectiveMcp = getAgentFactory().getDefaultMcpServers();
-  }
-
-  emit('mcp-status', {
-    servers: (effectiveMcp || []).map((s: any) => ({ name: s.name, type: s.type, connected: true })),
-  });
-
-  try {
-    const lsp = await getTypstLspClient((globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd());
-    emit('lsp-status', { name: 'tinymist', status: lsp.isInitialized ? 'connected' : 'starting', trackedFile: _trackedTypFile || null });
-  } catch { emit('lsp-status', { name: 'tinymist', status: 'disconnected', trackedFile: null }); }
-
-  log.info({ sessionId }, 'creating fresh agent');
-  const f = getAgentFactory();
-  const agent = f.create({
-    name: 'trinno-chat',
-    systemPrompt,
-    ...(model ? { model } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-    ...(apiKey ? { apiKey } : {}),
-    mcpServers: effectiveMcp,
-  });
-
-  let config = (agent as any)._config;
-  log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey } }, 'model info');
-  const started = await agent.start();
-
-  if (sessionId) {
-    // Check if the factory has a more recent session for this sessionId
-    const factorySession = getAgentFactory().getSessionContext(sessionId);
-    const sessionToImport = factorySession?.brainOsSession || brainOsSession;
-    log.debug({ hasSessionToImport: !!sessionToImport, sessionLen: sessionToImport?.length }, 'importSession check');
-    if (sessionToImport) {
-      try {
-        started.importSession(sessionToImport);
-        log.debug('importSession done');
-      } catch (e) {
-        log.warn({ err: e }, 'importSession error');
-        // ignore import errors, start fresh
-      }
-    }
-  } else if (brainOsSession) {
-    try {
-      started.importSession(brainOsSession);
-    } catch {
-      // ignore import errors, start fresh
-    }
-  }
-
-  let userMessage = text;
-  if (skillContent) {
-    userMessage = `<trinno_skill>\n${skillContent}\n</trinno_skill>\n\n<user_input>\n${text}\n</user_input>`;
-  }
-
-  if (skillContent) {
-    const wr2 = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
-    const existingTodos2 = readExistingTodos(wr2);
-    if (existingTodos2 && existingTodos2.length > 0) {
-      const todoSummary2 = existingTodos2
-        .map(t => `- [${t.status}] ${t.content} (${t.priority})`)
-        .join('\n');
-      userMessage = userMessage + `\n\n<system_context>\nExisting todos from disk (resume from first incomplete):\n${todoSummary2}\n</system_context>`;
-    }
-  }
-
-  currentAgent = started;
-  currentSessionIdForCancel = sessionId || null;
-
-  try {
-    log.trace({ sessionId, userMessageLen: userMessage.length }, '[TRACE] worker→LLM: starting stream');
-    let hasRealContent = false;
-    let streamDone = false;
-    let heartbeatTimer: NodeJS.Timeout | null = null;
-    const HEARTBEAT_TIMEOUT_MS = 45000;
-
-    const clearHeartbeatTimer = () => {
-      if (heartbeatTimer) {
-        clearTimeout(heartbeatTimer);
-        heartbeatTimer = null;
-      }
-    };
-
-    let doResolve: () => void = () => { };
-
-    const resetHeartbeatTimer = () => {
-      if (heartbeatTimer) clearTimeout(heartbeatTimer);
-      heartbeatTimer = setTimeout(() => {
-        if (streamDone) return;
-        log.warn('stream heartbeat timeout — no real content in 45s, aborting');
-        clearHeartbeatTimer();
-        emit('rate-limited', { retryAfter: 15, error: 'Upstream timeout (heartbeat only stream)' });
-        streamDone = true;
-        doResolve();
-      }, HEARTBEAT_TIMEOUT_MS);
-    };
-
-    resetHeartbeatTimer();
-
-    let responseCharCount = 0;
-    let responseSizeWarningEmitted = false;
-    const RESPONSE_SIZE_THRESHOLD = 3000; // chars, roughly ~750 tokens
-
-    await new Promise<void>((resolve) => {
-      doResolve = resolve;
-      started.stream(userMessage, (token: any) => {
-        if (streamDone) return;
-        if (signal.aborted) {
-          started.stop().catch(() => { });
-          streamDone = true;
-          resolve();
-          return;
-        }
-
-        switch (token.type) {
-          case 'ReasoningContent':
-            if (token.text && token.text.length > 0) {
-              hasRealContent = true;
-              resetHeartbeatTimer();
-              responseCharCount += token.text.length;
-            }
-            emit('token', { tokenType: 'ReasoningContent', text: token.text });
-            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
-            break;
-          case 'Text':
-            if (token.text && token.text.length > 0) {
-              if (!hasRealContent) {
-                log.trace({ sessionId, firstTokenLen: token.text.length }, '[TRACE] worker←LLM: first text token received');
-              }
-              hasRealContent = true;
-              resetHeartbeatTimer();
-              responseCharCount += token.text.length;
-              // Warn if approaching size limit
-              if (!responseSizeWarningEmitted && responseCharCount > RESPONSE_SIZE_THRESHOLD) {
-                responseSizeWarningEmitted = true;
-                emit('token', {
-                  tokenType: 'Text',
-                  text: '\n\n⚠️ **Response approaching size limit** (~' + Math.round(responseCharCount / 100) + ' chars). Follow .instructions.md patterns: break into smaller tasks, mark progress with todo list.',
-                });
-              }
-            }
-            emit('token', { tokenType: 'Text', text: token.text });
-            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
-            break;
-          case 'ToolCall':
-            if (token.name) {
-              hasRealContent = true;
-              resetHeartbeatTimer();
-              responseCharCount += (token.name?.length ?? 0) + 20;
-            }
-            if (token.id && token.name) toolCallNames.set(token.id, token.name);
-            if (token.name === 'write_file' && token.args?.filePath && String(token.args.filePath).endsWith('.typ')) {
-              trackTypFile(String(token.args.filePath));
-            } else if (token.name === 'edit_file' && token.args?.filePath && String(token.args.filePath).endsWith('.typ')) {
-              trackTypFile(String(token.args.filePath));
-            }
-            if (shouldEmitToolCall(token.name)) {
-              emit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
-            }
-            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
-            break;
-          case 'ToolResult':
-            log.trace({ name: token.name, id: token.id, hasResult: !!token.result }, 'ToolResult token');
-            if (token.result || token.text) {
-              hasRealContent = true;
-              resetHeartbeatTimer();
-              const resultStr = (token.result || token.text || '');
-              responseCharCount += resultStr.length;
-            }
-            if (toolCallNames.get(token.id ?? '') === 'todowrite') {
-              emitTodoUpdate();
-            }
-            if (shouldEmitToolResult(token.id, token.name)) {
-              const resultText = truncateToolResult(token.result || token.text || '');
-              emit('token', {
-                tokenType: 'ToolResult',
-                text: resultText,
-                toolId: token.id,
-                status: 'completed'
-              });
-            }
-            if (emitQueue.length > EMIT_QUEUE_HIGH) drainEmitQueueSync();
-            break;
-          case 'Heartbeat':
-            resetHeartbeatTimer();
-            break;
-          case 'Stop':
-          case 'Done': {
-            clearHeartbeatTimer();
-            streamDone = true;
-            log.trace({ sessionId, responseCharCount }, '[TRACE] worker←LLM: stream done');
-            if (!hasRealContent) {
-              log.warn({ tokenType: token.type }, 'no real content — treating as rate-limit');
-              emit('rate-limited', { retryAfter: 15, error: 'Empty response (possible rate limit)' });
-              resolve();
-              break;
-            }
-            let exportedSession: string | undefined;
-            if (sessionId) {
-              try {
-                exportedSession = started.exportSession();
-                if (exportedSession) {
-                  const prevCtx = getAgentFactory().getSessionContext(sessionId);
-                  getAgentFactory().setSessionContext(sessionId, {
-                    brainOsSession: exportedSession,
-                    lastUpdated: Date.now(),
-                  });
-                }
-              } catch {
-                // ignore export errors
-              }
-            }
-            const metrics = started.metrics;
-            const cumInput = metrics?.totalInputTokens ?? 0;
-            const cumOutput = metrics?.totalOutputTokens ?? 0;
-            const key = sessionId ?? 'default';
-            const prev = prevTokens.get(key) ?? { input: 0, output: 0 };
-            const inputTokens = cumInput - prev.input;
-            const outputTokens = cumOutput - prev.output;
-            prevTokens.set(key, { input: cumInput, output: cumOutput });
-            log.trace({ sessionId, metrics, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, '[TOKEN] worker (slash): stream done');
-            emit('done', {
-              sessionId,
-              brainOsSession: exportedSession,
-              inputTokens,
-              outputTokens,
-            });
-            resolve();
-            break;
-          }
-          case 'Error':
-            clearHeartbeatTimer();
-            streamDone = true;
-            if (isRateLimited(token.error)) {
-              const retryAfter = parseRetryAfter(token.error);
-              emit('rate-limited', { retryAfter, error: token.error });
-            } else {
-              emit('error', { error: token.error });
-            }
-            resolve();
-            break;
-        }
-      });
-    });
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (isRateLimited(errMsg)) {
-      const retryAfter = parseRetryAfter(errMsg);
-      emit('rate-limited', { retryAfter, error: errMsg });
-    } else {
-      emit('error', { error: errMsg });
-    }
-  } finally {
-    currentAgent = null;
-    currentSessionIdForCancel = null;
-  }
 }
 
 function isRateLimited(errorMsg: string): boolean {
@@ -880,96 +621,84 @@ function loadSoulMd(): string {
 function buildMethodologyPrompt(slashCommandsList: string): string {
   const soul = loadSoulMd();
   const soulSection = soul ? `\n\n## SOUL (Must Follow)\n\n${soul}\n\n` : '';
-  return soulSection + `
-## Research Pipeline & Dependency Rules
-- **8-Phase Progressive Pipeline**: 01_Discover → 02_TRL → 03_Analyze → 04_Synthesize → 05_Deliver → 06_References → 07_Patent → 08_AutoResearch
-- **Each phase has a README.md** — read & follow it. Phase N **depends on all prior phases**; you MUST read outputs from phases 1..N-1 before starting.
-- **Backward Dependency Lookup (CRITICAL)**: Before any phase N: list_dir + read_file prior outputs; cite file paths + key claims; flag contradictions; update earlier phases if new evidence revises conclusions; log dependency chain in output.
-- **Phase Outputs** (write to correct phase dir, .md format, include importance weights + evidence scores):
-  | Phase | Depends On | Typical Outputs |
-  |-------|-----------|----------------|
-  | 01_Discover | — | patents.md, papers.md |
-  | 02_TRL | 01_Discover | s_curve.svg, trl_assessment.md |
-  | 03_Analyze | 01,02 | contradictions.md, su_field_analysis.md |
-  | 04_Synthesize | 01–03 | solutions.md, principles_applied.md, roadmap.md |
-  | 05_Deliver | 01–04 | paper.md, report.typ |
-  | 06_References | All | library.bib, toc.md |
-  | 07_Patent | 01–06 | patent.typ |
-  | 08_AutoResearch | All | scope.md, eval.md, code/, experiments/ |
-- **Auto-TRL**: New tech/domain → immediately Gartner Hype Cycle based on real facts, triz_s_curve (action: analyze)→ write to 02_TRL/.
-- **Phase Entry Checklist**: [ ] Read prior outputs [ ] Note informing findings [ ] Flag gaps/contradictions [ ] Log dependency chain [ ] If context large → /compact
+  return soulSection + `# Pipeline & Rules for Autonomous Research
 
-## AutoResearch Loop (08_AutoResearch)
-- **Folder Structure (STRICT — never mix)**:
-  - scope.md — constraints, success criteria, metric
-  - eval.md — fixed evaluation metric/validation protocol (immutable mid-loop)
-  - code/ — scripts only (.py/.js/.sh); never experiments/
-  - experiments/log_{N}.md — iteration log ONLY (hypothesis, metrics, verdict)
-  - experiments/summary.md — final summary
-  - results/ — processed data (.csv/.json/.png); never experiments/
-  - validation/ — verification reports
-- **Loop**: Scope → Lock Evaluator → Narrow Mutation Surface → Propose→Act→Evaluate→Ratchet → Log Iteration → Auto-chain (write auto_state.json, continue immediately) → Stop only when objective met OR 3 same-reason failures → write summary.md, delete auto_state.json
-- **auto_state.json**: { "hypothesis": "...", "iteration": N+1 }
-- Execute all iterations autonomously; never pause for user mid-loop.
+8 phases: 01_Discover→02_TRL→03_Analyze→04_Synthesize→05_Deliver→06_References→07_Patent→08_AutoResearch
 
-## Core Operating Principles
-- **Tool-First**: Produce results in files/data, NOT conversation text. Create/modify → write_file/edit_file/apply_patch immediately. Refine → read_file then edit_file. Search/gather → use tools (triz_search, triz_contradiction, triz_principles, triz_s_curve, websearch), summarize briefly, then act. Text responses ONLY for: ≤4-line status, clarifying questions, completion reports.
-- **Tone**: Concise, direct, no preamble/postamble. Greetings → 1 short sentence. ≤4 lines text. After work, stop. No "Here is what I will do". If cannot help → 1-2 sentence alternatives. Valid UTF-8 only.
-- **Proactiveness**: Only when user asks. No unprompted actions/follow-ups. Answer first, act on confirmation.
-- **Verification**: After write/edit → read_file confirm, run tests. Check README/Agents.md for test command. No comments unless asked. Verify matrix entries before recommending.
-- **Parallel**: Batch independent reads; parallel EN/ZH queries; dedupe by DOI/arXivID before scoring.
-- **Large Files**: Tool output capped at 200 lines/10KB. Truncated? Use grep with specific patterns or read offset/limit chunks (500+ lines). Never re-read full truncated output. >500 lines → paginate. Never tiny slices (<50 lines). Follow "Use offset=N" hint. Large-scale analysis → delegate to task sub-agent.
-- **Context Budget**: Post-tool: 1-line status + next action. Max 2 retries. >5 tool calls → pause, summarize decision factors + next step. Large context → /compact.
+Phase N: read README.md + all prior outputs.
+Backward dep check (mandatory): list_dir+read_file prior outputs → cite paths+claims → flag contradictions → update earlier if needed → log chain.
 
-## Routing (importance × uncertainty weighted)
-- Unknown scope → 5W1H
-- Clinical/biomedical → PICO → PRISMA
-- Technical barrier/invention → TRIZ (Contradiction Matrix → Principles → Su-Field)
-- Evidence synthesis → PRISMA
-- Strategic/competitive → SWOT (+ PEST)
-- New market/tech landscape → PEST (+ SWOT)
-- Surface chosen route + rationale.
+Outputs (.md, weights+scores):
+01: patents.md,papers.md
+02: s_curve.svg,trl_assessment.md (depends 01)
+03: contradictions.md,su_field_analysis.md (depends 01,02)
+04: solutions.md,principles_applied.md,roadmap.md (depends 01-03)
+05: paper.md,report.typ (depends 01-04)
+06: library.bib,toc.md (depends all)
+07: patent.typ (depends 01-06)
+08: scope.md,eval.md,code/,experiments/ (depends all)
 
-## PICO
-P-Population, I-Intervention, C-Comparison, O-Outcome, S-Study design. Template: "In [P], does [I] vs [C] affect [O]?" PRISMA consumes PICO upstream.
+Auto-TRL: new tech→Gartner+S-curve→write 02_TRL/
+Checklist: read prior|key findings|gaps|dep chain|/compact if large
 
-## 06_References (Mandatory)
-- Download FIRST (papers_download → 06_References/) before any reference/citation. Update 06_References/toc.md immediately on success (create with template if missing: papers, patents, datasets, other tables + search log).
-- Every entry: title, authors, year, source, DOI/arXiv ID, local path relative to workspace root.
-- Search logs: append row per search (date, keywords, source, result count).
-- If download fails (paywall): cite ONLY with manual-url note in 06_References/toc.md + publisher URLs. Never silently cite inaccessible refs.
-- Before marking draft complete: verify EVERY citation has file in 06_References/ OR manual-url note. Use list_dir/papers_list_downloaded.
-- Applies to ALL output: notes, S-curve, contradictions, patents, papers, deliverables.
+## AutoResearch (08)
+Structure: scope.md(constraints,criteria,metrics)|eval.md(fixed,immutable)|code/(scripts only)|experiments/log_{N}.md(hypothesis,metrics,verdict)|experiments/summary.md|results/(.csv.json.png)|validation/(reports)
 
-## Multilingual + PubScholar
-- Technical topics: parallel EN+ZH queries, dedupe by DOI/arXivID. CN journals: 自动化学报, 控制与决策, 机器人, etc.
-- PubScholar API gated; CDN open: file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf → pass URL to papers_download.
-- Output language matches user input (Chinese→Chinese, English→English). Never mix. Valid UTF-8 only.
+Loop: Scope→Lock Eval→Narrow→Propose→Act→Eval→Ratchet→Log→Auto-chain(write auto_state.json,continue)→stop on success OR 3 same-reason failures→summary.md,delete auto_state.json
+state: {"hypothesis":"...","iteration":N+1}
+Fully autonomous. Never pause.
+
+## Core
+Tool-First: output to files. create/modify→write_file/edit_file/apply_patch. refine→read_file→edit_file. search→tools,summarize,act.
+Text only: ≤4-line status,questions,completion.
+Tone: concise,direct,no fluff,UTF-8.
+Proactive: only when asked.
+Verify: after write/edit→read_file confirm,run tests. Check README/Agents.md.
+Parallel: batch reads,EN/ZH,dedupe DOI/arXivID.
+Large: cap 200 lines/10KB. truncated→grep or offset/limit(500+ lines). >500→paginate. never <50. follow offset=N.
+Context: 1-line status+next after tool. max2 retries. >5 calls→pause,summarize. large→/compact.
+
+## Routing
+Unknown→5W1H | Clinical→PICO→PRISMA | Technical→TRIZ(Matrix→Principles→Su-Field) | Evidence→PRISMA | Strategic→SWOT(+PEST) | New market→PEST(+SWOT)
+PICO: Population,Intervention,Comparison,Outcome. "In [P], does [I] vs [C] affect [O]?"
+
+## References (Mandatory)
+Download FIRST. Update 06_References/toc.md (create: papers,patents,datasets,other+search log).
+Entry: title,authors,year,source,DOI/arXiv,local path.
+Search log: append(date,keywords,source,count).
+Fail: manual-url+publisher URL. Never cite inaccessible.
+Pre-draft: verify EVERY citation has file OR manual-url. Use list_dir/papers_list_downloaded.
+Applies all outputs.
+
+## Multilingual+PubScholar
+Parallel EN+ZH,dedupe DOI/arXivID.
+CN journals: 自动化学报,控制与决策,机器人.
+PubScholar: file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf→pass to papers_download.
+Output language matches input. UTF-8.
 
 ## Writing Papers/Patents
-- Panel injects skill proper skill → load_offline_skill.
-- todowrite plan sections → write_file initial file with header → edit_file(append=true) per section as generated. **Never accumulate full content before writing.**
-- Ambiguous "write a paper" (no colon+title) → ask for topic.
-- Target: 7-phase paper with contradiction→solution mapping, weighted KPIs, evidence scores, decision factors, risks, ≤3-day validation.
-- Verify each section before marking complete.
-- Always typst compile → fix errors.
+Panel→load_offline_skill.
+todowrite plan→write_file header→edit_file(append=true) per section. Never accumulate first.
+Unclear→ask topic.
+Target: 7-phase, contradiction→solution mapping, weighted KPIs, evidence scores, risks, ≤3-day validation.
+Verify each section. typst compile→fix errors.
 
-## Skill Driven prioritized
-- Specialized methodology/framework/workflow/domain task → FIRST find_skill("<keywords>") → load_offline_skill({name}) or load_best_skill({query}).
+## Skill Priority
+Specialized→find_skill("<keywords>")→load_offline_skill({name}) or load_best_skill({query}).
 
-## File Operations
-read_file first, never guess. Large files: paginate offset/limit (200+ lines/chunk). >1MB → apply_patch over edit_file. Long content: write_file initial → edit_file(append=true) per section. edit_file for small/medium changes. write_file only for new files. Every modification MUST use edit tool.
+## File Ops
+read_file first. Large: offset/limit(200+ lines/chunk). >1MB→apply_patch. Long: write_file initial→edit_file(append=true). Small/medium: edit_file. New: write_file.
 
 ## Tools
-- TRIZ: triz_search, triz_principles, triz_parameters, triz_contradiction, triz_insight, triz_su_field, triz_ideality, triz_s_curve
-- Papers: search, papers_download, papers_list_downloaded,mcp tools
-- Web: websearch (current events, uncertainties),mcp tools
-- Skills: find_skill, load_offline_skill, load_best_skill
-- FS: read_file, write_file, edit_file, list_dir, grep_search, glob_files, ast_grep, ast_edit, apply_patch, bash, exec_tool (bash needs approval; FS workspace-scoped)
-- Planning: todowrite/todoread for multi-step writing ONLY (papers/patents) — NOT for single edits or chat
+TRIZ: triz_search,principles,parameters,contradiction,insight,su_field,ideality,s_curve
+Papers: search,download,list_downloaded
+Web: websearch
+Skills: find_skill,load_offline_skill,load_best_skill
+FS: read_file,write_file,edit_file,list_dir,grep_search,glob_files,ast_grep,ast_edit,apply_patch,bash,exec_tool
+Planning: todowrite/todoread ONLY for multi-step writing
 
-## Tool-Call Format
-Single JSON object. No XML. No commentary. "not support such call" → reformulate in plain text.
+## Format
+Single JSON. No XML. No comments. "not support"→plain text.
 `;
 }
 
@@ -1143,6 +872,7 @@ ${conversationText}
     name: 'trinno-compact',
     systemPrompt,
     temperature: 0.3,
+    skipDefaultTools: true,
     ...(model ? { model } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(apiKey ? { apiKey } : {}),
@@ -1253,6 +983,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 setupSubagentManager();
                 lastApiKey = msg.apiKey;
                 await initApprovalBus(deps.brain);
+                await startToolEventMonitor(deps.brain);
                 getTypstLspClient(wsRoot).catch(() => { });
               })();
             }
@@ -1280,7 +1011,7 @@ process.stdin.on('data', (chunk: Buffer) => {
             if (msg.text.trim() === '/help' || msg.text.trim() === '/commands') {
               handleHelp();
             } else if (msg.usePubSub) {
-              await runJobWithPubSub(jobId, async (signal, localEmit) => {
+              await runJobWithPubSub(jobId, 'trinno-chat', async (signal, localEmit) => {
                 await handleChatWithEmit(
                   msg.text,
                   msg.context ?? null,
@@ -1326,6 +1057,23 @@ process.stdin.on('data', (chunk: Buffer) => {
         case 'cancel':
           handleCancel();
           break;
+        case 'cancelTool': {
+          const callId = msg.toolId || (msg.toolName ? toolCallIds.get(msg.toolName) : undefined);
+          if (callId && deps?.brain) {
+            deps.brain.publish('agent/trinno-chat/tool/cancel', { call_id: callId }, true).catch(() => {});
+            deps.brain.publish('agent/trinno-slash/tool/cancel', { call_id: callId }, true).catch(() => {});
+          }
+          if (callId) {
+            // Background jobs return from the engine immediately, so the engine
+            // deregisters their call_id and never forwards the cancel to
+            // onCancel. Kill them directly here as a fallback.
+            const killed = cancelBackgroundJob(callId);
+            log.debug({ callId, resolvedFrom: msg.toolId ? 'toolId' : 'toolCallIds', killed }, '[TOOL-STATUS] worker cancelTool');
+          } else {
+            log.warn({ toolName: msg.toolName, toolId: msg.toolId }, '[TOOL-STATUS] worker cancelTool: no callId');
+          }
+          break;
+        }
         case 'tool-approval': {
           // Must bypass the message queue: the in-flight chat/agent call awaits
           // the pending approval promise. If we queue this behind it, the
@@ -1361,6 +1109,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 name: 'trinno-compact-result',
                 systemPrompt: `## Conversation History Summary\n\n${msg.summary}`,
                 temperature: 0.3,
+                skipDefaultTools: true,
                 ...(mc.model ? { model: mc.model } : {}),
                 ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
                 ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
@@ -1409,7 +1158,7 @@ process.stdin.on('data', (chunk: Buffer) => {
             currentJobId++;
             const slashJobId = String(currentJobId);
             if (msg.usePubSub) {
-              await runJobWithPubSub(slashJobId, async (signal, localEmit) => {
+              await runJobWithPubSub(slashJobId, 'trinno-slash', async (signal, localEmit) => {
                 const matched = await handleSlashCommand(msg.text, signal, localEmit);
                 if (!matched) {
                   localEmit('error', { error: formatUnknownSlash(msg.text) });
@@ -1547,6 +1296,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     deps = await composeRoot(brainOptions);
     setupSubagentManager();
     await initApprovalBus(deps.brain);
+    await startToolEventMonitor(deps.brain);
     getTypstLspClient(brainOptions.workspaceRoot).catch(() => { });
     log.trace({ phase: 'deps-init', elapsedMs: Date.now() - phaseT0 }, '[PHASE] deps initialized');
   }
@@ -1685,6 +1435,24 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     started = await agent.start();
     activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null });
 
+    // Import session state from factory context or from passed brainOsSession
+    if (sessionId) {
+      const factorySession = getAgentFactory().getSessionContext(sessionId);
+      const sessionToImport = factorySession?.brainOsSession || brainOsSession;
+      if (sessionToImport) {
+        try {
+          started.importSession(sessionToImport);
+          log.debug({ sessionId, sessionLen: sessionToImport.length }, 'importSession done in handleChatWithEmit');
+        } catch (e) {
+          log.warn({ err: e }, 'importSession error in handleChatWithEmit');
+        }
+      }
+    } else if (brainOsSession) {
+      try {
+        started.importSession(brainOsSession);
+      } catch { /* ignore import errors, start fresh */ }
+    }
+
     // Final status after all connections resolved
     cancelMcpDebounce();
     const finalServers = effectiveMcp.map(s => {
@@ -1802,8 +1570,9 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       let roundText = '';
 
       await new Promise<void>((resolve, reject) => {
-        // Abort listener — ensures stalled streams don't block the queue
-        const onAbort = () => { started.stop().catch(() => { }); resolve(); };
+        // Abort listener — rejects so the handler exits immediately (catch block)
+        // avoiding the ~60-100s stall from exportSession() / commandSub.stop()
+        const onAbort = () => { started.stop().catch(() => { }); reject(new Error('cancelled')); };
         if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
         started.stream(msg, withMockInjector((token: any) => {
@@ -1844,6 +1613,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
                 trackTypFile(String(token.args.filePath));
               }
               if (shouldEmitToolCall(token.name)) {
+                log.debug({ toolName: token.name, toolId: token.id }, '[TOOL-STATUS] ToolCall token → webview');
                 localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
               }
               break;
@@ -1854,7 +1624,15 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
                 emitTodoUpdate();
               }
               if (shouldEmitToolResult(token.id, token.name)) {
-                const resultText = truncateToolResult(token.result || token.text || '');
+                const raw = token.result ?? token.text;
+                const resultStr = typeof raw === 'object' && raw !== null ? JSON.stringify(raw) : String(raw ?? '');
+                const resultText = truncateToolResult(resultStr);
+                log.debug({
+                  toolName: toolCallNames.get(token.id ?? '') ?? token.name ?? 'unknown',
+                  toolId: token.id,
+                  textSnippet: resultStr.slice(0, 300),
+                  isBackground: resultStr.includes('"background":true'),
+                }, '[TOOL-STATUS] ToolResult token → webview');
                 localEmit('token', {
                   tokenType: 'ToolResult',
                   text: resultText,
@@ -2067,25 +1845,45 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
       localEmit('token', { tokenType: 'Text', text: `\n\n## Goal Blocked\n\n> ${exitGoal.text}\n\n_Agent reported it cannot be completed${exitGoal.blockedReasons?.length ? ': ' + exitGoal.blockedReasons[exitGoal.blockedReasons.length - 1]! : ''}._\n` });
     }
 
+    // Export session state to factory context so next worker restart can restore it
+    let exportedSession: string | undefined;
+    if (sessionId) {
+      try {
+        exportedSession = started.exportSession();
+        if (exportedSession) {
+          getAgentFactory().setSessionContext(sessionId, {
+            brainOsSession: exportedSession,
+            lastUpdated: Date.now(),
+          });
+        }
+      } catch { /* best-effort — session without export support */ }
+    }
+
     // Use raw token counts from the last 'Usage' event (directly from LLM API) — no delta/cumulative math
     log.trace({ sessionId, lastPromptTokens, lastCompletionTokens, totalTokens: lastPromptTokens + lastCompletionTokens }, '[TOKEN] worker: all rounds done (raw usage)');
     localEmit('done', {
       ...(messageId ? { messageId } : {}),
       sessionId,
-      brainOsSession: undefined,
+      brainOsSession: exportedSession,
       inputTokens: lastPromptTokens,
       outputTokens: lastCompletionTokens,
     });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    if (isRateLimited(errMsg)) {
+    if (errMsg === 'cancelled') {
+      // Silent abort — panel already handled the cancel + finalization.
+      // Discard agent to avoid stream conflicts on the next message.
+      activeAgents.delete(sessionKey);
+    } else if (isRateLimited(errMsg)) {
       const retryAfter = parseRetryAfter(errMsg);
       localEmit('rate-limited', { retryAfter, error: errMsg });
     } else {
       localEmit('error', { error: errMsg });
     }
-    // On error, discard the agent so next message creates a fresh one
-    activeAgents.delete(sessionKey);
+    // On non-cancel error, discard the agent so next message creates a fresh one
+    if (errMsg !== 'cancelled') {
+      activeAgents.delete(sessionKey);
+    }
   } finally {
     // Keep currentAgent alive for reuse across messages
     currentSessionIdForCancel = null;

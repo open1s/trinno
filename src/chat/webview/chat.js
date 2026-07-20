@@ -151,6 +151,12 @@
     toolLog: [],
   };
 
+  function trinnoLog(level, msg) {
+    try {
+      vscode.postMessage({ type: 'trinno-log', level: level === 'warn' || level === 'error' ? level : 'debug', payload: msg });
+    } catch { /* best effort */ }
+  }
+
   init();
 
   function updateStatusBar() {
@@ -1611,6 +1617,59 @@ function renderTodoBadges() {
     finalizeMessage();
   }
 
+  function cancelRunningTool(toolName, toolId) {
+    trinnoLog('debug', { event: 'cancel-click', toolName, toolId });
+    vscode.postMessage({ type: 'cancelTool', toolName, toolId });
+    // Optimistically mark the tool as cancelled in the UI. When a toolId
+    // (call_id) is present, match by id ONLY — name-matching could cancel
+    // a sibling background job that is still legitimately running.
+    const match = (t) => t.status === 'running' && (toolId ? t.id === toolId : t.name === toolName);
+    for (const t of messageState.tools) {
+      if (match(t)) {
+        t.status = 'cancelled';
+        t.result = `Cancelled by user (${toolName})`;
+      }
+    }
+    for (const t of messageState.toolLog) {
+      if (match(t)) {
+        t.status = 'cancelled';
+        t.result = `Cancelled by user (${toolName})`;
+      }
+    }
+    renderToolBadges();
+  }
+  window.cancelRunningTool = cancelRunningTool;
+
+  function handleBgStart(msg) {
+    trinnoLog('debug', { event: 'bg-start', toolName: msg.toolName, callId: msg.callId, pid: msg.pid });
+    const setBg = (t) => {
+      if (t.status === 'running' && (msg.callId ? t.id === msg.callId : t.name === msg.toolName)) {
+        t.isBackground = true;
+        if (msg.pid) t.pid = msg.pid;
+      }
+    };
+    messageState.tools.forEach(setBg);
+    messageState.toolLog.forEach(setBg);
+    renderToolBadges();
+  }
+
+  function handleBgExit(msg) {
+    trinnoLog('debug', { event: 'bg-exit', pid: msg.pid, exitCode: msg.exitCode, signal: msg.signal });
+    const pid = msg.pid;
+    const exitCode = msg.exitCode;
+    const signal = msg.signal;
+    const exited = exitCode !== null ? `exit ${exitCode}` : `signal ${signal}`;
+    const markDone = (t) => {
+      if (t.status === 'running' && (t.pid === pid || (t.result && t.result.includes(`"pid":${pid}`)))) {
+        t.status = 'done';
+        t.result = `PID ${pid} — ${exited}`;
+      }
+    };
+    messageState.tools.forEach(markDone);
+    messageState.toolLog.forEach(markDone);
+    renderToolBadges();
+  }
+
   function handleExtensionMessage(event) {
     const msg = event.data;
 
@@ -1832,6 +1891,14 @@ function renderTodoBadges() {
       case 'queue-status-change':
         handleQueueStatusChange(msg);
         break;
+
+      case 'bg-start':
+        handleBgStart(msg);
+        break;
+
+      case 'bg-exit':
+        handleBgExit(msg);
+        break;
     }
   }
 
@@ -2004,21 +2071,9 @@ function renderTodoBadges() {
     </div>`;
   }
 
-  function runningToolsSummary(tools, max) {
-    const limit = typeof max === 'number' ? max : 3;
-    const running = tools.filter(t => t.status === 'running' || t.status === 'waiting' || t.status === 'called');
-    if (running.length === 0) return '';
-    const labels = running.map(t => formatToolCommand(t.name, t.args));
-    const shown = labels.slice(0, limit);
-    const overflow = labels.length - shown.length;
-    let text = shown.map(l => shortenToolLabel(l, 60)).join(' · ');
-    if (overflow > 0) text += ` · +${overflow} more`;
-    return ` <span class="tool-running-list">${escapeHtml(text)}</span>`;
-  }
-
   function renderToolLog(tools) {
     if (!tools || tools.length === 0) return '';
-    const doneCount = tools.filter(t => t.status === 'done' || t.status === 'result').length;
+    const doneCount = tools.filter(t => t.status === 'done' || t.status === 'result' || t.status === 'cancelled').length;
     const runningCount = tools.filter(t => t.status === 'running' || t.status === 'called' || t.status === 'waiting').length;
     const errorCount = tools.filter(t => t.status === 'error').length;
     const totalCount = tools.length;
@@ -2032,9 +2087,6 @@ function renderTodoBadges() {
     if (runningCount > 0) html += ` <span class="tool-running-badge">${runningCount} running</span>`;
     if (errorCount > 0) html += ` <span class="tool-error-badge">${errorCount} failed</span>`;
     html += `</span>`;
-    if (runningCount > 0) {
-      html += runningToolsSummary(tools, 3);
-    }
     html += `<span class="tool-toggle">\u25BC</span></div>`;
     html += `<div class="tool-list collapsed">`;
     for (const t of tools) {
@@ -2138,20 +2190,9 @@ function renderTodoBadges() {
         const toolName = text.trim();
         if (!toolName) break;
 
-        let existingTool = messageState.tools.find(t => {
-          if (!(t.name === toolName && (t.status === 'running' || t.status === 'waiting'))) return false;
-          if (msgToolId) return t.id === msgToolId;
-          return true;
-        });
-
-        if (!existingTool && msgToolId) {
-          const sameNameRunning = messageState.tools.filter(t =>
-            t.name === toolName && (t.status === 'running' || t.status === 'waiting')
-          );
-          if (sameNameRunning.length === 1) {
-            existingTool = sameNameRunning[0]; // same tool, different id source
-          }
-        }
+        let existingTool = msgToolId
+          ? messageState.tools.find(t => t.id === msgToolId)
+          : messageState.tools.find(t => t.name === toolName && (t.status === 'running' || t.status === 'waiting'));
 
         if (existingTool) {
           if (msgArgs !== undefined) existingTool.args = msgArgs;
@@ -2166,42 +2207,41 @@ function renderTodoBadges() {
           break;
         }
 
-        const newTool = { name: toolName, status: 'running', result: '' };
+        const isBackgroundTool = toolName === 'bash' || toolName === 'exec_tool';
+        const newTool = { name: toolName, status: 'running', result: '', background: isBackgroundTool };
         if (msgArgs !== undefined) newTool.args = msgArgs;
         if (msgToolId) newTool.id = msgToolId;
         messageState.tools.push(newTool);
-        messageState.toolLog.push({ name: toolName, status: 'running', args: msgArgs });
+        messageState.toolLog.push({ name: toolName, status: 'running', args: msgArgs, background: isBackgroundTool });
+        trinnoLog('debug', { event: 'ToolCall', name: toolName, id: msgToolId, supportsBg: isBackgroundTool });
         renderToolBadges();
         hasVisibleContent = true;
         break;
 
       case 'ToolResult':
-        let lastRunning = [...messageState.tools].reverse().find(t => {
-          if (t.status !== 'running') return false;
-          if (msgToolId) return t.id === msgToolId;
-          return true;
-        });
-        if (!lastRunning && msgToolId) {
-          lastRunning = [...messageState.tools].reverse().find(t => t.status === 'running');
-        }
+        let lastRunning = msgToolId
+          ? [...messageState.tools].reverse().find(t => t.status === 'running' && t.id === msgToolId)
+          : [...messageState.tools].reverse().find(t => t.status === 'running');
         if (lastRunning) {
           const isDenied = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
-          lastRunning.status = isDenied ? 'error' : 'done';
+          const isBackground = text && text.includes('"background":true');
+          const keepBg = lastRunning.isBackground === true;
+          lastRunning.status = isDenied ? 'error' : ((isBackground || keepBg) ? 'running' : 'done');
           lastRunning.result = text || '';
+          lastRunning.isBackground = !!(isBackground || keepBg);
           if (msgToolId && !lastRunning.id) lastRunning.id = msgToolId;
+          trinnoLog('warn', { event: 'ToolResult', name: lastRunning.name, id: lastRunning.id, isBackground, keepBg, isDenied, newStatus: lastRunning.status, textSnippet: (text || '').slice(0, 300) });
         }
-        let lastLog = [...messageState.toolLog].reverse().find(t => {
-          if (t.status !== 'running') return false;
-          if (msgToolId) return t.id === msgToolId;
-          return true;
-        });
-        if (!lastLog && msgToolId) {
-          lastLog = [...messageState.toolLog].reverse().find(t => t.status === 'running');
-        }
+        let lastLog = msgToolId
+          ? [...messageState.toolLog].reverse().find(t => t.status === 'running' && t.id === msgToolId)
+          : [...messageState.toolLog].reverse().find(t => t.status === 'running');
         if (lastLog) {
           const isDenied2 = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
-          lastLog.status = isDenied2 ? 'error' : 'done';
+          const isBackground2 = text && text.includes('"background":true');
+          const keepBg2 = lastLog.isBackground === true;
+          lastLog.status = isDenied2 ? 'error' : ((isBackground2 || keepBg2) ? 'running' : 'done');
           lastLog.result = text || '';
+          lastLog.isBackground = !!(isBackground2 || keepBg2);
           if (msgToolId && !lastLog.id) lastLog.id = msgToolId;
         }
         renderToolBadges();
@@ -2329,7 +2369,7 @@ function renderTodoBadges() {
 
   function renderToolItem(tool) {
     const status = tool.status === 'result' ? 'done' : tool.status === 'called' ? 'running' : tool.status;
-    const cls = status === 'done' ? 'done' : status === 'error' ? 'error' : status === 'waiting' ? 'waiting' : 'running';
+    const cls = status === 'done' ? 'done' : status === 'error' ? 'error' : status === 'waiting' ? 'waiting' : status === 'cancelled' ? 'cancelled' : 'running';
     const command = formatToolCommand(tool.name, tool.args);
     const result = tool.result || '';
     const resultHtml = result
@@ -2340,13 +2380,19 @@ function renderTodoBadges() {
     if (status === 'done') statusHtml = '<span class="tool-item-status done">\u2713</span>';
     else if (status === 'error') statusHtml = '<span class="tool-item-status error">\u2717</span>';
     else if (status === 'waiting') statusHtml = '<span class="tool-item-status waiting">\u23F8</span>';
+    else if (status === 'cancelled') statusHtml = '<span class="tool-item-status cancelled">\u2715</span>';
     else statusHtml = '<span class="tool-item-spinner"></span>';
+
+    const cancelBtn = (cls === 'running')
+      ? `<button class="tool-item-cancel-btn" title="Cancel ${escapeHtml(tool.name)}" onclick="event.stopPropagation(); cancelRunningTool('${escapeHtml(tool.name)}', '${escapeHtml(tool.id || '')}')">\u2715</button>`
+      : '';
 
     return `<div class="tool-item ${cls}">
       <div class="tool-item-header" onclick="this.parentElement.querySelector('.tool-item-body').classList.toggle('collapsed')">
         <span class="tool-item-prompt">$</span>
         <span class="tool-item-cmd">${escapeHtml(command)}</span>
         ${statusHtml}
+        ${cancelBtn}
       </div>
       <div class="tool-item-body collapsed">${resultHtml}</div>
     </div>`;
@@ -2438,12 +2484,18 @@ function renderTodoBadges() {
     }
 
     window.__lastApprovalArgs = args;
-    const existingTool = messageState.tools.find(t => t.name === toolName && (t.status === 'running' || t.status === 'waiting'));
+    let existingTool = id ? messageState.tools.find(t => t.id === id) : null;
     if (!existingTool) {
-      messageState.tools.push({ name: toolName, status: 'waiting', result: '', args });
+      existingTool = messageState.tools.find(t => t.name === toolName && t.status === 'waiting');
+    }
+    if (!existingTool) {
+      const newTool = { name: toolName, status: 'waiting', result: '', args };
+      if (id) newTool.id = id;
+      messageState.tools.push(newTool);
     } else {
       existingTool.status = 'waiting';
       if (args !== undefined) existingTool.args = args;
+      if (id && !existingTool.id) existingTool.id = id;
     }
     renderToolBadges();
 
@@ -2519,7 +2571,7 @@ function renderTodoBadges() {
     if (el) el.remove();
     const approvalArgs = pendingApproval?.args;
     pendingApproval = null;
-    const tool = messageState.tools.find(t => t.status === 'waiting');
+    const tool = messageState.tools.find(t => t.id === id) || messageState.tools.find(t => t.status === 'waiting');
     if (tool) {
       tool.status = 'running';
       if (!tool.args && approvalArgs) tool.args = approvalArgs;
@@ -2532,7 +2584,7 @@ window.__denyTool = function(id) {
     const el = document.getElementById(`approval-${id}`);
     if (el) el.remove();
     pendingApproval = null;
-    const tool = messageState.tools.find(t => t.status === 'waiting');
+    const tool = messageState.tools.find(t => t.id === id) || messageState.tools.find(t => t.status === 'waiting');
     if (tool) {
       tool.status = 'error';
       tool.result = 'Denied by user';
@@ -2646,13 +2698,14 @@ window.__denyTool = function(id) {
     }
 
     for (const tool of messageState.tools) {
-      if (tool.status === 'running') {
+      trinnoLog('debug', { event: 'finalize', name: tool.name, id: tool.id, statusBefore: tool.status, isBackground: tool.isBackground });
+      if (tool.status === 'running' && !tool.isBackground) {
         tool.status = 'done';
         if (!tool.result) tool.result = 'Completed';
       }
     }
     for (const tool of messageState.toolLog) {
-      if (tool.status === 'running') {
+      if (tool.status === 'running' && !tool.isBackground) {
         tool.status = 'done';
         if (!tool.result) tool.result = 'Completed';
       }
@@ -2743,13 +2796,13 @@ window.__denyTool = function(id) {
     }
 
     for (const tool of messageState.tools) {
-      if (tool.status === 'running') {
+      if (tool.status === 'running' && !tool.isBackground) {
         tool.status = 'error';
         tool.result = errorText || 'Stream interrupted';
       }
     }
     for (const tool of messageState.toolLog) {
-      if (tool.status === 'running') {
+      if (tool.status === 'running' && !tool.isBackground) {
         tool.status = 'error';
         tool.result = errorText || 'Stream interrupted';
       }
