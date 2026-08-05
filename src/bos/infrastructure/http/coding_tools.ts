@@ -1,7 +1,7 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import { SandboxManager } from '../sandbox.js';
 import { isWorkspacePath, isSecretPath, isDangerousCommand } from '../config/workspaceGuard.js';
@@ -198,9 +198,14 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           const stat = fs.statSync(filePath);
           let needsSeparator = true;
           if (stat.size > 0) {
-            const buf = Buffer.alloc(Math.min(stat.size, 1));
-            fs.readSync(fs.openSync(filePath, 'r'), buf, 0, buf.length, stat.size - 1);
-            needsSeparator = buf[0] !== 0x0a; // '\n'
+            const fd = fs.openSync(filePath, 'r');
+            try {
+              const buf = Buffer.alloc(Math.min(stat.size, 1));
+              fs.readSync(fd, buf, 0, buf.length, stat.size - 1);
+              needsSeparator = buf[0] !== 0x0a; // '\n'
+            } finally {
+              fs.closeSync(fd);
+            }
           }
           const separator = needsSeparator ? '\n' : '';
           fs.writeFileSync(filePath, separator + args.newString, { encoding: 'utf-8', flag: 'a' });
@@ -456,13 +461,13 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
           return err('Access denied: path is outside workspace');
         }
-        let cmd = `rg --json --no-heading --line-number "${args.pattern}"`;
-        if (args.include) cmd += ` --glob "${args.include}"`;
-        if (args.ignoreCase) cmd += ' --ignore-case';
-        cmd += ` "${searchPath}"`;
-        const output = execSync(cmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, cwd: workspaceRoot });
+        const rgArgs = ['--json', '--no-heading', '--line-number'];
+        if (args.include) rgArgs.push('--glob', args.include);
+        if (args.ignoreCase) rgArgs.push('--ignore-case');
+        rgArgs.push(args.pattern, searchPath);
+        const result = spawnSync('rg', rgArgs, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, cwd: workspaceRoot });
         const matches: any[] = [];
-        for (const line of output.trim().split('\n').filter(Boolean)) {
+        for (const line of (result.stdout || '').trim().split('\n').filter(Boolean)) {
           try {
             const parsed = JSON.parse(line);
             if (parsed.type === 'match') {
@@ -474,23 +479,21 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
             }
           } catch { /* skip invalid JSON */ }
         }
-        return ok({ pattern: args.pattern, matchCount: matches.length, matches: matches.slice(0, 100) });
+        return ok({ pattern: args.pattern, matchCount: matches.length, matches: matches.slice(0, 100), truncated: matches.length > 100 });
       } catch (e: any) {
-        if (e.status === 1) return ok({ pattern: args.pattern, matchCount: 0, matches: [] });
         return err(e.message);
       }
     });
 
   const globFiles = defineTool(
     'glob_files',
-    'Find files matching a glob pattern. Returns list of file paths.',
+    'Find files matching a glob pattern (supports **, braces, and gitignore). Returns list of file paths.',
   )
-    .required('pattern', 'string', 'Glob pattern (e.g., "**/*.ts", "src/**/*.tsx")')
+    .required('pattern', 'string', 'Glob pattern (e.g., "**/*.ts", "src/**/*.tsx", "{*.ts,*.js}")')
     .handle((args) => {
       try {
-        const cmd = `find . -path "./node_modules" -prune -o -path "./.git" -prune -o -name "${args.pattern.replace(/\*\*/g, '*')}" -print`;
-        const output = execSync(cmd, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
-        const files = output.trim().split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
+        const result = spawnSync('rg', ['--files', '--no-require-git', '-g', args.pattern], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        const files = (result.stdout || '').trim().split('\n').filter(Boolean);
         return ok({ pattern: args.pattern, fileCount: files.length, files: files.slice(0, 200) });
       } catch (e: any) {
         return err(e.message);
@@ -511,11 +514,14 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
           return err('Access denied: path is outside workspace');
         }
-        let cmd = `sg run --pattern "${args.pattern.replace(/"/g, '\\"')}" --lang ${args.lang} --json compact`;
-        if (args.rewrite) cmd += ` --rewrite "${args.rewrite.replace(/"/g, '\\"')}"`;
-        cmd += ` "${searchPath}"`;
-        const output = execSync(cmd, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
-        const matches = JSON.parse(output || '[]');
+        const sgArgs = ['run', '--pattern', args.pattern, '--lang', args.lang, '--json', 'compact'];
+        if (args.rewrite) sgArgs.push('--rewrite', args.rewrite);
+        sgArgs.push(searchPath);
+        const result = spawnSync('sg', sgArgs, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        if (result.status !== 0) {
+          return ok({ pattern: args.pattern, lang: args.lang, matchCount: 0, matches: [] });
+        }
+        const matches = JSON.parse(result.stdout || '[]');
         const formatted = matches.map((m: any) => ({
           file: m.file,
           line: m.line,
@@ -524,7 +530,6 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         }));
         return ok({ pattern: args.pattern, lang: args.lang, matchCount: formatted.length, matches: formatted.slice(0, 100) });
       } catch (e: any) {
-        if (e.status === 1) return ok({ pattern: args.pattern, lang: args.lang, matchCount: 0, matches: [] });
         return err(e.message || 'ast-grep execution failed');
       }
     });
@@ -543,9 +548,8 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
           return err('Access denied: path is outside workspace');
         }
-        const cmd = `sg rw --pattern "${args.pattern.replace(/"/g, '\\"')}" --rewrite "${args.rewrite.replace(/"/g, '\\"')}" --lang ${args.lang} "${editPath}"`;
-        const output = execSync(cmd, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
-        return ok({ result: output.trim() || 'Successfully applied rewrites' });
+        const result = spawnSync('sg', ['rw', '--pattern', args.pattern, '--rewrite', args.rewrite, '--lang', args.lang, editPath], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        return ok({ result: (result.stdout || '').trim() || 'Successfully applied rewrites' });
       } catch (e: any) {
         return err(e.message || 'ast-grep rewrite failed');
       }
@@ -572,85 +576,19 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
 
         const patchContent = args.patch.endsWith('\n') ? args.patch : args.patch + '\n';
 
-        const cmd = `patch -t "${filePath}"`;
-        const result = execSync(cmd, {
+        const result = spawnSync('patch', ['-t', filePath], {
           cwd: workspaceRoot,
           input: patchContent,
           encoding: 'utf-8',
           timeout: 10000,
+          maxBuffer: 10 * 1024 * 1024,
         });
 
-        return ok({ filePath: args.filePath, result: result.trim(), action: 'patched' });
-      } catch (e: any) {
-        let errorMessage = e.message;
-        if (e.stdout || e.stderr) {
-          errorMessage = `${e.stdout || ''}\n${e.stderr || ''}`.trim();
+        if (result.status !== 0) {
+          const errorMessage = (result.stderr || result.stdout || '').trim();
+          return err(`Patch failed (exit code ${result.status}):\n${errorMessage}`);
         }
-        return err(`Patch failed (exit code ${e.status}):\n${errorMessage}`);
-      }
-    });
-
-  const execTool = defineTool(
-    'exec_tool',
-    'Execute a command with provided arguments. Useful for running binaries or scripts with structured arguments.',
-  )
-    .required('command', 'string', 'Command or binary to execute')
-    .required('args', 'array', 'List of arguments to pass to the command')
-    .param('timeout', 'number', 'Max seconds to wait for a foreground command (5-3600, default 600). Ignored for background commands.')
-    .cancelable()
-    .onCancel((callId) => {
-      const proc = runningProcesses.get(callId);
-      if (proc && proc.pid) killProcessGroup(proc.pid);
-      runningProcesses.delete(callId);
-      const bg = bgProcesses.get(callId);
-      if (bg && bg.pid) killProcessGroup(bg.pid);
-      bgProcesses.delete(callId);
-    })
-    .handle(async (args) => {
-      try {
-        const fullCommand = `${args.command} ${args.args.map((a: string) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`;
-        if (isDangerousCommand(fullCommand)) {
-          return err('Command blocked: potentially dangerous operation');
-        }
-        const isBackground = /&\s*$/.test(fullCommand.trim());
-        const cmd = isBackground ? fullCommand.trim().replace(/&\s*$/, '').trim() : fullCommand;
-        const { command: safeCommand } = sandbox.wrapCommand(cmd);
-        const env = sandbox.isEnabled() ? sandbox.getRestrictedEnv() : undefined;
-        const callId = (args as any).__call_id__ || 'unknown';
-        const timeoutSec = Math.min(3600, Math.max(5, args.timeout ?? 600));
-        const timeoutMs = timeoutSec * 1000;
-
-        if (isBackground) {
-          const child = spawn(safeCommand, [], {
-            cwd: workspaceRoot,
-            shell: true,
-            env: env ? { ...process.env, ...env } : undefined,
-            stdio: 'ignore',
-            detached: true,
-          });
-          child.unref();
-          bgProcesses.set(callId, child);
-          if (child.pid) {
-            log.debug({ callId, pid: child.pid }, '[TOOL-STATUS] exec_tool background job spawned');
-            onBgStart('exec_tool', callId, child.pid);
-          }
-          child.on('exit', (exitCode, signal) => {
-            if (bgProcesses.get(callId) === child) bgProcesses.delete(callId);
-            if (child.pid) onBgExit('exec_tool', child.pid, exitCode, signal);
-          });
-          return ok({ pid: child.pid, background: true });
-        }
-
-        const result = await spawnCapture(callId, safeCommand, workspaceRoot, env, timeoutMs);
-        if (result.timedOut) {
-          const partial = result.stdout + result.stderr;
-          const tail = partial ? '\nPartial output:\n' + partial.slice(-4000) : '';
-          return err(`Command timed out after ${timeoutSec}s${tail}`);
-        }
-        if (result.signal === 'SIGTERM' || result.signal === 'SIGKILL') {
-          return err('Command cancelled');
-        }
-        return ok({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode });
+        return ok({ filePath: args.filePath, result: (result.stdout || '').trim(), action: 'patched' });
       } catch (e: any) {
         return err(e.message);
       }
@@ -667,6 +605,5 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
     astGrep,
     astEdit,
     applyPatch,
-    execTool,
   ];
 }

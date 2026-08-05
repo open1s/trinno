@@ -4,6 +4,9 @@ import { SlashCommand } from './registry.js';
 import { TrizDeps } from '../infrastructure/config/di.js';
 import { getAgentFactory } from '../infrastructure/agent-factory.js';
 import { getModelConfig } from '../infrastructure/config/model-config.js';
+import { createModuleLogger } from '../infrastructure/logging/logger.js';
+
+const log = createModuleLogger('auto-research');
 
 const AUTO_STATE_FILE = 'auto_state.json';
 const MAX_ITERATIONS = 50;
@@ -93,6 +96,8 @@ async function generateScopeAndEval(
     ...(mc.model ? { model: mc.model } : {}),
     ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
     ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+    ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+    ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
   });
   const agent = await builder.start();
 
@@ -115,6 +120,10 @@ async function generateScopeAndEval(
     const scopeMatch = text.match(/===SCOPE===\n([\s\S]*?)\n===EVAL===/);
     const evalMatch = text.match(/===EVAL===\n([\s\S]*)/);
 
+    if (!scopeMatch || !evalMatch) {
+      log.warn('Auto-research planner: model did not follow ===SCOPE===/===EVAL=== format, using fallback templates');
+    }
+
     return {
       scope: scopeMatch?.[1]?.trim() ?? `# Scope — AutoResearch\n\n**Hypothesis:** ${hypothesis}\n\n## Research Question\n\n${hypothesis}\n\n## Constraints\n\nSee eval.md for details.\n\n## Success Criteria\n\nSee eval.md for details.\n`,
       eval: evalMatch?.[1]?.trim() ?? `# Evaluation — AutoResearch\n\n**Hypothesis:** ${hypothesis}\n\n## Primary Metric\n\nSee scope.md for details.\n`,
@@ -124,6 +133,28 @@ async function generateScopeAndEval(
       await agent.close();
     }
   }
+}
+
+async function validateScopeAndEval(scope: string, evalContent: string): Promise<string[]> {
+  const issues: string[] = [];
+
+  const scopeLower = scope.toLowerCase();
+  if (!/success criteri|成功标准|success metric/i.test(scopeLower)) {
+    issues.push('scope.md: missing success criteria');
+  }
+  if (!/constraint|termination|停|约束|终止/i.test(scopeLower)) {
+    issues.push('scope.md: missing constraints or termination conditions');
+  }
+
+  const evalLower = evalContent.toLowerCase();
+  if (!/metric|baseline|指标|基线/i.test(evalLower)) {
+    issues.push('eval.md: missing metrics or baseline');
+  }
+  if (!/accept|reject|acceptance|判定|接受|拒绝/i.test(evalLower)) {
+    issues.push('eval.md: missing accept/reject criteria');
+  }
+
+  return issues;
 }
 
 export const autoCommand: SlashCommand = {
@@ -253,6 +284,17 @@ export const autoCommand: SlashCommand = {
       ].join('\n') });
 
       const result = await generateScopeAndEval(raw, deps);
+
+      const issues = await validateScopeAndEval(result.scope, result.eval);
+      if (issues.length > 0) {
+        log.warn({ hypothesis: raw, issues }, 'Auto-research scope/eval validation failed; writing anyway');
+        emit('token', { tokenType: 'Text', text: [
+          '',
+          '> ⚠️ **Validation warnings — review before starting the loop:**',
+          ...issues.map(i => `> - ${i}`),
+          '',
+        ].join('\n') });
+      }
 
       fs.writeFileSync(scopePath, result.scope);
       fs.writeFileSync(evalPath, result.eval);

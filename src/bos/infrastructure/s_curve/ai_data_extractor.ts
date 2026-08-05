@@ -2,10 +2,13 @@ import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
+import { createModuleLogger } from '../logging/logger.js';
 import { CachedSearchService } from '../search/cached_search.js';
 import { SearchResult } from '../../domain/solution/search_port.js';
 import { Milestone } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
+
+const log = createModuleLogger('ai-scurve-data-extractor');
 
 export interface ExtractedDataPoint {
   x: number;
@@ -75,6 +78,8 @@ Schema to return:
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
     });
 
     this.agent = await builder.start();
@@ -170,9 +175,12 @@ ${getLanguagePrompt(this.locale.language)}`;
           searchSnippets: rawSnippets,
         };
       }
-    } catch {
+    } catch (err) {
+      log.warn({ err: String(err) }, 'S-curve data extractor: model output was not valid JSON, using fallback');
+      return this.generateLifecycleDefaults(searchResults, response);
     }
 
+    log.warn('S-curve data extractor: model returned no JSON object, using fallback');
     return this.generateLifecycleDefaults(searchResults, response);
   }
 

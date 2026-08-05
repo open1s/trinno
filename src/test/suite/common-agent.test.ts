@@ -74,5 +74,12 @@ describe('bos/agents/common-agent (builtin agent)', () => {
     it('mandates evidence-grounded completion audit', () => {
       assert.match(prompt, /evidence|completion audit/i);
     });
+
+    it('mandates V&V: no fabrication and source citation (V&V)', () => {
+      assert.match(prompt, /never fabricate|fabricat/i, 'must forbid fabrication');
+      assert.match(prompt, /cite.*source|citation|source/i, 'must require source citation for claims');
+      assert.match(prompt, /unverifiable|illustrative/i, 'must label unverifiable or synthetic content');
+      assert.match(prompt, /acceptance.*criterion|verify.*before.*done|re-read|re-read the file|read the file back/i, 'must verify before declaring done');
+    });
   });
 });

@@ -164,6 +164,8 @@ Be concise. Think step by step, break into smaller parts.`,
           ...(mc.model ? { model: mc.model } : {}),
           ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
           ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+          ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+          ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
         });
 
         started = await agent.start();

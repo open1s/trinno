@@ -131,8 +131,21 @@ async function closeDeps(oldDeps: typeof deps): Promise<void> {
   try { await oldDeps.trlAssessor.dispose(); } catch { }
   try { await oldDeps.summarizer.dispose(); } catch { }
 }
-const activeAgents = new Map<string, { started: any; agent: any; model: string | null; baseUrl: string | null; apiKey: string | null }>();
-const FALLBACK_PERSONA = 'You are Research Master, a self-directed, tool-first agent that proactively drives tasks end-to-end and outputs structured 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO, prioritizing importance-weighted KPIs, evidence scoring, and decision factors, driving contradictions→solutions, experiments, risks, and ≤3-day executable tasks, keeping text ≤4 lines and always producing copy-ready documents or files. Use tools whenever possible, and ask for user input only when necessary. Always think step by step, and break down complex problems into smaller parts. If you are unsure about something, use the `websearch` tool to find more information. All tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output). For large files: read in 500+ line chunks with offset/limit, never tiny slices.`;';
+const activeAgents = new Map<string, { started: any; agent: any; model: string | null; baseUrl: string | null; apiKey: string | null; apiMode: string | null; reasoningEffort: string | null; skillContent: string | null }>();
+const FALLBACK_PERSONA = `You are Research Master, a self-directed, tool-first agent.
+
+Roles & style:
+- Drive tasks end-to-end; output 7-phase artifacts (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution)
+- Use TRIZ/PRISMA/SWOT/PEST/5W1H/PICO; weight KPIs by importance, score evidence, surface decision factors
+- Drive contradictions→solutions, experiments, risks, and ≤3-day executable tasks
+- Keep text ≤4 lines; always produce copy-ready documents or files
+- Use tools whenever possible; ask the user only when necessary
+- Think step by step; break complex problems into smaller parts
+- If unsure, use the \`websearch\` tool
+
+Large-file handling:
+- Tool output is capped at 2000 lines/50KB — if truncated, use grep to find sections (do NOT re-read full output)
+- For large files: read in 500+ line chunks with offset/limit, never tiny slices`;
 
 const slashRegistry = createSlashCommandRegistry();
 
@@ -618,12 +631,12 @@ function loadSoulMd(): string {
   return homeContent ?? '';
 }
 
-function buildMethodologyPrompt(slashCommandsList: string): string {
+function buildMethodologyPrompt(): string {
   const soul = loadSoulMd();
   const soulSection = soul ? `\n\n## SOUL (Must Follow)\n\n${soul}\n\n` : '';
   return soulSection + `# Pipeline & Rules for Autonomous Research
 
-8 phases: 01_Discover→02_TRL→03_Analyze→04_Synthesize→05_Deliver→06_References→07_Patent→08_AutoResearch
+Phases: 01_Discover→02_TRL→03_Analyze→04_Synthesize→05_Deliver→06_References→07_Patent→08_AutoResearch
 
 Phase N: read README.md + all prior outputs.
 Backward dep check (mandatory): list_dir+read_file prior outputs → cite paths+claims → flag contradictions → update earlier if needed → log chain.
@@ -655,8 +668,14 @@ Tone: concise,direct,no fluff,UTF-8.
 Proactive: only when asked.
 Verify: after write/edit→read_file confirm,run tests. Check README/Agents.md.
 Parallel: batch reads,EN/ZH,dedupe DOI/arXivID.
-Large: cap 200 lines/10KB. truncated→grep or offset/limit(500+ lines). >500→paginate. never <50. follow offset=N.
 Context: 1-line status+next after tool. max2 retries. >5 calls→pause,summarize. large→/compact.
+
+## Verification & Validation (V&V — Mandatory)
+Never fabricate: every claim→file path|URL|measured metric|passing test.
+Cite exact source per claim (path+line/section or URL). Unverifiable→state "unverifiable", don't guess.
+AI-synthesized examples→label "illustrative", never as real case studies.
+Completion gate: before "done", verify each output file exists with expected content/structure; re-run tests; re-measure metrics. Subjective ("looks good","I checked") does NOT count.
+After write/edit→read_file back to confirm. Unverified claim = hypothesis, not result → log in next step.
 
 ## Routing
 Unknown→5W1H | Clinical→PICO→PRISMA | Technical→TRIZ(Matrix→Principles→Su-Field) | Evidence→PRISMA | Strategic→SWOT(+PEST) | New market→PEST(+SWOT)
@@ -670,8 +689,7 @@ Fail: manual-url+publisher URL. Never cite inaccessible.
 Pre-draft: verify EVERY citation has file OR manual-url. Use list_dir/papers_list_downloaded.
 Applies all outputs.
 
-## Multilingual+PubScholar
-Parallel EN+ZH,dedupe DOI/arXivID.
+## Multilingual
 CN journals: 自动化学报,控制与决策,机器人.
 PubScholar: file.scholarin.cn/preview2?file=editor_cj_{hash}.pdf→pass to papers_download.
 Output language matches input. UTF-8.
@@ -687,14 +705,14 @@ Verify each section. typst compile→fix errors.
 Specialized→find_skill("<keywords>")→load_offline_skill({name}) or load_best_skill({query}).
 
 ## File Ops
-read_file first. Large: offset/limit(200+ lines/chunk). >1MB→apply_patch. Long: write_file initial→edit_file(append=true). Small/medium: edit_file. New: write_file.
+read_file first. Tool output capped 200 lines/10KB — truncated→grep or offset/limit(500+ lines/chunk, never <50-line slices). >1MB→apply_patch. Long docs: write_file initial→edit_file(append=true). Small/medium: edit_file. New: write_file.
 
 ## Tools
 TRIZ: triz_search,principles,parameters,contradiction,insight,su_field,ideality,s_curve
 Papers: search,download,list_downloaded
 Web: websearch
 Skills: find_skill,load_offline_skill,load_best_skill
-FS: read_file,write_file,edit_file,list_dir,grep_search,glob_files,ast_grep,ast_edit,apply_patch,bash,exec_tool
+FS: read_file,write_file,edit_file,list_dir,grep_search,glob_files,ast_grep,ast_edit,apply_patch,bash
 Planning: todowrite/todoread ONLY for multi-step writing
 
 ## Format
@@ -819,10 +837,12 @@ async function handleCompact(
   persona: { name: string; prompt: string } | undefined,
   apiKey: string | undefined,
   model?: string,
-  baseUrl?: string
+  baseUrl?: string,
+  apiMode?: string,
+  reasoningEffort?: string
 ): Promise<void> {
   log.info({ messageCount: messages.length }, 'handleCompact START');
-  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
+  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey, apiMode, reasoningEffort };
 
   if (depsInitPromise) await depsInitPromise;
   if (!deps) {
@@ -839,7 +859,7 @@ async function handleCompact(
     return `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}${reasoning}`;
   }).join('\n\n');
 
-  const summaryPrompt = `You are Research Master — a self-directed, tool-first agent compressing a conversation transcript into a 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) summary. Use TRIZ/PRISMA/SWOT/PEST/5W1H/PICO concepts, weight KPIs by importance, score evidence, surface decision factors.
+  const summaryPrompt = `Compress the conversation transcript below into a structured summary aligned to the 7-phase (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution) pipeline.
 
 Transcript may contain: user messages, assistant responses, tool calls, tool results, errors.
 
@@ -876,6 +896,8 @@ ${conversationText}
     ...(model ? { model } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(apiKey ? { apiKey } : {}),
+    ...(apiMode ? { apiMode } : {}),
+    reasoningEffort: 'low',
   });
 
   const started = await agent.start();
@@ -886,7 +908,6 @@ ${conversationText}
       started.stream(summaryPrompt, (token: any) => {
         switch (token.type) {
           case 'ReasoningContent':
-            emit('token', { tokenType: 'ReasoningContent', text: token.text });
             break;
           case 'Text':
             compactText += token.text;
@@ -1029,6 +1050,8 @@ process.stdin.on('data', (chunk: Buffer) => {
                   msg.toolPermissions,
                   msg.mcp?.servers,
                   msg.sandboxEnabled,
+                  msg.apiMode,
+                  msg.reasoningEffort,
                 );
               });
             } else {
@@ -1050,6 +1073,8 @@ process.stdin.on('data', (chunk: Buffer) => {
                 msg.toolPermissions,
                 msg.mcp?.servers,
                 msg.sandboxEnabled,
+                msg.apiMode,
+                msg.reasoningEffort,
               );
             }
           });
@@ -1085,7 +1110,7 @@ process.stdin.on('data', (chunk: Buffer) => {
         }
         case 'compact':
           enqueue('compact', async () => {
-            await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl);
+            await handleCompact(msg.messages, msg.systemSummary, msg.persona, msg.apiKey, msg.model, msg.baseUrl, msg.apiMode, msg.reasoningEffort);
           });
           break;
         case 'clear-session':
@@ -1103,29 +1128,10 @@ process.stdin.on('data', (chunk: Buffer) => {
         case 'compact-result':
           enqueue('compact-result', async () => {
             if (msg.sessionId && msg.summary) {
-              const factory = getAgentFactory();
-              const mc = getModelConfig();
-              const agent = factory.create({
-                name: 'trinno-compact-result',
-                systemPrompt: `## Conversation History Summary\n\n${msg.summary}`,
-                temperature: 0.3,
-                skipDefaultTools: true,
-                ...(mc.model ? { model: mc.model } : {}),
-                ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
-                ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+              getAgentFactory().setSessionContext(msg.sessionId, {
+                brainOsSession: buildCompactResultSessionJson(msg.summary),
+                lastUpdated: Date.now(),
               });
-              const started = await agent.start();
-              try {
-                const exported = started.exportSession();
-                if (exported) {
-                  factory.setSessionContext(msg.sessionId, {
-                    brainOsSession: exported,
-                    lastUpdated: Date.now(),
-                  });
-                }
-              } finally {
-                started.stop().catch(() => { });
-              }
             }
           });
           break;
@@ -1137,11 +1143,13 @@ process.stdin.on('data', (chunk: Buffer) => {
               log.warn({ sessionId: msg.sessionId }, '[RECOVER] no active agent for session — skipping session rebuild');
               return;
             }
-            try { existing.started.clearSession(); } catch { }
-            for (const m of msg.messages) {
-              try { existing.agent.session.addMessage(m.role, m.content); } catch { }
+            try {
+              existing.started.clearSession();
+              existing.started.importSession(buildRecoverSessionJson(msg.messages));
+              log.info({ sessionId: msg.sessionId, msgCount: msg.messages.length }, '[RECOVER] session rebuilt in place');
+            } catch (e) {
+              log.warn({ err: e }, '[RECOVER] session rebuild failed');
             }
-            log.info({ sessionId: msg.sessionId, msgCount: msg.messages.length }, '[RECOVER] session rebuilt in place');
           });
           break;
         case 'slash':
@@ -1154,6 +1162,8 @@ process.stdin.on('data', (chunk: Buffer) => {
               model: msg.model,
               baseUrl: msg.baseUrl,
               apiKey: msg.apiKey,
+              apiMode: msg.apiMode,
+              reasoningEffort: msg.reasoningEffort,
             };
             currentJobId++;
             const slashJobId = String(currentJobId);
@@ -1208,6 +1218,8 @@ process.stdin.on('data', (chunk: Buffer) => {
               undefined,
               undefined,
               msg.sandboxEnabled,
+              msg.apiMode,
+              msg.reasoningEffort,
             );
           });
           break;
@@ -1277,10 +1289,36 @@ async function collectTypstDiagnostics(workspaceRoot: string): Promise<string> {
   }
 }
 
-async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean): Promise<void> {
+export function buildCompactResultSessionJson(summary: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  return JSON.stringify({
+    context: null,
+    metadata: { created_at: now, message_count: 1, updated_at: now },
+    messages: [{
+      System: { content: `## Session Compaction Summary\n\n${summary}` },
+    }],
+  });
+}
+
+export function buildRecoverSessionJson(messages: Array<{ role?: string; content: unknown }>): string {
+  const now = Math.floor(Date.now() / 1000);
+  const rebuilt = messages.map((m) => {
+    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return m.role === 'user'
+      ? { User: { content: [{ text, type: 'text' }] } }
+      : { Assistant: { content: text } };
+  });
+  return JSON.stringify({
+    context: null,
+    metadata: { created_at: now, message_count: rebuilt.length, updated_at: now },
+    messages: rebuilt,
+  });
+}
+
+async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean, apiMode?: string, reasoningEffort?: string): Promise<void> {
   text = `[You reference Current Time: ${new Date().toISOString()}]\n${text}`;
   const phaseT0 = Date.now();
-  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey };
+  (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey, apiMode, reasoningEffort };
   if (depsInitPromise) await depsInitPromise;
   if (deps && apiKey !== lastApiKey) {
     log.error({ old: lastApiKey?.slice(0, 4), new: apiKey?.slice(0, 4) }, 'DEBUG handleChatWithEmit: apiKey changed, recreating deps');
@@ -1311,13 +1349,14 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     const personaPrompt = persona && typeof persona.prompt === 'string' && persona.prompt.trim()
       ? persona.prompt.trim()
       : FALLBACK_PERSONA;
-    const methodologyPrompt = buildMethodologyPrompt('');
+    const methodologyPrompt = buildMethodologyPrompt();
     const basePrompt = persona && persona.prompt
       ? `${methodologyPrompt}\n\n---\n\n${personaPrompt}`
       : `${personaPrompt}\n\n${methodologyPrompt}`;
-    systemPrompt = systemSummary
-      ? `${basePrompt}\n\n## Conversation History Summary\n\n${systemSummary}`
-      : basePrompt;
+    systemPrompt = basePrompt;
+  }
+  if (systemSummary) {
+    systemPrompt += `\n\n## Conversation History Summary\n\n${systemSummary}`;
   }
 
   // Inject Typst LSP diagnostics for all .typ files in workspace
@@ -1386,7 +1425,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   // Detect model/baseUrl drift so a mid-session switch takes effect immediately.
   // Without this check, the cached `started` retains the model it was built with.
   const modelChanged = !!existingAgent
-    && (existingAgent.model !== (model || null) || existingAgent.baseUrl !== (baseUrl || null) || existingAgent.apiKey !== (apiKey || null));
+    && (existingAgent.model !== (model || null) || existingAgent.baseUrl !== (baseUrl || null) || existingAgent.apiKey !== (apiKey || null) || existingAgent.apiMode !== (apiMode || null) || existingAgent.reasoningEffort !== (reasoningEffort || null) || existingAgent.skillContent !== (skillContent || null));
   if (existingAgent && existingAgent.started && !modelChanged) {
     started = existingAgent.started;
     // Don't re-emit MCP/LSP status — unchanged since last message
@@ -1423,6 +1462,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       ...(model ? { model } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(apiKey ? { apiKey } : {}),
+      ...(apiMode ? { apiMode } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       mcpServers: effectiveMcp,
       onMcpStatus: (namespace, type, comm, status) => {
         mcpStatusMap.set(mcpKey(namespace, type, comm), status === 'connected');
@@ -1431,9 +1472,9 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     });
 
     let config = (agent as any)._config;
-    log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey } }, 'model info');
+    log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey, apiMode: config.apiMode, reasoningEffort: config.reasoningEffort } }, 'model info');
     started = await agent.start();
-    activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null });
+    activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null, apiMode: apiMode || null, reasoningEffort: reasoningEffort || null, skillContent: skillContent || null });
 
     // Import session state from factory context or from passed brainOsSession
     if (sessionId) {
@@ -1563,7 +1604,17 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     let lastPromptTokens = 0;
     let lastCompletionTokens = 0;
 
+    // Hard ceiling on agent loop iterations per user message — guards against
+    // runaway tool loops (infinite retries, stuck goal continuations). Codex/
+    // Claude Code both enforce similar budget caps. 60 rounds ≈ 60 tool turns.
+    const MAX_ROUNDS_PER_MESSAGE = 60;
+
     while (roundIndex < rounds.length && !signal.aborted) {
+      if (roundIndex >= MAX_ROUNDS_PER_MESSAGE) {
+        log.warn({ sessionId, rounds: roundIndex }, '[GOAL] max rounds per message reached — halting loop');
+        localEmit('token', { tokenType: 'Text', text: `\n\n## Iteration Cap Reached\n\n_Max ${MAX_ROUNDS_PER_MESSAGE} tool rounds for this message exceeded. The task may be too large for one message — use \`/goal\` or split into smaller steps._\n` });
+        break;
+      }
       const msg = rounds[roundIndex]!;
       let todowriteCalledThisRound = false;
 
@@ -1905,6 +1956,8 @@ async function syncSessionAfterCommand(
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
     });
     const started = await syncAgent.start();
     try {

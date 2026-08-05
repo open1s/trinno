@@ -2,8 +2,11 @@ import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
+import { createModuleLogger } from '../logging/logger.js';
 import { CurvePoint, CurveParameters } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
+
+const log = createModuleLogger('ai-scurve-estimator');
 
 export interface AiEstimateResult {
   estimatedParameters: CurveParameters;
@@ -67,6 +70,8 @@ Use websearch when domain knowledge is uncertain. Return ONLY valid JSON, no mar
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
     });
 
     this.agent = await builder.start();
@@ -119,9 +124,12 @@ ${getLanguagePrompt(this.locale.language)}`;
           reasoning: parsed.reasoning || `AI estimation for ${technologyName}`,
         };
       }
-    } catch {
+    } catch (err) {
+      log.warn({ err: String(err) }, 'S-curve estimate: model output was not valid JSON, using default');
+      return this.getDefaultEstimate(technologyName);
     }
 
+    log.warn('S-curve estimate: model returned no JSON object, using default');
     return this.getDefaultEstimate(technologyName);
   }
 

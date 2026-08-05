@@ -72,6 +72,8 @@ export class AiTrizAgent {
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
     });
 
     this.agent = await builder.start();

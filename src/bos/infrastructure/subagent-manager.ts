@@ -59,7 +59,7 @@ const SUBAGENT_TOOL_NAMES = new Set([
   // Subagent management (recursion)
   'spawn_agent', 'list_agents', 'get_agent_result', 'stop_subagent',
   // Shell execution
-  'bash', 'exec_tool',
+  'bash',
   // Write to disk
   'write_file', 'edit_file', 'ast_edit', 'apply_patch',
   'download_paper',
@@ -161,6 +161,7 @@ export class SubagentManager {
       `- Read-only: you can read/search files and the web, but cannot modify anything.`,
       `- After finishing, output the result and do NOT call more tools.`,
       `- Do NOT ask for approval — act autonomously.`,
+      `- Never fabricate facts: cite the file path or source URL for every claim; if a fact is unverifiable, say so explicitly.`,
       `- Keep output concise.`,
     ].filter(Boolean).join('\n');
 
@@ -226,6 +227,8 @@ export class SubagentManager {
             model: modelConfig.model,
             baseUrl: modelConfig.baseUrl,
             apiKey: modelConfig.apiKey,
+            apiMode: modelConfig.apiMode,
+            reasoningEffort: modelConfig.reasoningEffort,
           });
           const started = await agent.start();
 

@@ -251,7 +251,7 @@ export async function sendMessage(
   sessionId?: string,
   brainOsSession?: string,
   skillContent?: string,
-  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string },
   workspaceRoot?: string
 ): Promise<void> {
   log.info({ messageId, textLength: text.length, sessionId }, 'sendMessage called');
@@ -273,7 +273,9 @@ export async function sendMessage(
   const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
   const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
-  log.warn({ config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, hasModelConfig: !!modelConfig } }, 'model used for request');
+  const effectiveApiMode = modelConfig?.apiMode ?? config.global_model?.api_mode ?? '';
+  const effectiveReasoningEffort = modelConfig?.reasoningEffort ?? config.global_model?.reasoning_effort ?? '';
+  log.warn({ config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, apiMode: effectiveApiMode, reasoningEffort: effectiveReasoningEffort, hasModelConfig: !!modelConfig } }, 'model used for request');
   const payload = {
     type: 'chat',
     messageId,
@@ -291,6 +293,8 @@ export async function sendMessage(
     skillContent: skillContent || undefined,
     model: effectiveModel,
     baseUrl: effectiveBaseUrl,
+    apiMode: effectiveApiMode || undefined,
+    reasoningEffort: effectiveReasoningEffort || undefined,
     toolPermissions: config.tools?.permissions ?? DEFAULT_TOOL_PERMISSIONS,
     mcpServers: config.mcp?.servers ?? [],
     sandboxEnabled: config.sandbox?.enabled ?? true,
@@ -527,7 +531,7 @@ export async function sendCompactRequest(
   onToken: TokenCallback,
   onDone: DoneCallback,
   onError: (err: string) => void,
-  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string }
 ): Promise<void> {
   log.info({ messageCount: messages.length }, 'sendCompactRequest called');
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
@@ -546,6 +550,8 @@ export async function sendCompactRequest(
   const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
   const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
+  const effectiveApiMode = modelConfig?.apiMode ?? config.global_model?.api_mode ?? '';
+  const effectiveReasoningEffort = modelConfig?.reasoningEffort ?? config.global_model?.reasoning_effort ?? '';
 
   const payload = {
     type: 'compact',
@@ -558,6 +564,8 @@ export async function sendCompactRequest(
     apiKey: effectiveApiKey || undefined,
     model: effectiveModel,
     baseUrl: effectiveBaseUrl,
+    apiMode: effectiveApiMode || undefined,
+    reasoningEffort: effectiveReasoningEffort || undefined,
   };
 
   let compactBuffer = '';
@@ -622,7 +630,7 @@ export async function sendSlashRequest(
   onToken: TokenCallback,
   onDone: DoneCallback,
   onError: (err: string) => void,
-  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string },
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string },
   workspaceRoot?: string
 ): Promise<void> {
   log.info({ text }, 'sendSlashRequest called');
@@ -641,6 +649,8 @@ export async function sendSlashRequest(
   const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
   const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
+  const effectiveApiMode = modelConfig?.apiMode ?? config.global_model?.api_mode ?? '';
+  const effectiveReasoningEffort = modelConfig?.reasoningEffort ?? config.global_model?.reasoning_effort ?? '';
 
   const payload = {
     type: 'slash',
@@ -650,6 +660,8 @@ export async function sendSlashRequest(
     apiKey: effectiveApiKey || undefined,
     model: effectiveModel,
     baseUrl: effectiveBaseUrl,
+    apiMode: effectiveApiMode || undefined,
+    reasoningEffort: effectiveReasoningEffort || undefined,
   };
 
   let slashBuffer = '';
@@ -701,7 +713,7 @@ export async function sendPaperRequest(
   onToken: TokenCallback,
   onDone: DoneCallback,
   onError: (err: string) => void,
-  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string }
+  modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string }
 ): Promise<void> {
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
 
@@ -718,6 +730,8 @@ export async function sendPaperRequest(
   const effectiveModel = modelConfig?.model ?? config.global_model?.model ?? '';
   const effectiveBaseUrl = modelConfig?.baseUrl ?? config.global_model?.base_url ?? '';
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
+  const effectiveApiMode = modelConfig?.apiMode ?? config.global_model?.api_mode ?? '';
+  const effectiveReasoningEffort = modelConfig?.reasoningEffort ?? config.global_model?.reasoning_effort ?? '';
 
   const payload = {
     type: 'paper',
@@ -729,6 +743,8 @@ export async function sendPaperRequest(
     apiKey: effectiveApiKey || undefined,
     model: effectiveModel,
     baseUrl: effectiveBaseUrl,
+    apiMode: effectiveApiMode || undefined,
+    reasoningEffort: effectiveReasoningEffort || undefined,
   };
 
   let paperBuffer = '';

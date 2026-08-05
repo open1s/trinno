@@ -2,7 +2,10 @@ import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
+import { createModuleLogger } from '../logging/logger.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
+
+const log = createModuleLogger('ai-summarizer');
 
 export interface SummarizationResult {
   summary: string;
@@ -63,6 +66,8 @@ Output ≤4 lines per block. Be precise, evidence-grounded, copy-ready.`,
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
     });
 
     this.agent = await builder.start();
@@ -175,7 +180,11 @@ Return ONLY a number between 0 and 100.`;
 
     const response = await streamAgent(this.agent!, prompt);
     const match = response.match(/\d+/);
-    return match ? Math.min(100, parseInt(match[0])) : 50;
+    if (!match) {
+      log.warn('Summarizer relevance: model returned no numeric score, defaulting to 50');
+      return 50;
+    }
+    return Math.min(100, parseInt(match[0]));
   }
 
   private parseResponse(response: string): SummarizationResult {

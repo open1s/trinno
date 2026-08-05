@@ -1,7 +1,7 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { getTypstLspClient, LspDiagnostic } from '../lsp/typst_lsp.js';
 import { createModuleLogger } from '../logging/logger.js';
 import { resolveInWorkspace } from '../config/workspaceGuard.js';
@@ -56,21 +56,24 @@ export function createTypstTools(workspaceRoot: string) {
         log.warn({ err: lspErr.message }, 'LSP failed, falling back to CLI');
 
         try {
-          const result = execSync(`typst compile "${resolvedPath}"`, {
+          const result = spawnSync('typst', ['compile', resolvedPath], {
             encoding: 'utf-8',
             timeout: 30000,
             maxBuffer: 10 * 1024 * 1024,
           });
-          return ok({ filePath, source: 'typst-cli', status: 'clean', output: result.trim() || 'Compiled successfully, no errors' });
-        } catch (e: any) {
-          const errText = e.stdout || e.stderr || e.message || '';
-          if (e.status === 1 && errText.includes('error:')) {
+          if (result.status === 0) {
+            return ok({ filePath, source: 'typst-cli', status: 'clean', output: (result.stdout || '').trim() || 'Compiled successfully, no errors' });
+          }
+          const errText = (result.stderr || result.stdout || '').toString();
+          if (result.status === 1 && errText.includes('error:')) {
             return ok({ filePath, source: 'typst-cli', status: 'issues', output: errText.trim() });
           }
-          if (e.code === 127 || errText.includes('command not found')) {
+          if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
             return err('typst not found. Install: brew install typst');
           }
-          return err(`Lint failed (exit ${e.status || e.code}): ${errText.trim()}`);
+          return err(`Lint failed (exit ${result.status}): ${errText.trim()}`);
+        } catch (e: any) {
+          return err(e.message || 'typst lint failed');
         }
       }
     });

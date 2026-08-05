@@ -118,7 +118,7 @@ export function buildContinuePrompt(plan: WritePlan, fileTail: string): string {
     fileTail || '(empty)',
     '```',
     '',
-    '**完成所有节后**：在最后一段输出末尾包含「本文撰写完成」或「${completeMarkerFor(plan.type)}」，系统会自动结束。',
+    `**完成所有节后**：在最后一段输出末尾包含「本文撰写完成」或 \`${completeMarkerFor(plan.type)}\`，系统会自动结束。`,
   ].join('\n');
 }
 

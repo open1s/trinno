@@ -137,6 +137,8 @@ interface ModelConfig {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  apiMode?: string;
+  reasoningEffort?: string;
 }
 
 const CONFIG_TOML_PATH = path.join(os.homedir(), '.bos', 'conf', 'config.toml');
@@ -158,6 +160,22 @@ function loadModelsFromConfig(): ModelConfig[] {
         if (v.model) { m.model = v.model; m.description = v.model; }
         if (v.base_url) m.baseUrl = v.base_url;
         if (v.api_key) m.apiKey = v.api_key;
+        if (v.api_mode) {
+          const apiMode = String(v.api_mode).toLowerCase();
+          if (apiMode === 'chat' || apiMode === 'responses') {
+            m.apiMode = apiMode;
+          } else {
+            log.warn({ model: name, value: v.api_mode }, `Ignoring invalid api_mode for [llm.${name}] — must be "chat" or "responses"`);
+          }
+        }
+        if (v.reasoning_effort) {
+          const effort = String(v.reasoning_effort).toLowerCase();
+          if (effort === 'low' || effort === 'medium' || effort === 'high') {
+            m.reasoningEffort = effort;
+          } else {
+            log.warn({ model: name, value: v.reasoning_effort }, `Ignoring invalid reasoning_effort for [llm.${name}] — must be "low", "medium" or "high"`);
+          }
+        }
         models.push(m);
       }
     }
@@ -494,6 +512,14 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
 }
 
 async function createNewSession(title?: string): Promise<void> {
+  if (isGenerating) {
+    cancelGeneration();
+    finalizeCurrentMessage();
+    clearQueue();
+    // Give worker time to process cancellation
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
   if (!sessionStore) {
     sessionStore = await loadSessionStore();
   }
@@ -1710,8 +1736,8 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
     },
     undefined,
     undefined,
+    currentSession?.id,
     currentSession?.brainOsSession,
-    undefined,
     undefined,
     selectedModelConfig,
     workspaceRoot,
@@ -1758,6 +1784,7 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
         currentSession.isCompacted = true;
         currentSession.totalInputTokens = 0;
         currentSession.totalOutputTokens = 0;
+        delete currentSession.brainOsSession;
         const compactSummaryMsg = createAssistantMessage();
         compactSummaryMsg.content = `## Session Compacted\n\n**${messagesCount}** messages summarized:\n\n${llmSummary}`;
         compactSummaryMsg.status = 'complete';
@@ -2096,6 +2123,7 @@ async function handleUserMessage(text: string): Promise<void> {
 
       // Save truncated session
       currentSession.messages = keptMessages;
+      delete currentSession.brainOsSession;
       updateSessionTimestamp(currentSession);
       await saveSession(currentSession);
       if (sessionStore) {
@@ -2410,6 +2438,7 @@ async function handleUserMessage(text: string): Promise<void> {
             const messagesCount = currentSession.messages.length;
             currentSession.compactedSummary = llmSummary;
             currentSession.isCompacted = true;
+            delete currentSession.brainOsSession;
             const compactSummaryMsg = createAssistantMessage();
             compactSummaryMsg.content = `## Session Compacted\n\n**${messagesCount}** messages summarized:\n\n${llmSummary}`;
             compactSummaryMsg.status = 'complete';
@@ -2444,6 +2473,7 @@ async function handleUserMessage(text: string): Promise<void> {
               chatView.webview.postMessage({ type: 'done', messageId: compactMsg.id } as any);
             }
             await new Promise(r => setTimeout(r, 500));
+            _autoCompactInProgress = false;
             await handleUserMessage(text);
           },
           (compactErr) => {
@@ -2496,7 +2526,9 @@ function finalizeCurrentMessage(): void {
   currentStreamingId = null;
 
   if (currentStreamingMsg) {
-    currentStreamingMsg.status = 'complete';
+    if (currentStreamingMsg.status !== 'error') {
+      currentStreamingMsg.status = 'complete';
+    }
     currentStreamingMsg = null;
   }
 
@@ -2553,6 +2585,15 @@ function computeTokenUsage(): { input: number; output: number; total: number } {
   return { input: 0, output: 0, total: 0 };
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function getWebviewHtml(webview: vscode.Webview): string {
   const extUri = extensionContext?.extensionUri ?? vscode.Uri.file(__dirname);
   const styleUri = webview.asWebviewUri(
@@ -2571,12 +2612,15 @@ function getWebviewHtml(webview: vscode.Webview): string {
     vscode.Uri.joinPath(extUri, 'dist', 'chat', 'webview', 'lib', 'mermaid.min.js')
   ).toString();
 
+  const personaName = escapeHtml(getChatConfig().persona?.name ?? 'Research Assistant');
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${getChatConfig().persona?.name ?? 'Research Assistant'}</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: https:; script-src ${webview.cspSource} 'unsafe-inline'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} data:; connect-src ${webview.cspSource} https: wss:">
+  <title>${personaName}</title>
   <link rel="stylesheet" href="${styleUri}">
   <script src="${markedUri}"></script>
   <script src="${mermaidUri}"></script>

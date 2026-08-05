@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { createCodingTools } from '../../bos/infrastructure/http/coding_tools.js';
 
-describe('Tool cancellation & timeout (bash/exec_tool)', function () {
+describe('Tool cancellation & timeout (bash)', function () {
   let testDir: string;
 
   before(() => {

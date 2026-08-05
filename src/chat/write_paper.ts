@@ -443,7 +443,8 @@ export function buildPaperPrompt(title: string, data: ResearchData, paperType?: 
   sections.push('3. 内容专业、逻辑清晰、学术规范；evidence 行内注明 score/weight；decision factors 与 risks 显式列出');
   sections.push('4. 不要编造参数编号、案例、数据；不确定时调用 websearch');
   sections.push('5. 所有汉字必须为有效 UTF-8，不可出现乱码、缺字或编码错误');
-  sections.push('6. 请基于以下数据撰写完整论文，直接输出 markdown 格式内容，不要包含任何 XML 标签或 JSON。文末追加"## 验证实验"清单');
+  sections.push('6. 参考文献只能引用下面提供的数据源；任何无法从提供数据验证的引用不得写入，必须写入时显式标注"未经源数据验证"');
+  sections.push('7. 请基于以下数据撰写完整论文，直接输出 markdown 格式内容，不要包含任何 XML 标签或 JSON。文末追加"## 验证实验"清单（含验证方法、预期结果、判定标准）');
 
   if (targetJournal) {
     sections.push(`\n### 目标期刊要求\n目标期刊：**${targetJournal}**`);
@@ -494,6 +495,6 @@ export function buildPaperPrompt(title: string, data: ResearchData, paperType?: 
     sections.push('## 阶段报告\n' + data.reportMd + '\n');
   }
 
-  sections.push('\n请基于以上数据撰写完整论文，直接输出 markdown 格式内容（≤4 行/段、importance-weighted、copy-ready），不要包含任何 XML 标签或 JSON。文末追加"## ≤3-Day Validation 实验"清单。');
+  sections.push('\n请基于以上数据撰写完整论文，直接输出 markdown 格式内容（≤4 行/段、importance-weighted、copy-ready），不要包含任何 XML 标签或 JSON。');
   return sections.join('\n');
 }

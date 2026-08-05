@@ -104,6 +104,22 @@ suite('incremental_writer', () => {
     assert.ok(p.includes('继续') || p.includes('下一节') || p.includes('append'));
   });
 
+  test('buildContinuePrompt interpolates the completion marker (V&V)', () => {
+    const paper = buildContinuePrompt(
+      { type: 'paper', title: 'X', writePath: 'paper.md' },
+      ''
+    );
+    assert.ok(paper.includes(COMPLETE_MARKER_PAPER), 'paper prompt must contain PAPER_COMPLETE marker');
+    assert.ok(!paper.includes('${completeMarkerFor'), 'marker must not remain as literal template text');
+    assert.ok(paper.includes(COMPLETE_MARKER_PAPER + '`'), 'marker must be delimited as code');
+
+    const patent = buildContinuePrompt(
+      { type: 'patent', title: 'Y', writePath: 'patent.md' },
+      ''
+    );
+    assert.ok(patent.includes(COMPLETE_MARKER_PATENT), 'patent prompt must contain PATENT_COMPLETE marker');
+  });
+
   test('isWriteType validates values', () => {
     assert.ok(isWriteType('paper'));
     assert.ok(isWriteType('patent'));

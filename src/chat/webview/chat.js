@@ -2207,7 +2207,7 @@ function renderTodoBadges() {
           break;
         }
 
-        const isBackgroundTool = toolName === 'bash' || toolName === 'exec_tool';
+        const isBackgroundTool = toolName === 'bash';
         const newTool = { name: toolName, status: 'running', result: '', background: isBackgroundTool };
         if (msgArgs !== undefined) newTool.args = msgArgs;
         if (msgToolId) newTool.id = msgToolId;
@@ -2303,11 +2303,6 @@ function renderTodoBadges() {
       if (typeof v === 'number' || typeof v === 'boolean') return String(v);
       return undefined;
     };
-    const argArray = (key) => {
-      if (!parsed || typeof parsed !== 'object') return undefined;
-      const v = parsed[key];
-      return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))) : undefined;
-    };
 
     if (toolName === 'bash') {
       const cmd = argValue('command') ?? argValue('cmd');
@@ -2317,12 +2312,6 @@ function renderTodoBadges() {
         const bkpCmd = (typeof backup === 'object' && backup !== null) ? (backup.command || backup.cmd) : undefined;
         if (bkpCmd) return `${shortenToolLabel(bkpCmd, 80)}`;
       }
-    }
-    if (toolName === 'exec_tool') {
-      const cmd = argValue('command');
-      const arr = argArray('args');
-      const parts = [cmd, ...(arr ?? [])].filter(Boolean).map((s) => shortenToolLabel(s, 40));
-      if (parts.length > 0) return `${parts.join(' ')}`;
     }
     const singlePathArgs = ['filePath', 'filepath', 'path', 'file', 'target', 'target_file'];
     for (const k of singlePathArgs) {

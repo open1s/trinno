@@ -77,8 +77,10 @@ function resolveCookieJarPath(): string | null {
   return path.join(os.homedir(), '.trinno', 'cookie-jar.json');
 }
 
-function loadCookieJar(filePath: string | undefined): Map<string, string> {
-  const jar = new Map<string, string>();
+type CookieJar = Map<string, Map<string, string>>;
+
+function loadCookieJar(filePath: string | undefined): CookieJar {
+  const jar: CookieJar = new Map();
   const p = filePath || resolveCookieJarPath();
   if (!p) return jar;
   try {
@@ -86,7 +88,14 @@ function loadCookieJar(filePath: string | undefined): Map<string, string> {
       const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
       if (Array.isArray(data)) {
         for (const entry of data) {
-          if (entry?.name && entry?.value) jar.set(entry.name, entry.value);
+          if (entry?.name && entry?.value && typeof entry.domain === 'string') {
+            let cookies = jar.get(entry.domain);
+            if (!cookies) {
+              cookies = new Map();
+              jar.set(entry.domain, cookies);
+            }
+            cookies.set(entry.name, entry.value);
+          }
         }
       }
     }
@@ -96,13 +105,18 @@ function loadCookieJar(filePath: string | undefined): Map<string, string> {
   return jar;
 }
 
-function saveCookieJar(jar: Map<string, string>, filePath: string | undefined): void {
+function saveCookieJar(jar: CookieJar, filePath: string | undefined): void {
   const p = filePath || resolveCookieJarPath();
   if (!p) return;
   try {
     const dir = path.dirname(p);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const entries = Array.from(jar.entries()).map(([name, value]) => ({ name, value }));
+    const entries: Array<{ domain: string; name: string; value: string }> = [];
+    for (const [domain, cookies] of jar) {
+      for (const [name, value] of cookies) {
+        entries.push({ domain, name, value });
+      }
+    }
     fs.writeFileSync(p, JSON.stringify(entries), 'utf-8');
   } catch {
     log.warn({ cookieJarPath: p }, 'failed to save cookie jar');
@@ -118,16 +132,41 @@ function parseSetCookie(header: string): { name: string; value: string } | null 
   return name ? { name, value } : null;
 }
 
-function mergeCookies(jar: Map<string, string>, setCookies: string[]): void {
-  for (const cs of setCookies) {
-    const parsed = parseSetCookie(cs);
-    if (parsed) jar.set(parsed.name, parsed.value);
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
   }
 }
 
-function buildCookieHeader(jar: Map<string, string>): string | undefined {
-  if (jar.size === 0) return undefined;
-  return Array.from(jar.entries()).map(([k, v]) => `${k}=${v}`).join('; ');
+function mergeCookies(jar: CookieJar, setCookies: string[], url: string): void {
+  const host = hostnameOf(url);
+  if (!host) return;
+  for (const cs of setCookies) {
+    const parsed = parseSetCookie(cs);
+    if (parsed) {
+      let cookies = jar.get(host);
+      if (!cookies) {
+        cookies = new Map();
+        jar.set(host, cookies);
+      }
+      cookies.set(parsed.name, parsed.value);
+    }
+  }
+}
+
+function buildCookieHeader(jar: CookieJar, url: string): string | undefined {
+  const host = hostnameOf(url);
+  if (!host) return undefined;
+  const parts: string[] = [];
+  for (const [domain, cookies] of jar) {
+    if (domain === host || host.endsWith('.' + domain)) {
+      for (const [name, value] of cookies) parts.push(`${name}=${value}`);
+    }
+  }
+  if (parts.length === 0) return undefined;
+  return parts.join('; ');
 }
 
 function isRetryableStatus(status: number, extraStatuses?: number[]): boolean {
@@ -204,7 +243,7 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
         const doRedirect = redirect !== false && redirect !== 'manual';
 
         for (let hop = 0; hop <= maxRedirects; hop++) {
-          const cookieHeader = doRedirect ? undefined : buildCookieHeader(cookieJar);
+          const cookieHeader = doRedirect ? undefined : buildCookieHeader(cookieJar, currentUrl);
           const reqHeaders: Record<string, string> = {
             'User-Agent': userAgent,
             'Accept': accept,
@@ -226,7 +265,7 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
 
           if (!doRedirect) {
             const setCookies = fetchRes.headers.getSetCookie();
-            mergeCookies(cookieJar, setCookies);
+            mergeCookies(cookieJar, setCookies, currentUrl);
             for (const cs of setCookies) {
               const parsed = parseSetCookie(cs);
               if (parsed) collectedCookies.push(parsed);

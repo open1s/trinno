@@ -29,7 +29,7 @@ export const sandboxCommand: SlashCommand = {
       if (os === 'darwin') lines.push('Install Xcode Command Line Tools for sandbox-exec.');
       if (os === 'linux') lines.push('Install bubblewrap (`apt install bubblewrap` or `dnf install bubblewrap`).');
       if (os === 'win32') lines.push('Install Sysinternals PsExec (`psexec`) for basic sandbox, or use Windows Pro/Enterprise for AppContainer sandbox.');
-      lines.push('Without a sandbox tool, `bash`/`exec_tool` commands can still escape the workspace.');
+      lines.push('Without a sandbox tool, `bash` commands can still escape the workspace.');
       lines.push('The tool wrapper (file path validation) is ALWAYS active regardless of sandbox status.');
     } else {
       lines.push(`Sandbox is active via \`${available}\`. Shell commands are restricted.`);

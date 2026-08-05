@@ -24,6 +24,9 @@ environment = "release"
 # model = "REPLACE_ME_WITH_MODEL"
 # base_url = "REPLACE_ME_WITH_BASE_URL"
 # api_key = "REPLACE_ME_WITH_YOUR_API_KEY"
+# api_mode = "responses"          # "chat" (default) or "responses" (OpenAI Responses API, e.g. for DeepSeek)
+# reasoning_effort = "high"       # "low" | "medium" | "high" — thinking effort for reasoning-capable models
+
 
 # Named LLM providers (uncomment and fill api_key for each you use)
 # [llm.minimax3]
@@ -50,6 +53,8 @@ environment = "release"
 # model = "nvidia/deepseek-ai/deepseek-v4-pro"
 # base_url = "http://127.0.0.1:11436/v1"
 # api_key = "REPLACE_ME_WITH_YOUR_API_KEY"
+# api_mode = "responses"          # "chat" (default) or "responses" (OpenAI Responses API, e.g. for DeepSeek)
+# reasoning_effort = "high"       # "low" | "medium" | "high" — thinking effort for reasoning-capable models
 
 [agent]
 max_iterations = 100

@@ -124,4 +124,36 @@ describe('E2E: Model Switch — config propagation to ezbos AgentBuilder', funct
     assert.strictEqual(cfg2.apiKey, keyB,
       'second create() must NOT reuse apiKey A from first create()');
   });
+
+  it('propagates apiMode/reasoningEffort to ezbos AgentBuilder config', function () {
+    const builder = factory.create({
+      name: 'test',
+      systemPrompt: 'test',
+      model: 'nvidia/deepseek-ai/deepseek-v4-pro',
+      baseUrl: 'http://127.0.0.1:11436/v1',
+      apiKey: 'nvapi-test-key',
+      apiMode: 'responses',
+      reasoningEffort: 'high',
+    });
+
+    const cfg = (builder as any)._config;
+    assert.strictEqual(cfg.apiMode, 'responses',
+      'apiMode must reach the ezbos AgentBuilder config');
+    assert.strictEqual(cfg.reasoningEffort, 'high',
+      'reasoningEffort must reach the ezbos AgentBuilder config');
+  });
+
+  it('omits apiMode/reasoningEffort when not provided', function () {
+    const builder = factory.create({
+      name: 'test',
+      systemPrompt: 'test',
+      model: 'gpt-4o',
+    });
+
+    const cfg = (builder as any)._config;
+    assert.strictEqual(cfg.apiMode, undefined,
+      'apiMode should stay undefined when not provided (falls back to engine default)');
+    assert.strictEqual(cfg.reasoningEffort, undefined,
+      'reasoningEffort should stay undefined when not provided');
+  });
 });

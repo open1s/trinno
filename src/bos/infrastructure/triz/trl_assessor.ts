@@ -2,6 +2,7 @@ import { Agent, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
+import { createModuleLogger } from '../logging/logger.js';
 import {
   TRLAssessment,
   TRLEvidence,
@@ -13,6 +14,8 @@ import {
 import { SCurveStage } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
 import trlCriteria from '../../domain/triz/trl_criteria.json';
+
+const log = createModuleLogger('ai-trl-assessor');
 
 export interface TRLAssessmentInput {
   technologyName: string;
@@ -97,6 +100,8 @@ Return ONLY valid JSON. No markdown, no explanation outside JSON. ≤4 lines per
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
+      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
+      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
     });
 
     this.agent = await builder.start();
@@ -190,9 +195,12 @@ ${getLanguagePrompt(this.locale.language)}`;
           reconciliation: parsed.reconciliation || 'TRL and S-Curve stages are aligned',
         };
       }
-    } catch {
+    } catch (err) {
+      log.warn({ err: String(err) }, 'TRL assessor: model output was not valid JSON, using default assessment');
+      return this.getDefaultAssessment(input);
     }
 
+    log.warn('TRL assessor: model returned no JSON object, using default assessment');
     return this.getDefaultAssessment(input);
   }
 

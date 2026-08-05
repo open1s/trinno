@@ -24,6 +24,8 @@ export interface AgentConfig {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  apiMode?: string;
+  reasoningEffort?: string;
   maxTokens?: number;
   timeoutSecs?: number;
   tools?: any[];
@@ -77,6 +79,8 @@ class BuilderLru {
       config.model ?? '-',
       config.baseUrl ?? '-',
       config.apiKey ?? '-',
+      config.apiMode ?? '-',
+      config.reasoningEffort ?? '-',
       fnv1aHash(config.systemPrompt),
       fnv1aHash(toolSig),
       fnv1aHash(hookSig),
@@ -319,6 +323,12 @@ class AgentFactory {
     }
     if (config.timeoutSecs) {
       builder = builder.with_timeout(config.timeoutSecs);
+    }
+    if (config.apiMode) {
+      builder = builder.with_apiMode(config.apiMode);
+    }
+    if (config.reasoningEffort) {
+      builder = builder.with_reasoningEffort(config.reasoningEffort);
     }
 
     for (const server of mcpServers) {

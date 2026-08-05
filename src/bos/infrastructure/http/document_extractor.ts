@@ -100,6 +100,7 @@ function isDownloadUrl(u: string): boolean {
 
 function matchesPublisher(u: string): boolean {
   for (const p of PUBLISHER_PATTERNS) {
+    p.lastIndex = 0;
     if (p.test(u)) return true;
   }
   return false;
