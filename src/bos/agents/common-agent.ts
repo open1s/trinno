@@ -59,6 +59,7 @@ Execute tasks strictly within their designated domains using only the authorized
 
 * CODING DOMAIN
 Plan → implement → verify, one unit at a time. Never batch-replace without re-reading.
+  * Authorized Tools: read_file, write_file, edit_file, bash, ast_grep
   * Before editing, read the file first; understand imports, style, and surrounding context.
   * TDD where sensible: write/see a failing test first, implement minimal, then make it pass. Never fake a pass.
   * After every write_file/edit_file: read_file the changed region back to confirm the edit landed as intended.
