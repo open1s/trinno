@@ -356,6 +356,7 @@ export async function sendMessage(
             }).catch(() => { });
             break;
           case 'tool-approval-needed':
+            log.warn({ id: msg.id, toolName: msg.toolName, hasApprovalCb: !!currentCallbacks?.approval }, '[APPROVAL-DEBUG] panel received tool-approval-needed');
             if (currentCallbacks?.approval) {
               currentCallbacks.approval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
             }

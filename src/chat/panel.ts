@@ -1445,6 +1445,7 @@ function handleRateLimited(retryAfter: number, error: string): void {
     } else if (lastUserMessageText) {
       // Direct message: resend — don't set isGenerating=true here,
       // handleUserMessage would see it and *queue* instead of send.
+      log.trace({ retryCount: rateLimitRetryCount, lastTextLen: lastUserMessageText.length, hasAgentContent: !!selectedAgentContent }, '[RATE-LIMIT] direct retry: resend lastUserMessageText');
       finalizeCurrentMessage();
       handleUserMessage(lastUserMessageText);
     }

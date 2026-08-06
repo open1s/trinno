@@ -157,6 +157,10 @@
     } catch { /* best effort */ }
   }
 
+  try {
+    trinnoLog('warn', { event: 'WEBVIEW_BOOT', probe: 'v5-approval-fix', ts: Date.now() });
+  } catch { }
+
   init();
 
   function updateStatusBar() {
@@ -2102,6 +2106,7 @@ function renderTodoBadges() {
       autoRetryTimer = null;
     }
     clearWelcome();
+    trinnoLog('debug', { event: 'startAssistantMessage', messageId, prevIsGenerating: isGenerating, hasMsgEl: !!currentMessageEl, hasContentEl: !!currentContentEl });
     isGenerating = true;
     // Don't change button if there are queued messages
     if (messageQueue.length === 0) {
@@ -2148,13 +2153,20 @@ function renderTodoBadges() {
     currentContentEl.className = 'message-content';
     currentContentEl.style.display = 'none';
     currentMessageEl.appendChild(currentContentEl);
+    trinnoLog('debug', { event: 'startAssistantMessage.content', messageId, hasContentEl: !!currentContentEl, hasMsgEl: !!currentMessageEl });
 
     messagesContainer.appendChild(currentMessageEl);
   }
 
   function appendToken(msg) {
-    if (!currentContentEl && !currentReasoningContentEl) return;
-    if (!currentMessageEl) return;
+    if (!currentContentEl && !currentReasoningContentEl) {
+      trinnoLog('debug', { event: 'appendToken.DROP', reason: 'no-content-el', tokenType: msg.tokenType });
+      return;
+    }
+    if (!currentMessageEl) {
+      trinnoLog('debug', { event: 'appendToken.DROP', reason: 'no-msg-el', tokenType: msg.tokenType });
+      return;
+    }
 
     const tokenType = msg.tokenType;
     const text = msg.text || '';
@@ -2463,13 +2475,23 @@ function renderTodoBadges() {
   function showToolApproval(id, toolName, args, metadata, bashIntent) {
     pendingApproval = { id, toolName, args };
 
+    if (!currentMessageEl) {
+      trinnoLog('debug', { event: 'showToolApproval.DROP', reason: 'no-currentMessageEl', id, toolName, isGenerating });
+      startAssistantMessage(id || 'approval-' + id);
+      trinnoLog('debug', { event: 'showToolApproval.RECOVERED', id, toolName, created: !!currentMessageEl });
+    }
+
     if (!currentMessageEl) return;
 
     let toolsSection = currentMessageEl.querySelector('.tool-section');
     if (!toolsSection) {
       toolsSection = document.createElement('div');
       toolsSection.className = 'tool-section';
-      currentMessageEl.insertBefore(toolsSection, currentContentEl);
+      if (currentContentEl) {
+        currentMessageEl.insertBefore(toolsSection, currentContentEl);
+      } else {
+        currentMessageEl.appendChild(toolsSection);
+      }
     }
 
     window.__lastApprovalArgs = args;
@@ -2550,6 +2572,7 @@ function renderTodoBadges() {
     `;
 
     toolsSection.appendChild(approvalEl);
+    trinnoLog('debug', { event: 'showToolApproval.RENDERED', id, toolName, hasMsgEl: !!currentMessageEl, msgInDom: currentMessageEl ? messagesContainer.contains(currentMessageEl) : false, contentElDisplay: currentContentEl ? currentContentEl.style.display : 'n/a', collapsible: messagesContainer.contains(toolsSection) });
     scrollToBottom();
   }
 
@@ -2583,10 +2606,17 @@ window.__denyTool = function(id) {
 
   function showRateLimited(messageId, retryAfter, userText) {
     const msgEl = document.getElementById(messageId);
-    if (!msgEl) return;
+    if (!msgEl) {
+      trinnoLog('debug', { event: 'showRateLimited.NO_MSG_EL', messageId });
+      return;
+    }
 
     const contentEl = msgEl.querySelector('.message-content');
-    if (!contentEl) return;
+    if (!contentEl) {
+      trinnoLog('debug', { event: 'showRateLimited.NO_CONTENT_EL', messageId });
+      return;
+    }
+    trinnoLog('debug', { event: 'showRateLimited', messageId, retryAfter, hasUserText: !!userText, isGenerating, hasMsgEl: !!currentMessageEl, hasContentEl: !!currentContentEl });
 
     contentEl.innerHTML = '';
     const wrapper = document.createElement('div');
@@ -2613,6 +2643,7 @@ window.__denyTool = function(id) {
     retryBtn.textContent = 'Retry Now';
     retryBtn.addEventListener('click', () => {
       wrapper.style.display = 'none';
+      trinnoLog('debug', { event: 'rateLimited.retryNow', messageId, isGenerating, hasMsgEl: !!currentMessageEl, hasContentEl: !!currentContentEl });
       vscode.postMessage({ type: 'rate-limited-retry', messageId });
     });
     btnGroup.appendChild(retryBtn);
