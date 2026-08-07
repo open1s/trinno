@@ -897,7 +897,7 @@ ${conversationText}
     ...(baseUrl ? { baseUrl } : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(apiMode ? { apiMode } : {}),
-    reasoningEffort: 'low',
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   });
 
   const started = await agent.start();
@@ -932,7 +932,7 @@ ${conversationText}
             const compactIn = compactMetrics?.totalInputTokens ?? 0;
             const compactOut = compactMetrics?.totalOutputTokens ?? 0;
             log.trace({ inputTokens: compactIn, outputTokens: compactOut, totalTokens: compactIn + compactOut }, '[TOKEN] worker: compact done');
-            emit('done', { compacted: true });
+            emit('done', { compacted: true, summary: compactText.trim() });
             resolve();
             break;
           case 'Error':

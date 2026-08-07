@@ -1773,10 +1773,30 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
     sendCompactRequest(
       compactMsgs,
       session.compactedSummary || undefined,
-      (tokenMsg) => { chatView?.webview.postMessage(tokenMsg); },
-      async () => {
+      (tokenMsg) => {
+        chatView?.webview.postMessage(tokenMsg);
+        if (currentStreamingMsg && tokenMsg.type === 'token') {
+          if (tokenMsg.tokenType === 'ReasoningContent') {
+            currentStreamingMsg.reasoning += tokenMsg.text;
+          } else if (tokenMsg.tokenType === 'Text') {
+            currentStreamingMsg.content += tokenMsg.text;
+          } else if (tokenMsg.tokenType === 'Usage') {
+            _streamingPromptTokens = tokenMsg.promptTokens ?? 0;
+            _streamingCompletionTokens = tokenMsg.completionTokens ?? 0;
+            chatView?.webview.postMessage({
+              type: 'token-usage',
+              usage: {
+                input: tokenMsg.promptTokens ?? 0,
+                output: tokenMsg.completionTokens ?? 0,
+                total: (tokenMsg.promptTokens ?? 0) + (tokenMsg.completionTokens ?? 0),
+              },
+            } as any);
+          }
+        }
+      },
+      async (doneData?: any) => {
         if (!currentSession || !currentStreamingMsg) return;
-        let llmSummary = currentStreamingMsg.content.trim();
+        let llmSummary = (doneData?.summary || currentStreamingMsg.content).trim();
         if (!llmSummary) {
           llmSummary = `Session compacted — ${currentSession.messages.length} previous messages summarized.`;
         }
@@ -1958,7 +1978,7 @@ async function handleUserMessage(text: string): Promise<void> {
         if (!currentSession) return;
 
         if (currentStreamingMsg) {
-          let llmSummary = currentStreamingMsg.content.trim();
+          let llmSummary = (_?.summary || currentStreamingMsg.content).trim();
           if (!llmSummary) {
             llmSummary = `Session compacted — ${beforeCount} previous messages summarized.`;
           }
@@ -2429,10 +2449,30 @@ async function handleUserMessage(text: string): Promise<void> {
         const compactMsgs: CompactMessage[] = currentSession.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
         sendCompactRequest(compactMsgs, currentSession.compactedSummary || undefined,
-          (tokenMsg) => { chatView?.webview.postMessage(tokenMsg); },
-          async () => {
+          (tokenMsg) => {
+            chatView?.webview.postMessage(tokenMsg);
+            if (currentStreamingMsg && tokenMsg.type === 'token') {
+              if (tokenMsg.tokenType === 'ReasoningContent') {
+                currentStreamingMsg.reasoning += tokenMsg.text;
+              } else if (tokenMsg.tokenType === 'Text') {
+                currentStreamingMsg.content += tokenMsg.text;
+              } else if (tokenMsg.tokenType === 'Usage') {
+                _streamingPromptTokens = tokenMsg.promptTokens ?? 0;
+                _streamingCompletionTokens = tokenMsg.completionTokens ?? 0;
+                chatView?.webview.postMessage({
+                  type: 'token-usage',
+                  usage: {
+                    input: tokenMsg.promptTokens ?? 0,
+                    output: tokenMsg.completionTokens ?? 0,
+                    total: (tokenMsg.promptTokens ?? 0) + (tokenMsg.completionTokens ?? 0),
+                  },
+                } as any);
+              }
+            }
+          },
+          async (doneData?: any) => {
             if (!currentSession || !currentStreamingMsg) return;
-            let llmSummary = currentStreamingMsg.content.trim();
+            let llmSummary = (doneData?.summary || currentStreamingMsg.content).trim();
             if (!llmSummary) {
               llmSummary = `Session compacted — ${currentSession.messages.length} previous messages summarized.`;
             }
