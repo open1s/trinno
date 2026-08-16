@@ -595,6 +595,7 @@ export async function sendCompactRequest(
             onToken(buildTokenMsg(msg));
             break;
           case 'done':
+            if (msg.compacted !== true) break;
             drainRemainingLines(compactBuffer);
             compactBuffer = '';
             cleanup();

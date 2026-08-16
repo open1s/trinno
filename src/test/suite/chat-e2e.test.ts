@@ -87,12 +87,18 @@ suite('E2E: Chat Retry Cap', () => {
 		assert.ok(isRateLimitedForTest('rate limit exceeded'));
 		assert.ok(isRateLimitedForTest('Rate-limit reached'));
 		assert.ok(isRateLimitedForTest('Too many requests, slow down'));
+		assert.ok(isRateLimitedForTest('HTTP 429 Too Many Requests: {"status":429,"title":"Too Many Requests"}'), 'real aibroker format');
+		assert.ok(isRateLimitedForTest('Session error: LLM error: HTTP 429 Too Many Requests: {"status":429,"title":"Too Many Requests"}'), 'real aibroker format with prefix');
+		assert.ok(isRateLimitedForTest('Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached, please retry in 8 seconds"}}'), 'anthropic style');
+		assert.ok(isRateLimitedForTest('Error: 429 - Rate limit reached. Please retry in 12 seconds. (request id: abc123)'), 'openai style');
 		assert.ok(!isRateLimitedForTest('500 Internal Server Error'));
 		assert.ok(!isRateLimitedForTest('Context overflow'));
 		assert.ok(!isRateLimitedForTest(''));
 		assert.ok(!isRateLimitedForTest('timeout: request timed out'));
 		assert.ok(!isRateLimitedForTest('stream timed out after 4290ms'));
 		assert.ok(!isRateLimitedForTest('upstream timeout'));
+		assert.ok(!isRateLimitedForTest('max_tokens must be <= 429 tokens, reduce input'), 'fake 429: bare number in a param constraint');
+		assert.ok(!isRateLimitedForTest('request failed, retry count: 429 attempts'), 'fake 429: bare number in unrelated text');
 	});
 
 	test('rate-limit retry counter starts at 0 with max 3', async () => {

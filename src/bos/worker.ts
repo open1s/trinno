@@ -472,8 +472,12 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 }
 
 function isRateLimited(errorMsg: string): boolean {
-  // Match only standalone "429" (HTTP status code), not as part of a larger number like "4290"
-  return /\b429\b|rate.?limit|too many requests/i.test(errorMsg);
+  // Only genuine HTTP 429 rate-limit errors. A bare "429" that is not an HTTP
+  // status (e.g. "max_tokens <= 429", "4290ms") must NOT count as rate-limited.
+  const http429 =
+    /HTTP\s*\/?[^\d]{0,8}\b429\b|(?:status|code)\s*[:=]\s*"?\s*429\b|"status"\s*:\s*429\b|429\s+(?:Too Many Requests|rate)/i;
+  const rateWords = /rate.?limit|too many requests|rate_limit_error/i;
+  return http429.test(errorMsg) || rateWords.test(errorMsg);
 }
 
 // Cap each tool result to ~25K tokens to avoid exceeding LLM context window
@@ -1617,6 +1621,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       }
       const msg = rounds[roundIndex]!;
       let todowriteCalledThisRound = false;
+      let roundStopped = false;
 
       let roundText = '';
 
@@ -1729,8 +1734,10 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
                 const retryAfter = parseRetryAfter(token.error);
                 log.warn({ sessionId, error: token.error, retryAfter }, '[RATE-LIMIT] worker received 429 from LLM');
                 localEmit('rate-limited', { retryAfter, error: token.error });
+                roundStopped = true;
               } else {
                 localEmit('error', { error: token.error });
+                roundStopped = true;
               }
               resolve();
               break;
@@ -1738,6 +1745,13 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
           }
         }, localEmit, resolve));
       });
+
+      // An LLM error aborts the round — do NOT continue pushing more rounds against
+      // an (likely oversized/failing) session; further errors would leak into whatever
+      // handler replaced this chat (e.g. an auto-compact), corrupting its stream.
+      if (roundStopped) {
+        break;
+      }
 
       // After each round, store output for stuck detection
       const prevRoundContent = lastRoundContent;

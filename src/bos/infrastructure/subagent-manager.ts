@@ -34,7 +34,10 @@ const MAX_SUBAGENT_RETRIES = 3;
 const SUBAGENT_RETRY_BACKOFF_MS = 2000;
 
 function isRateLimited(msg: string): boolean {
-  return /\b429\b|rate.?limit|too many requests/i.test(msg);
+  const http429 =
+    /HTTP\s*\/?[^\d]{0,8}\b429\b|(?:status|code)\s*[:=]\s*"?\s*429\b|"status"\s*:\s*429\b|429\s+(?:Too Many Requests|rate)/i;
+  const rateWords = /rate.?limit|too many requests|rate_limit_error/i;
+  return http429.test(msg) || rateWords.test(msg);
 }
 
 function parseRetryAfter(msg: string): number {

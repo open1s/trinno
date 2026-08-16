@@ -2434,9 +2434,10 @@ async function handleUserMessage(text: string): Promise<void> {
           currentStreamingMsg.status = 'error';
           currentStreamingMsg.error = err;
         }
+        const erroredMessageId = currentStreamingId ?? '';
         finalizeCurrentMessage();
 
-        chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: 'Context overflow — auto-compacting and retrying...' } as ExtToWebViewMessage);
+        chatView.webview.postMessage({ type: 'error', messageId: erroredMessageId, error: 'Context overflow — auto-compacting and retrying...' } as ExtToWebViewMessage);
 
         const compactMsg = createAssistantMessage();
         currentStreamingId = compactMsg.id;
