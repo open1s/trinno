@@ -364,7 +364,7 @@ export const autoCommand: SlashCommand = {
       `| Logs | \`08_AutoResearch/experiments/\` |`,
       '',
     ].join('\n') });
-    emit('done', {});
+    emit('done', { autoStarted: true, hypothesis });
   },
 };
 

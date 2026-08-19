@@ -93,11 +93,17 @@ function loadSkillsFromHomeDir(): SkillInfo[] {
 }
 
 function loadSkillForSlashCommand(): SkillInfo[] {
-  const commands = loadSkillsFromDir(path.join(os.homedir(), '.bos', 'commands'));
+  const sources = [
+    path.join(os.homedir(), '.bos', 'commands'),
+    path.join(os.homedir(), '.agents', 'skills'),
+    path.join(os.homedir(), '.bos', 'skills'),
+  ];
 
   const skillMap = new Map<string, SkillInfo>();
-  for (const skill of commands) {
-    skillMap.set(skill.name, skill);
+  for (const dir of sources) {
+    for (const skill of loadSkillsFromDir(dir)) {
+      skillMap.set(skill.name, skill);
+    }
   }
   return Array.from(skillMap.values());
 }
@@ -2185,7 +2191,11 @@ async function handleUserMessage(text: string): Promise<void> {
     }
   }
 
-  const unknownSlash = text.match(/^\/([a-zA-Z][\w-]*)(\s+.*)?$/);
+  // Skill commands route through the normal chat path (detectSkillCommand below)
+  // so the skill content reaches the LLM and the response streams into the chat
+  // UI. Without this, skill commands hit the worker's slash registry which only
+  // echoes "Skill activated" and never invokes the LLM.
+  const unknownSlash = !detectSkillCommand(text) && text.match(/^\/([a-zA-Z][\w-]*)(\s+.*)?$/);
   if (unknownSlash) {
     const userMsg = createUserMessage(text);
     currentSession.messages.push(userMsg);
@@ -2221,7 +2231,7 @@ async function handleUserMessage(text: string): Promise<void> {
           }
         }
       },
-      () => {
+      (doneMsg) => {
         if (chatView) chatView.webview.postMessage({ type: 'done', messageId: assistantMsg.id } as any);
         if (chatView) {
           chatView.webview.postMessage({
@@ -2245,6 +2255,19 @@ async function handleUserMessage(text: string): Promise<void> {
             });
             return;
           }
+        }
+
+        // AutoResearch: when /auto <hypothesis> starts a loop, run the first
+        // iteration immediately instead of waiting for the next user message.
+        // The worker wrote 08_AutoResearch/auto_state.json during the slash
+        // command; the auto-triggered message consumes it and injects the
+        // AutoResearch protocol into the agent.
+        if ((doneMsg as any)?.autoStarted === true) {
+          processQueue();
+          setImmediate(() => {
+            handleUserMessage('Begin the AutoResearch iteration now. Follow the injected AutoResearch protocol: read scope.md and eval.md, then execute propose → act → evaluate → ratchet.').catch(() => { });
+          });
+          return;
         }
         processQueue();
       },
