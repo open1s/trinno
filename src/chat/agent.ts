@@ -40,7 +40,7 @@ function buildTokenMsg(raw: any): ExtToWebViewMessage {
 }
 
 type DoneCallback = (data?: any) => void;
-type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
+export type ApprovalCallback = (id: string, toolName: string, args: Record<string, unknown>, metadata?: { description: string; dangerous: boolean; category: string }, bashIntent?: { action: string; target: string; risk: 'high' | 'medium' | 'low' }) => void;
 type RateLimitedCallback = (retryAfter: number, error: string) => void;
 
 export const agentEvents = new EventEmitter();
@@ -59,6 +59,14 @@ let workerReady = false;
 let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined; messageId?: string } | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
+// Persistent approval UI callback — survives across requests so that
+// tool-approval-needed events are never lost to per-request callback races
+// (slash commands / compact / paper paths don't register per-request approval).
+let approvalUiCallback: ApprovalCallback | null = null;
+
+export function setApprovalUiCallback(cb: ApprovalCallback): void {
+  approvalUiCallback = cb;
+}
 const insertStack: InsertedCell[] = [];
 
 const SENSITIVE_ENV_PATTERNS = [
@@ -232,6 +240,14 @@ async function ensureWorker(): Promise<void> {
           if (msg.type === 'bg-start') {
             setImmediate(() => agentEvents.emit('bg-start', msg));
           }
+          if (msg.type === 'tool-approval-needed') {
+            const cb = approvalUiCallback;
+            if (cb) {
+              setImmediate(() => cb(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent));
+            } else {
+              log.warn({ id: msg.id, toolName: msg.toolName }, 'tool-approval-needed but no approval UI callback registered');
+            }
+          }
         } catch { /* ignore non-JSON */ }
       }
     };
@@ -356,10 +372,8 @@ export async function sendMessage(
             }).catch(() => { });
             break;
           case 'tool-approval-needed':
-            log.warn({ id: msg.id, toolName: msg.toolName, hasApprovalCb: !!currentCallbacks?.approval }, '[APPROVAL-DEBUG] panel received tool-approval-needed');
-            if (currentCallbacks?.approval) {
-              currentCallbacks.approval(msg.id, msg.toolName, msg.args, msg.metadata, msg.bashIntent);
-            }
+            // Handled persistently by workerMessageHandler — do NOT also
+            // deliver via currentCallbacks or the webview renders two cards.
             break;
         }
       } catch { /* ignore non-JSON */ }

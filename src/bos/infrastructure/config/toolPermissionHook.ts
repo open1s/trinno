@@ -154,7 +154,20 @@ export function createToolPermissionHook(permissions: ToolPermissionConfig) {
 
       log.trace({ id, toolName, pendingCount: pendingApprovals.size }, 'waiting for approval');
       const approved = await new Promise<boolean>((resolve) => {
-        pendingApprovals.set(id, { resolve, timeout: undefined as unknown as NodeJS.Timeout, id, toolName, args });
+        const timer = setTimeout(() => {
+          pendingApprovals.delete(id);
+          log.warn({ id, toolName }, 'tool approval timed out after 5 minutes — auto-denying');
+          if (onEmit) {
+            onEmit('token', {
+              tokenType: 'ToolResult',
+              text: `Tool "${toolName}" was not executed: approval timed out after 5 minutes.`,
+              toolId: id,
+              status: 'error',
+            });
+          }
+          resolve(false);
+        }, 5 * 60 * 1000);
+        pendingApprovals.set(id, { resolve, timeout: timer, id, toolName, args });
       });
       log.trace({ id, approved }, 'got approval result');
 
@@ -301,6 +314,16 @@ export async function sendApprovalResponse(id: string, approved: boolean, rememb
     }
   } else {
     log.warn({ id, pendingCount: pendingApprovals.size }, 'NO pending entry found');
+    // The request likely timed out already — tell the UI so a stale
+    // Allow/Deny click doesn't leave the tool badge spinning forever.
+    if (onEmit) {
+      onEmit('token', {
+        tokenType: 'ToolResult',
+        text: 'Tool was not executed: approval already expired.',
+        toolId: id,
+        status: 'error',
+      });
+    }
   }
   if (approvalPublisher) {
     log.trace('publishing response to bus');

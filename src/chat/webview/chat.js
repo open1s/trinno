@@ -2232,7 +2232,7 @@ function renderTodoBadges() {
 
       case 'ToolResult':
         let lastRunning = msgToolId
-          ? [...messageState.tools].reverse().find(t => t.status === 'running' && t.id === msgToolId)
+          ? [...messageState.tools].reverse().find(t => (t.status === 'running' || t.status === 'waiting') && t.id === msgToolId)
           : [...messageState.tools].reverse().find(t => t.status === 'running');
         if (lastRunning) {
           const isDenied = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
@@ -2244,8 +2244,16 @@ function renderTodoBadges() {
           if (msgToolId && !lastRunning.id) lastRunning.id = msgToolId;
           trinnoLog('warn', { event: 'ToolResult', name: lastRunning.name, id: lastRunning.id, isBackground, keepBg, isDenied, newStatus: lastRunning.status, textSnippet: (text || '').slice(0, 300) });
         }
+        // If an approval card is still open for a tool that just resolved
+        // (e.g. approval timed out worker-side), remove the stale card.
+        const isTimeout = text && text.includes('approval timed out');
+        if (msgToolId && (isTimeout || (text && text.includes('PERMISSION_DENIED')))) {
+          const staleCard = document.getElementById(`approval-${msgToolId}`);
+          if (staleCard) staleCard.remove();
+          if (pendingApproval?.id === msgToolId) pendingApproval = null;
+        }
         let lastLog = msgToolId
-          ? [...messageState.toolLog].reverse().find(t => t.status === 'running' && t.id === msgToolId)
+          ? [...messageState.toolLog].reverse().find(t => (t.status === 'running' || t.status === 'waiting') && t.id === msgToolId)
           : [...messageState.toolLog].reverse().find(t => t.status === 'running');
         if (lastLog) {
           const isDenied2 = text && (text.includes('PERMISSION_DENIED') || text.includes('denied by user') || text.includes('User denied'));
@@ -2473,6 +2481,11 @@ function renderTodoBadges() {
   }
 
   function showToolApproval(id, toolName, args, metadata, bashIntent) {
+    // Idempotent: never render two cards for the same approval id.
+    if (id && document.getElementById(`approval-${id}`)) {
+      trinnoLog('debug', { event: 'showToolApproval.DUPLICATE_SKIPPED', id, toolName });
+      return;
+    }
     pendingApproval = { id, toolName, args };
 
     if (!currentMessageEl) {

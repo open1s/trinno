@@ -9,7 +9,7 @@ import * as jsbos from '@open1s/jsbos';
 const log = createModuleLogger('chat-panel');
 const webviewLog = log.child({ module: 'webview' }, { level: 'debug' });
 import type { CompactMessage } from './agent';
-import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, sendRecoverSession, setLastWorkspaceRoot, cancelTool } from './agent';
+import { agentEvents, AgentEvent, sendMessage, cancelGeneration, undoLastAiInsert, initializeAgent, getWelcomeContext, sendToolApproval, sendCompactRequest, sendSlashRequest, requestMcpStatus, requestLspStatus, requestTodoStatus, sendSetWorkspaceRoot, sendClearSession, sendCompactResult, sendRecoverSession, setLastWorkspaceRoot, cancelTool, setApprovalUiCallback, type ApprovalCallback } from './agent';
 import type { ExtToWebViewMessage, WebViewToExtMessage, ChatMessage, FileEntry, QueuedMessage, QueueItemStatus } from './messages';
 import { createUserMessage, createAssistantMessage } from './messages';
 import { parseWriteIntent, slugifyPatentTitle } from './write_paper';
@@ -255,6 +255,33 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
     void _token;
     log.debug('resolveWebviewView called');
     chatView = webviewView;
+
+    // Persistent approval routing: forward worker approval requests to the
+    // webview regardless of which request path (chat / slash / compact) is active.
+    // Dedup by id: multiple stdout listeners / stale paths may re-deliver the
+    // same request; only the first one is forwarded.
+    const forwardedApprovalIds = new Set<string>();
+    setApprovalUiCallback((id, toolName, args, metadata, bashIntent): void => {
+      if (!id || forwardedApprovalIds.has(id)) {
+        return;
+      }
+      forwardedApprovalIds.add(id);
+      if (forwardedApprovalIds.size > 200) {
+        // Keep the set bounded; oldest entries are irrelevant by now.
+        const first = forwardedApprovalIds.values().next().value;
+        if (first !== undefined) forwardedApprovalIds.delete(first);
+      }
+      if (chatView) {
+        void chatView.webview.postMessage({
+          type: 'tool-approval-needed',
+          id,
+          toolName,
+          args,
+          ...(metadata ? { metadata } : {}),
+          ...(bashIntent ? { bashIntent } : {}),
+        } as ExtToWebViewMessage);
+      }
+    });
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -1731,16 +1758,8 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
       if (chatView) chatView.webview.postMessage({ type: 'error', messageId: docAssistantMsg.id, error: err } as any);
       if (!isGenerating) { processQueue(); }
     },
-    (id, toolName, args, metadata, bashIntent) => {
-      if (chatView) chatView.webview.postMessage({
-        type: 'tool-approval-needed',
-        id,
-        toolName,
-        args,
-        ...(metadata ? { metadata } : {}),
-        ...(bashIntent ? { bashIntent } : {}),
-      } as any);
-    },
+    // Approval requests are routed persistently via setApprovalUiCallback
+    undefined,
     undefined,
     undefined,
     currentSession?.id,
@@ -2571,11 +2590,8 @@ async function handleUserMessage(text: string): Promise<void> {
         } as ExtToWebViewMessage);
       }
     },
-    (id, toolName, args, metadata, bashIntent) => {
-      if (chatView) {
-        chatView.webview.postMessage({ type: 'tool-approval-needed', id, toolName, args, metadata, bashIntent } as ExtToWebViewMessage);
-      }
-    },
+    // Approval requests are routed persistently via setApprovalUiCallback
+    undefined,
     undefined,
     systemSummary || undefined,
     currentSession?.id,

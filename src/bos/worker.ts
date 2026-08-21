@@ -1607,6 +1607,11 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     let progressStallCount = 0;
     let lastPromptTokens = 0;
     let lastCompletionTokens = 0;
+    // Set when a round ends via an Error token (e.g. denied tool call →
+    // "Hook abort" session error). The ezbos session is then in an aborted,
+    // inconsistent state — exportSession() on it deadlocks the event loop
+    // (observed as a total worker freeze: stdin never processed again).
+    let roundErrored = false;
 
     // Hard ceiling on agent loop iterations per user message — guards against
     // runaway tool loops (infinite retries, stuck goal continuations). Codex/
@@ -1738,6 +1743,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
               } else {
                 localEmit('error', { error: token.error });
                 roundStopped = true;
+                roundErrored = true;
               }
               resolve();
               break;
@@ -1910,11 +1916,16 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
       localEmit('token', { tokenType: 'Text', text: `\n\n## Goal Blocked\n\n> ${exitGoal.text}\n\n_Agent reported it cannot be completed${exitGoal.blockedReasons?.length ? ': ' + exitGoal.blockedReasons[exitGoal.blockedReasons.length - 1]! : ''}._\n` });
     }
 
-    // Export session state to factory context so next worker restart can restore it
+    // Export session state to factory context so next worker restart can restore it.
+    // SKIPPED when a round ended in error: the session is mid-abort and
+    // exportSession() synchronously deadlocks the worker (event loop never
+    // returns → stdin/chat messages are never processed again).
     let exportedSession: string | undefined;
-    if (sessionId) {
+    if (sessionId && !roundErrored) {
       try {
+        log.trace({ sessionId }, '[SESSION] exportSession start');
         exportedSession = started.exportSession();
+        log.trace({ sessionId, exported: !!exportedSession }, '[SESSION] exportSession done');
         if (exportedSession) {
           getAgentFactory().setSessionContext(sessionId, {
             brainOsSession: exportedSession,
@@ -1922,10 +1933,18 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
           });
         }
       } catch { /* best-effort — session without export support */ }
+    } else if (roundErrored) {
+      log.warn({ sessionId }, '[SESSION] skipping exportSession — round ended in error (hook abort), export would deadlock');
     }
 
     // Use raw token counts from the last 'Usage' event (directly from LLM API) — no delta/cumulative math
     log.trace({ sessionId, lastPromptTokens, lastCompletionTokens, totalTokens: lastPromptTokens + lastCompletionTokens }, '[TOKEN] worker: all rounds done (raw usage)');
+    // A hook-aborted round leaves the ezbos session corrupted — discard the
+    // agent so the next message starts fresh instead of reusing it.
+    if (roundErrored) {
+      activeAgents.delete(sessionKey);
+      try { started.stop().catch(() => { }); } catch { }
+    }
     localEmit('done', {
       ...(messageId ? { messageId } : {}),
       sessionId,
