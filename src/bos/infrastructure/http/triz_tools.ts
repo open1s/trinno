@@ -1,4 +1,5 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
+import { z } from 'zod';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ContradictionMatrix } from '../../domain/contradiction/matrix.js';
@@ -15,6 +16,7 @@ import { AiSCurveDataExtractor } from '../s_curve/ai_data_extractor.js';
 
 import { getParameterByIndex } from '../../domain/principle/parameters.js';
 import type { ExtractedDataPoint } from '../s_curve/ai_data_extractor.js';
+import type { TRLLevel } from '../../domain/s_curve/value_objects.js';
 
 const sCurveDataCache = new Map<string, ExtractedDataPoint[]>();
 
@@ -31,145 +33,154 @@ export function createTrizTools(
 ) {
   const matrix = ContradictionMatrix.getInstance();
 
-  const principles = defineTool(
-    'triz_principles',
-    'Access TRIZ inventive principles (40). action="get" (by index), "search" (by keyword), "list" (all 40).',
-  )
-    .required('action', 'string', 'One of: "get", "search", "list"')
-    .param('index', 'number', '1-40 (required for action="get")')
-    .param('query', 'string', 'Search keyword, supports Chinese + multi-token (required for action="search")')
-    .param('limit', 'number', 'Max results for search (default 10)')
-    .param('minScore', 'number', 'Min relevance score for search (default 0)')
-    .param('includeExamples', 'boolean', 'Include usage examples for get (default true)')
-    .handle((args) => {
-      if (args.action === 'list') {
+  const principles = defineTool({
+    name: 'triz_principles',
+    description: 'Access TRIZ inventive principles (40). action="get" (by index), "search" (by keyword), "list" (all 40).',
+    parameters: z.object({
+      action: z.enum(['get', 'search', 'list']).describe('One of: "get", "search", "list"'),
+      index: z.number().optional().describe('1-40 (required for action="get")'),
+      query: z.string().optional().describe('Search keyword, supports Chinese + multi-token (required for action="search")'),
+      limit: z.number().optional().describe('Max results for search (default 10)'),
+      minScore: z.number().optional().describe('Min relevance score for search (default 0)'),
+      includeExamples: z.boolean().optional().describe('Include usage examples for get (default true)'),
+    }),
+    execute: ({ action, index, query, limit, minScore, includeExamples }) => {
+      if (action === 'list') {
         const all = principleEngine.getAllPrinciples();
         return ok({ count: all.length, principles: all });
       }
-      if (args.action === 'get') {
-        if (typeof args.index !== 'number') return err('action="get" requires index (1-40)');
-        const principle = principleEngine.getPrinciple(args.index);
-        if (!principle) return err(`Principle ${args.index} not found (valid range: 1-40)`);
-        if (args.includeExamples === false) {
+      if (action === 'get') {
+        if (typeof index !== 'number') return err('action="get" requires index (1-40)');
+        const principle = principleEngine.getPrinciple(index);
+        if (!principle) return err(`Principle ${index} not found (valid range: 1-40)`);
+        if (includeExamples === false) {
           const { examples, ...rest } = principle;
           return ok(rest);
         }
         return ok(principle);
       }
-      if (args.action === 'search') {
-        if (!args.query) return err('action="search" requires query');
-        const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(40, Math.floor(args.limit)) : 10;
-        const minScore = typeof args.minScore === 'number' ? args.minScore : 0;
-        const scored = principleEngine.searchPrinciplesScored(args.query, { limit, minScore });
-        return ok({ count: scored.length, query: args.query, results: scored });
+      if (action === 'search') {
+        if (!query) return err('action="search" requires query');
+        const effLimit = typeof limit === 'number' && limit > 0 ? Math.min(40, Math.floor(limit)) : 10;
+        const effMinScore = typeof minScore === 'number' ? minScore : 0;
+        const scored = principleEngine.searchPrinciplesScored(query, { limit: effLimit, minScore: effMinScore });
+        return ok({ count: scored.length, query, results: scored });
       }
-      return err(`Unknown action: ${args.action}. Use "get", "search", or "list".`);
-    });
-
-  const parameters = defineTool(
-    'triz_parameters',
-    'List all 39 TRIZ engineering parameters with names and descriptions.',
-  ).handle(() => {
-    const all = matrix.getAllParameters();
-    return ok({ count: all.length, parameters: all });
+      return err(`Unknown action: ${action}. Use "get", "search", or "list".`);
+    },
   });
 
-  const contradiction = defineTool(
-    'triz_contradiction',
-    'Resolve a technical contradiction. action="analyze" persists & returns principles, "lookup" is read-only matrix lookup, "ai" is AI creative analysis.',
-  )
-    .required('action', 'string', 'One of: "analyze", "lookup", "ai"')
-    .required('improvingParameter', 'number', 'TRIZ parameter index (1-39) to improve')
-    .required('worseningParameter', 'number', 'TRIZ parameter index (1-39) that gets worse')
-    .param('description', 'string', 'Problem context (recommended for "analyze" and "ai")')
-    .param('type', 'string', '"technical" or "physical" (default: technical)')
-    .param('context', 'string', 'Additional context for deeper analysis')
-    .handle(async (args) => {
-      const improvingName = getParameterByIndex(args.improvingParameter)?.name ?? `#${args.improvingParameter}`;
-      const worseningName = getParameterByIndex(args.worseningParameter)?.name ?? `#${args.worseningParameter}`;
+  const parameters = defineTool({
+    name: 'triz_parameters',
+    description: 'List all 39 TRIZ engineering parameters with names and descriptions.',
+    parameters: z.object({}),
+    execute: () => {
+      const all = matrix.getAllParameters();
+      return ok({ count: all.length, parameters: all });
+    },
+  });
+
+  const contradiction = defineTool({
+    name: 'triz_contradiction',
+    description: 'Resolve a technical/physical contradiction. action="analyze" (rule-based), "lookup" (matrix lookup), "ai" (LLM analysis).',
+    parameters: z.object({
+      action: z.enum(['analyze', 'lookup', 'ai']).describe('One of: "analyze", "lookup", "ai"'),
+      improvingParameter: z.number().describe('TRIZ parameter index (1-39) to improve'),
+      worseningParameter: z.number().describe('TRIZ parameter index (1-39) that gets worse'),
+      description: z.string().optional().describe('Problem context (recommended for "analyze" and "ai")'),
+      type: z.enum(['technical', 'physical']).optional().describe('"technical" or "physical" (default: technical)'),
+      context: z.string().optional().describe('Additional context for deeper analysis'),
+    }),
+    execute: async ({ action, improvingParameter, worseningParameter, description, type, context }) => {
+      const improvingName = getParameterByIndex(improvingParameter)?.name ?? `#${improvingParameter}`;
+      const worseningName = getParameterByIndex(worseningParameter)?.name ?? `#${worseningParameter}`;
       try {
-        if (args.action === 'lookup') {
-          const principles = matrix.lookup(args.improvingParameter, args.worseningParameter);
+        if (action === 'lookup') {
+          const principles = matrix.lookup(improvingParameter, worseningParameter);
           const detailed = principles
             .map(idx => principleEngine.getPrinciple(idx))
             .filter((p): p is NonNullable<typeof p> => p !== undefined)
             .map(p => ({ index: p.index, name: p.name, nameZh: p.nameZh, description: p.description }));
           return ok({
-            improvingParameter: { index: args.improvingParameter, name: improvingName },
-            worseningParameter: { index: args.worseningParameter, name: worseningName },
+            improvingParameter: { index: improvingParameter, name: improvingName },
+            worseningParameter: { index: worseningParameter, name: worseningName },
             principles: detailed,
             principleCount: detailed.length,
           });
         }
-        if (args.action === 'analyze') {
+        if (action === 'analyze') {
           const result = await analyzeContradictionHandler.execute({
-            improvingParameter: args.improvingParameter,
-            worseningParameter: args.worseningParameter,
-            description: args.description || '',
-            type: (args.type as 'technical' | 'physical') || 'technical',
-            context: args.context,
+            improvingParameter,
+            worseningParameter,
+            description: description || '',
+            type: type || 'technical',
+            ...(context !== undefined ? { context } : {}),
           });
           return ok({
             contradictionId: result.contradictionId,
-            improvingParameter: { index: args.improvingParameter, name: improvingName },
-            worseningParameter: { index: args.worseningParameter, name: worseningName },
+            improvingParameter: { index: improvingParameter, name: improvingName },
+            worseningParameter: { index: worseningParameter, name: worseningName },
             recommendedPrinciples: result.recommendedPrinciples,
           });
         }
-        if (args.action === 'ai') {
+        if (action === 'ai') {
           if (!aiAgent) return err('AI agent not configured');
-          if (!args.description) return err('action="ai" requires description');
+          if (!description) return err('action="ai" requires description');
           const result = await aiAgent.analyzeContradiction(
             improvingName,
             worseningName,
-            args.description,
+            description,
           );
           return ok({ analysis: result });
         }
-        return err(`Unknown action: ${args.action}. Use "analyze", "lookup", or "ai".`);
+        return err(`Unknown action: ${action}. Use "analyze", "lookup", or "ai".`);
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const insight = defineTool(
-    'triz_insight',
-    'AI insight on applying a specific TRIZ principle to a problem.',
-  )
-    .required('problemDescription', 'string', 'Description of the problem')
-    .required('principleIndex', 'number', 'TRIZ principle index (1-40)')
-    .param('context', 'string', 'Additional context')
-    .handle(async (args) => {
+  const insight = defineTool({
+    name: 'triz_insight',
+    description: 'AI insight on applying a specific TRIZ principle to a problem.',
+    parameters: z.object({
+      problemDescription: z.string().describe('Description of the problem'),
+      principleIndex: z.number().describe('TRIZ principle index (1-40)'),
+      context: z.string().optional().describe('Additional context'),
+    }),
+    execute: async ({ problemDescription, principleIndex, context }) => {
       if (!aiAgent) return err('AI agent not configured');
-      const principle = principleEngine.getPrinciple(args.principleIndex);
-      if (!principle) return err(`Principle ${args.principleIndex} not found`);
+      const principle = principleEngine.getPrinciple(principleIndex);
+      if (!principle) return err(`Principle ${principleIndex} not found`);
       try {
-        const result = await aiAgent.generateInsight(args.problemDescription, principle, args.context);
+        const result = await aiAgent.generateInsight(problemDescription, principle, context);
         return ok({ insight: result });
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const suField = defineTool(
-    'triz_su_field',
-    'Analyze a Substance-Field (Su-Field) model. problemType: harmful, insufficient, excessive, complete.',
-  )
-    .required('substance1', 'string', 'Active component (S1, tool)')
-    .required('substance2', 'string', 'Passive component (S2, object)')
-    .required('field', 'string', 'Field: mechanical, thermal, chemical, electrical, magnetic, optical, acoustic, biological, or custom')
-    .param('problemType', 'string', 'harmful, insufficient, excessive, complete (default: complete)')
-    .handle((args) => {
-      const components = { substance1: args.substance1, substance2: args.substance2, field: args.field };
-      switch (args.problemType) {
+  const suField = defineTool({
+    name: 'triz_su_field',
+    description: 'Analyze a Substance-Field (Su-Field) model. problemType: harmful, insufficient, excessive, complete.',
+    parameters: z.object({
+      substance1: z.string().describe('Active component (S1, tool)'),
+      substance2: z.string().describe('Passive component (S2, object)'),
+      field: z.string().describe('Field: mechanical, thermal, chemical, electrical, magnetic, optical, acoustic, biological, or custom'),
+      problemType: z.enum(['harmful', 'insufficient', 'excessive', 'complete']).optional().describe('harmful, insufficient, excessive, complete (default: complete)'),
+    }),
+    execute: ({ substance1, substance2, field, problemType }) => {
+      const components = { substance1, substance2, field };
+      switch (problemType) {
         case 'harmful':
-          return ok(suFieldService.analyzeHarmful(args.substance1, args.substance2, args.field));
+          return ok(suFieldService.analyzeHarmful(substance1, substance2, field));
         case 'insufficient':
-          return ok(suFieldService.analyzeInsufficient(args.substance1, args.substance2, args.field));
+          return ok(suFieldService.analyzeInsufficient(substance1, substance2, field));
         case 'excessive':
           return ok({
             type: 'excessive' as const,
-            diagnosis: `Excessive Su-Field: ${args.substance1} applies excessive ${args.field} on ${args.substance2}.`,
+            diagnosis: `Excessive Su-Field: ${substance1} applies excessive ${field} on ${substance2}.`,
             standardSolutions: [
               '1.2.1 — Introduce S3 between S1 and S2 to absorb excess field',
               '1.2.2 — Modify S2 to be less sensitive to the field',
@@ -181,64 +192,68 @@ export function createTrizTools(
         default:
           return ok(suFieldService.analyze(components));
       }
-    });
+    },
+  });
 
-  const ideality = defineTool(
-    'triz_ideality',
-    'Score system ideality = Benefits / (Costs + Harms). Returns score, level, dominant factor, confidence.',
-  )
-    .required('problemId', 'string', 'Problem identifier')
-    .param('benefits', 'array', 'Benefit descriptions')
-    .param('costs', 'array', 'Cost/resource descriptions')
-    .param('harms', 'array', 'Harmful effect descriptions')
-    .param('benefitWeight', 'number', 'Default per-benefit score (default 10)')
-    .param('costWeight', 'number', 'Default per-cost score (default 5)')
-    .param('harmWeight', 'number', 'Default per-harm score (default 8)')
-    .param('benefitWeights', 'array', 'Per-benefit weights override (in benefits order)')
-    .param('costWeights', 'array', 'Per-cost weights override (in costs order)')
-    .param('harmWeights', 'array', 'Per-harm weights override (in harms order)')
-    .handle(async (args) => {
+  const ideality = defineTool({
+    name: 'triz_ideality',
+    description: 'Score system ideality = Benefits / (Costs + Harms). Returns score, level, dominant factor, confidence.',
+    parameters: z.object({
+      problemId: z.string().describe('Problem identifier'),
+      benefits: z.array(z.string()).optional().describe('Benefit descriptions'),
+      costs: z.array(z.string()).optional().describe('Cost/resource descriptions'),
+      harms: z.array(z.string()).optional().describe('Harmful effect descriptions'),
+      benefitWeight: z.number().optional().describe('Default per-benefit score (default 10)'),
+      costWeight: z.number().optional().describe('Default per-cost score (default 5)'),
+      harmWeight: z.number().optional().describe('Default per-harm score (default 8)'),
+      benefitWeights: z.array(z.number()).optional().describe('Per-benefit weights override (in benefits order)'),
+      costWeights: z.array(z.number()).optional().describe('Per-cost weights override (in costs order)'),
+      harmWeights: z.array(z.number()).optional().describe('Per-harm weights override (in harms order)'),
+    }),
+    execute: async ({ problemId, benefits, costs, harms, benefitWeight, costWeight, harmWeight, benefitWeights, costWeights, harmWeights }) => {
       try {
         const result = await idealityHandler.execute({
-          problemId: args.problemId,
-          benefits: args.benefits || [],
-          costs: args.costs || [],
-          harms: args.harms || [],
-          benefitWeight: args.benefitWeight,
-          costWeight: args.costWeight,
-          harmWeight: args.harmWeight,
-          benefitWeights: args.benefitWeights,
-          costWeights: args.costWeights,
-          harmWeights: args.harmWeights,
+          problemId,
+          benefits: benefits || [],
+          costs: costs || [],
+          harms: harms || [],
+          ...(benefitWeight !== undefined ? { benefitWeight } : {}),
+          ...(costWeight !== undefined ? { costWeight } : {}),
+          ...(harmWeight !== undefined ? { harmWeight } : {}),
+          ...(benefitWeights !== undefined ? { benefitWeights } : {}),
+          ...(costWeights !== undefined ? { costWeights } : {}),
+          ...(harmWeights !== undefined ? { harmWeights } : {}),
         });
         return ok(result);
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const sCurve = defineTool(
-    'triz_s_curve',
-    'S-curve technology analysis. action="analyze" (full TRL + stage + SVG), "extract" (AI pulls historical data), "enrich" (AI estimates params when no data).',
-  )
-    .required('action', 'string', 'One of: "analyze", "extract", "enrich"')
-    .required('technologyName', 'string', 'e.g. "lithium-ion batteries"')
-    .required('performanceMetric', 'string', 'e.g. "Wh/kg", "MPG", "TFLOPS"')
-    .param('dataPoints', 'array', '[{x: year, y: performance}] for "analyze"')
-    .param('currentYear', 'number', 'For "analyze" (default: this year)')
-    .param('trl', 'number', 'User-provided TRL 1-9 override for "analyze"')
-    .param('trlReasoning', 'string', 'Reasoning for TRL override')
-    .handle(async (args) => {
+  const sCurve = defineTool({
+    name: 'triz_s_curve',
+    description: 'S-curve technology analysis. action="analyze" (full TRL + stage + SVG), "extract" (AI pulls historical data), "enrich" (AI estimates params when no data).',
+    parameters: z.object({
+      action: z.enum(['analyze', 'extract', 'enrich']).describe('One of: "analyze", "extract", "enrich"'),
+      technologyName: z.string().describe('e.g. "lithium-ion batteries"'),
+      performanceMetric: z.string().describe('e.g. "Wh/kg", "MPG", "TFLOPS"'),
+      dataPoints: z.array(z.any()).optional().describe('[{x: year, y: performance}] for "analyze"'),
+      currentYear: z.number().optional().describe('For "analyze" (default: this year)'),
+      trl: z.number().optional().describe('User-provided TRL 1-9 override for "analyze"'),
+      trlReasoning: z.string().optional().describe('Reasoning for TRL override'),
+    }),
+    execute: async ({ action, technologyName, performanceMetric, dataPoints, currentYear, trl, trlReasoning }) => {
       try {
-        if (args.action === 'analyze') {
+        if (action === 'analyze') {
           if (!sCurveHandler) return err('S-Curve analysis not configured');
           const result = await sCurveHandler.execute({
-            technologyName: args.technologyName,
-            performanceMetric: args.performanceMetric,
-            dataPoints: args.dataPoints || [],
-            currentYear: args.currentYear,
-            trl: args.trl,
-            trlReasoning: args.trlReasoning,
+            technologyName,
+            performanceMetric,
+            dataPoints: dataPoints || [],
+            ...(currentYear !== undefined ? { currentYear } : {}),
+            ...(trl !== undefined ? { trl: trl as TRLLevel } : {}),
+            ...(trlReasoning !== undefined ? { trlReasoning } : {}),
           });
           return ok({
             technologyName: result.technologyName,
@@ -260,24 +275,24 @@ export function createTrizTools(
             svg: result.svg,
           });
         }
-        if (args.action === 'extract') {
+        if (action === 'extract') {
           if (!aiSCurveDataExtractor) return err('AI S-Curve data extractor not configured');
-          const key = `${args.technologyName}:${args.performanceMetric}`;
+          const key = `${technologyName}:${performanceMetric}`;
           const cached = sCurveDataCache.get(key);
           if (cached) {
             return ok({
-              technology: args.technologyName,
-              metric: args.performanceMetric,
+              technology: technologyName,
+              metric: performanceMetric,
               dataPoints: cached,
               dataPointCount: cached.length,
               source: 'cache',
             });
           }
-          const result = await aiSCurveDataExtractor.extractData(args.technologyName, args.performanceMetric);
+          const result = await aiSCurveDataExtractor.extractData(technologyName, performanceMetric);
           if (result.dataPoints.length > 0) sCurveDataCache.set(key, result.dataPoints);
           return ok({
-            technology: args.technologyName,
-            metric: args.performanceMetric,
+            technology: technologyName,
+            metric: performanceMetric,
             dataPoints: result.dataPoints,
             milestones: result.milestones,
             sources: result.sources,
@@ -286,56 +301,58 @@ export function createTrizTools(
             source: 'ai',
           });
         }
-        if (args.action === 'enrich') {
+        if (action === 'enrich') {
           if (!aiSCurveEstimator) return err('AI S-Curve estimator not configured');
-          const result = await aiSCurveEstimator.estimate(args.technologyName, args.performanceMetric);
+          const result = await aiSCurveEstimator.estimate(technologyName, performanceMetric);
           return ok({
-            technology: args.technologyName,
+            technology: technologyName,
             estimatedParameters: result.estimatedParameters,
             estimatedStage: result.estimatedStage,
             s2Offset: result.s2Offset,
             reasoning: result.reasoning,
           });
         }
-        return err(`Unknown action: ${args.action}. Use "analyze", "extract", or "enrich".`);
+        return err(`Unknown action: ${action}. Use "analyze", "extract", or "enrich".`);
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const search = defineTool(
-    'triz_search',
-    'Search prior art. target="papers" (cache-first), "patents" (cache-first), or "all" (patents + papers + tech in parallel, no cache). forceRefresh applies to papers/patents only.',
-  )
-    .required('target', 'string', 'One of: "papers", "patents", "all"')
-    .required('query', 'string', 'Search query')
-    .param('maxResults', 'number', 'Max results (default 5; per source for target="all")')
-    .param('forceRefresh', 'boolean', 'Bypass cache for papers/patents (default false)')
-    .handle(async (args) => {
+  const search = defineTool({
+    name: 'triz_search',
+    description: 'Search prior art. target="papers" (cache-first), "patents" (cache-first), or "all" (patents + papers + tech in parallel, no cache). forceRefresh applies to papers/patents only.',
+    parameters: z.object({
+      target: z.enum(['papers', 'patents', 'all']).describe('One of: "papers", "patents", "all"'),
+      query: z.string().describe('Search query'),
+      maxResults: z.number().optional().describe('Max results (default 5; per source for target="all")'),
+      forceRefresh: z.boolean().optional().describe('Bypass cache for papers/patents (default false)'),
+    }),
+    execute: async ({ target, query, maxResults, forceRefresh }) => {
       if (!cachedSearch) return err('Search service not configured');
-      const max = args.maxResults || 5;
+      const max = maxResults || 5;
       try {
-        if (args.target === 'papers') {
-          const cached = cachedSearch.getCachedPapers(args.query, max);
-          if (cached.length > 0 && !args.forceRefresh) {
+        if (target === 'papers') {
+          const cached = cachedSearch.getCachedPapers(query, max);
+          if (cached.length > 0 && !forceRefresh) {
             return ok({ target: 'papers', count: cached.length, results: cached, source: 'cache' });
           }
-          const results = await cachedSearch.searchPapers(args.query, max);
+          const results = await cachedSearch.searchPapers(query, max);
           return ok({ target: 'papers', count: results.length, results, source: 'api' });
         }
-        if (args.target === 'patents') {
-          const cached = cachedSearch.getCachedPatents(args.query, max);
-          if (cached.length > 0 && !args.forceRefresh) {
+        if (target === 'patents') {
+          const cached = cachedSearch.getCachedPatents(query, max);
+          if (cached.length > 0 && !forceRefresh) {
             return ok({ target: 'patents', count: cached.length, results: cached, source: 'cache' });
           }
-          const results = await cachedSearch.searchPatents(args.query, max);
+          const results = await cachedSearch.searchPatents(query, max);
           return ok({ target: 'patents', count: results.length, results, source: 'api' });
         }
-        if (args.target === 'all') {
+        if (target === 'all') {
           const [patentsResult, papersResult, techResult] = await Promise.allSettled([
-            cachedSearch.searchPatents(args.query, max),
-            cachedSearch.searchPapers(args.query, max),
-            cachedSearch.searchTechSolutions(args.query, max),
+            cachedSearch.searchPatents(query, max),
+            cachedSearch.searchPapers(query, max),
+            cachedSearch.searchTechSolutions(query, max),
           ]);
           const patents = patentsResult.status === 'fulfilled' ? patentsResult.value : [];
           const papers = papersResult.status === 'fulfilled' ? papersResult.value : [];
@@ -352,17 +369,18 @@ export function createTrizTools(
             ...(errors.length > 0 ? { errors } : {}),
           });
         }
-        return err(`Unknown target: ${args.target}. Use "papers", "patents", or "all".`);
+        return err(`Unknown target: ${target}. Use "papers", "patents", or "all".`);
       } catch (e: unknown) {
         return err(`Search failed: ${e instanceof Error ? e.message : String(e)}`);
       }
-    });
+    },
+  });
 
-  const currentDatetime = defineTool(
-    'current_datetime',
-    'Get the current date and time. Returns ISO 8601 formatted datetime, Unix timestamp, and human-readable local time in multiple formats.',
-  )
-    .handle(() => {
+  const currentDatetime = defineTool({
+    name: 'current_datetime',
+    description: 'Get the current date and time. Returns ISO 8601 formatted datetime, Unix timestamp, and human-readable local time in multiple formats.',
+    parameters: z.object({}),
+    execute: () => {
       const now = new Date();
       return ok({
         iso: now.toISOString(),
@@ -373,15 +391,17 @@ export function createTrizTools(
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         utc: now.toUTCString(),
       });
-    });
+    },
+  });
 
-  const updateGoal = defineTool(
-    'update_goal',
-    'Update the goal status. Agent can ONLY set "complete" or "blocked" — pause/resume/budget-limit are system operations (use /goal pause, /goal resume, /goal status <note>, /goal log). For "complete": only after every acceptance criterion is measured against current-state evidence (file content, command output, test result, metric value). For "blocked": only after 3 consecutive turns with the same blocking reason, and you have attempted multiple verification approaches.',
-  )
-    .required('status', 'string', 'Only "complete" or "blocked" — other statuses are system-managed and will be rejected')
-    .param('reasoning', 'string', 'REQUIRED. For "complete": list EACH acceptance criterion alongside its measured evidence (e.g. "criterion: file X exists → evidence: ls shows X at 1204 bytes; criterion: tests pass → evidence: npm test output shows 7 passing"). For "blocked": describe the blocker AND what verification commands you already ran (full command + output).')
-    .handle((args) => {
+  const updateGoal = defineTool({
+    name: 'update_goal',
+    description: 'Update the goal status. Agent can ONLY set "complete" or "blocked" — pause/resume/budget-limit are system operations (use /goal pause, /goal resume, /goal status <note>, /goal log). For "complete": only after every acceptance criterion is measured against current-state evidence (file content, command output, test result, metric value). For "blocked": only after 3 consecutive turns with the same blocking reason, and you have attempted multiple verification approaches.',
+    parameters: z.object({
+      status: z.string().describe('Only "complete" or "blocked" — other statuses are system-managed and will be rejected'),
+      reasoning: z.string().optional().describe('REQUIRED. For "complete": list EACH acceptance criterion alongside its measured evidence (e.g. "criterion: file X exists → evidence: ls shows X at 1204 bytes; criterion: tests pass → evidence: npm test output shows 7 passing"). For "blocked": describe the blocker AND what verification commands you already ran (full command + output).'),
+    }),
+    execute: ({ status, reasoning }) => {
       const root: string = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
       const fp = path.join(root, '.trinno', 'goal.json');
       let goal: any = {};
@@ -394,19 +414,19 @@ export function createTrizTools(
       }
 
       // HARD GATE: agent can ONLY set complete or blocked
-      if (args.status !== 'complete' && args.status !== 'blocked') {
-        return err('Agent can only set "complete" or "blocked". Pause/resume/budget-limit are system operations. Rejected: "' + args.status + '".');
+      if (status !== 'complete' && status !== 'blocked') {
+        return err('Agent can only set "complete" or "blocked". Pause/resume/budget-limit are system operations. Rejected: "' + status + '".');
       }
 
       // Blocked audit: track consecutive reasons
-      if (args.status === 'blocked') {
-        if (!args.reasoning) return err('"blocked" requires reasoning describing the blocker.');
+      if (status === 'blocked') {
+        if (!reasoning) return err('"blocked" requires reasoning describing the blocker.');
         if (!Array.isArray(goal.blockedReasons)) goal.blockedReasons = [];
         const lastReason = goal.blockedReasons.length > 0 ? goal.blockedReasons[goal.blockedReasons.length - 1] : null;
-        goal.blockedReasons.push(args.reasoning);
+        goal.blockedReasons.push(reasoning);
 
         // Check consecutive: 3+ turns with same blocking reason needed
-        const sameCount = lastReason === args.reasoning ? (goal.blockedCount ?? 0) + 1 : 1;
+        const sameCount = lastReason === reasoning ? (goal.blockedCount ?? 0) + 1 : 1;
         goal.blockedCount = sameCount;
         goal.status = 'blocked';
 
@@ -414,7 +434,7 @@ export function createTrizTools(
           // Write to disk but return a HARD FAIL — agent is blocked from calling this too early
           goal.updatedAt = Date.now();
           if (!Array.isArray(goal.history)) goal.history = [];
-          goal.history.push({ at: Date.now(), from: previousStatus ?? 'none', to: 'blocked', note: `attempt ${sameCount}/3: ${args.reasoning}` });
+          goal.history.push({ at: Date.now(), from: previousStatus ?? 'none', to: 'blocked', note: `attempt ${sameCount}/3: ${reasoning}` });
           const dir = path.dirname(fp);
           if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(fp, JSON.stringify(goal, null, 2));
@@ -424,11 +444,11 @@ export function createTrizTools(
       }
 
       // Evidence gate for 'complete': reject subjective reasoning
-      if (args.status === 'complete') {
-        if (!args.reasoning || args.reasoning.trim().length < 80) {
+      if (status === 'complete') {
+        if (!reasoning || reasoning.trim().length < 80) {
           return err('complete requires reasoning with evidence per criterion (min 80 chars). List each acceptance criterion alongside its measured evidence (file content / command output / test result / metric value). Rejected: reasoning too short.');
         }
-        const lowered = args.reasoning.toLowerCase();
+        const lowered = reasoning.toLowerCase();
         const forbidden = ['looks good', 'looks correct', 'seems complete', 'i reviewed', 'i checked', 'appears correct', 'should be done'];
         for (const phrase of forbidden) {
           if (lowered.includes(phrase)) {
@@ -437,12 +457,12 @@ export function createTrizTools(
         }
       }
 
-      goal.status = args.status;
+      goal.status = status;
       goal.updatedAt = Date.now();
-      if (args.reasoning) goal.lastReasoning = args.reasoning;
+      if (reasoning) goal.lastReasoning = reasoning;
       goal.blockedCount = 0; // Reset for next use
       if (!Array.isArray(goal.history)) goal.history = [];
-      goal.history.push({ at: Date.now(), from: previousStatus ?? 'none', to: args.status, note: args.reasoning });
+      goal.history.push({ at: Date.now(), from: previousStatus ?? 'none', to: status, note: reasoning });
 
       const dir = path.dirname(fp);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -450,14 +470,15 @@ export function createTrizTools(
 
       return ok({
         previousStatus: previousStatus ?? 'none',
-        newStatus: args.status,
+        newStatus: status,
         goalText: goal.text,
-        reasoning: args.reasoning,
+        reasoning,
         tokensUsed: goal.tokensUsed ?? 0,
         tokenBudget: goal.tokenBudget,
         createdAt: goal.createdAt,
       });
-    });
+    },
+  });
 
   return [
     principles,

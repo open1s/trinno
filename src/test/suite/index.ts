@@ -2,10 +2,13 @@ import * as path from 'path';
 import Mocha from 'mocha';
 
 export async function run(): Promise<void> {
+	// TRINNO_TEST_GREP=<pattern> narrows the run to matching describes/its,
+	// so a single e2e file can be reproduced without the whole suite.
 	const mocha = new Mocha({
 		ui: 'bdd',
 		color: true,
-		timeout: 30000
+		timeout: 30000,
+		...(process.env.TRINNO_TEST_GREP ? { grep: new RegExp(process.env.TRINNO_TEST_GREP) } : {})
 	});
 
 	const testsRoot = path.resolve(__dirname, '.');

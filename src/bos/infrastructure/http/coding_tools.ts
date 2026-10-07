@@ -1,4 +1,5 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
+import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
@@ -55,28 +56,29 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
   // Cap each tool result to ~25K tokens to avoid exceeding LLM context window
   const MAX_TOOL_RESULT_CHARS = 100_000;
 
-  const readFile = defineTool(
-    'read_file',
-    'Read partial contents of a file with line numbers. Defaults to 200 lines (page). Use startLine/endLine to paginate through large files. Capped at ~25K tokens (100K chars) per read.',
-  )
-    .required('filePath', 'string', 'Path to the file (relative to workspace root)')
-    .param('startLine', 'number', 'Starting line number (1-indexed, default: 1)')
-    .param('endLine', 'number', 'Ending line number (default: startLine + 999)')
-    .handle(async (args) => {
+  const readFile = defineTool({
+    name: 'read_file',
+    description: 'Read partial contents of a file with line numbers. Defaults to 200 lines (page). Use startLine/endLine to paginate through large files. Capped at ~25K tokens (100K chars) per read.',
+    parameters: z.object({
+      filePath: z.string().describe('Path to the file (relative to workspace root)'),
+      startLine: z.number().optional().describe('Starting line number (1-indexed, default: 1)'),
+      endLine: z.number().optional().describe('Ending line number (default: startLine + 999)'),
+    }),
+    execute: async ({ filePath: relPath, startLine: rawStart, endLine: rawEnd }) => {
       try {
-        const filePath = path.resolve(workspaceRoot, args.filePath);
-        if (!isWorkspacePath(args.filePath, workspaceRoot)) {
+        const filePath = path.resolve(workspaceRoot, relPath);
+        if (!isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
         }
         if (isSecretPath(filePath)) {
           return err('Access denied: file is protected');
         }
         if (!fs.existsSync(filePath)) {
-          return err(`File not found: ${args.filePath}`);
+          return err(`File not found: ${relPath}`);
         }
 
-        const startLine = args.startLine || 1;
-        const endLine = args.endLine || (startLine + 199);
+        const startLine = rawStart || 1;
+        const endLine = rawEnd || (startLine + 199);
 
         if (startLine < 1) return err('startLine must be >= 1');
         if (endLine < startLine) return err('endLine must be >= startLine');
@@ -115,7 +117,7 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         }
 
         return ok({
-          filePath: args.filePath,
+          filePath: relPath,
           content: result,
           linesShown: `${startLine}-${Math.min(currentLine, endLine)}`,
           truncated,
@@ -123,18 +125,20 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const writeFile = defineTool(
-    'write_file',
-    'Create a new file or overwrite an existing file with the given content.',
-  )
-    .required('filePath', 'string', 'Path to the file (relative to workspace root)')
-    .required('content', 'string', 'Content to write to the file')
-    .handle((args) => {
+  const writeFile = defineTool({
+    name: 'write_file',
+    description: 'Create a new file or overwrite an existing file with the given content.',
+    parameters: z.object({
+      filePath: z.string().describe('Path to the file (relative to workspace root)'),
+      content: z.string().describe('Content to write to the file'),
+    }),
+    execute: ({ filePath: relPath, content }) => {
       try {
-        const filePath = path.resolve(workspaceRoot, args.filePath);
-        if (!isWorkspacePath(args.filePath, workspaceRoot)) {
+        const filePath = path.resolve(workspaceRoot, relPath);
+        if (!isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
         }
         if (isSecretPath(filePath)) {
@@ -144,12 +148,13 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true });
         }
-        fs.writeFileSync(filePath, args.content, 'utf-8');
-        return ok({ filePath: args.filePath, bytesWritten: args.content.length, action: 'created' });
+        fs.writeFileSync(filePath, content, 'utf-8');
+        return ok({ filePath: relPath, bytesWritten: content.length, action: 'created' });
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
   const LARGE_FILE_PATCH_BYTES = 1 * 1024 * 1024; // 1MB — prefer apply_patch above this
 
@@ -163,37 +168,38 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
     return null;
   }
 
-  const editFile = defineTool(
-    'edit_file',
-    'Sed-like file edit. Append mode (append=true): append newString to end of file — use for streaming long content section by section (write as you generate, don\'t wait for full content). Line-range mode (startLine+endLine): replace entire range, or if oldString given, find/replace only within those lines. No-range mode (oldString only): global find/replace. For files >1MB, use apply_patch instead.',
-  )
-    .required('filePath', 'string', 'Path to the file (relative to workspace root)')
-    .required('newString', 'string', 'Text to replace with, or content to append when append=true')
-    .param('oldString', 'string', 'Exact text to find (required if startLine/endLine not given)')
-    .param('startLine', 'number', 'Start line for range-scoped edit (1-indexed)')
-    .param('endLine', 'number', 'End line for range-scoped edit (1-indexed, inclusive)')
-    .param('replaceAll', 'boolean', 'Replace all occurrences within scope (default: false)')
-    .param('append', 'boolean', 'Append newString to end of file (default: false)')
-    .handle((args) => {
+  const editFile = defineTool({
+    name: 'edit_file',
+    description: 'Sed-like file edit. Append mode (append=true): append newString to end of file — use for streaming long content section by section (write as you generate, don\'t wait for full content). Line-range mode (startLine+endLine): replace entire range, or if oldString given, find/replace only within those lines. No-range mode (oldString only): global find/replace. For files >1MB, use apply_patch instead.',
+    parameters: z.object({
+      filePath: z.string().describe('Path to the file (relative to workspace root)'),
+      newString: z.string().describe('Text to replace with, or content to append when append=true'),
+      oldString: z.string().optional().describe('Exact text to find (required if startLine/endLine not given)'),
+      startLine: z.number().optional().describe('Start line for range-scoped edit (1-indexed)'),
+      endLine: z.number().optional().describe('End line for range-scoped edit (1-indexed, inclusive)'),
+      replaceAll: z.boolean().optional().describe('Replace all occurrences within scope (default: false)'),
+      append: z.boolean().optional().describe('Append newString to end of file (default: false)'),
+    }),
+    execute: ({ filePath: relPath, newString, oldString, startLine, endLine, replaceAll, append }) => {
       try {
-        const filePath = path.resolve(workspaceRoot, args.filePath);
-        if (!isWorkspacePath(args.filePath, workspaceRoot)) {
+        const filePath = path.resolve(workspaceRoot, relPath);
+        if (!isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
         }
         if (isSecretPath(filePath)) {
           return err('Access denied: file is protected');
         }
         if (!fs.existsSync(filePath)) {
-          return err(`File not found: ${args.filePath}`);
+          return err(`File not found: ${relPath}`);
         }
 
         const patchSuggestion = suggestPatch(filePath);
-        if (patchSuggestion && !args.startLine && !args.endLine && !args.append) {
+        if (patchSuggestion && !startLine && !endLine && !append) {
           // Redirect full-file edits (no line range) to apply_patch for large files
           return err(patchSuggestion);
         }
 
-        if (args.append) {
+        if (append) {
           // For append, only read last few bytes to check trailing newline
           const stat = fs.statSync(filePath);
           let needsSeparator = true;
@@ -208,54 +214,55 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
             }
           }
           const separator = needsSeparator ? '\n' : '';
-          fs.writeFileSync(filePath, separator + args.newString, { encoding: 'utf-8', flag: 'a' });
-          return ok({ filePath: args.filePath, action: 'append', warning: patchSuggestion || undefined });
+          fs.writeFileSync(filePath, separator + newString, { encoding: 'utf-8', flag: 'a' });
+          return ok({ filePath: relPath, action: 'append', warning: patchSuggestion || undefined });
         }
 
         const content = fs.readFileSync(filePath, 'utf-8');
 
-        if (args.startLine !== undefined && args.endLine !== undefined) {
+        if (startLine !== undefined && endLine !== undefined) {
           const lines = content.split('\n');
-          const start = args.startLine - 1;
-          const end = args.endLine;
+          const start = startLine - 1;
+          const end = endLine;
           if (start < 0 || end > lines.length || start > end) {
-            return err(`Invalid line range: ${args.startLine}-${args.endLine} (file has ${lines.length} lines)`);
+            return err(`Invalid line range: ${startLine}-${endLine} (file has ${lines.length} lines)`);
           }
-          if (args.oldString !== undefined) {
+          if (oldString !== undefined) {
             // sed-like: search oldString within range only
             const rangeContent = lines.slice(start, end).join('\n');
-            if (!rangeContent.includes(args.oldString)) {
-              return err(`oldString not found in lines ${args.startLine}-${args.endLine}`);
+            if (!rangeContent.includes(oldString)) {
+              return err(`oldString not found in lines ${startLine}-${endLine}`);
             }
-            const replaced = args.replaceAll
-              ? rangeContent.split(args.oldString).join(args.newString)
-              : rangeContent.replace(args.oldString, args.newString);
+            const replaced = replaceAll
+              ? rangeContent.split(oldString).join(newString)
+              : rangeContent.replace(oldString, newString);
             const replacedLines = replaced.split('\n');
             lines.splice(start, end - start, ...replacedLines);
             fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
-            return ok({ filePath: args.filePath, action: 'sed_replace', lines: `${args.startLine}-${args.endLine}`, occurrences: args.replaceAll ? 'all' : 'first' });
+            return ok({ filePath: relPath, action: 'sed_replace', lines: `${startLine}-${endLine}`, occurrences: replaceAll ? 'all' : 'first' });
           }
           // Replace entire range
-          const newLines = args.newString === '' ? [] : args.newString.split('\n');
+          const newLines = newString === '' ? [] : newString.split('\n');
           lines.splice(start, end - start, ...newLines);
           fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
-          return ok({ filePath: args.filePath, action: 'replaced_lines', lines: `${args.startLine}-${args.endLine}` });
-        } else if (args.oldString !== undefined) {
-          if (!content.includes(args.oldString)) {
+          return ok({ filePath: relPath, action: 'replaced_lines', lines: `${startLine}-${endLine}` });
+        } else if (oldString !== undefined) {
+          if (!content.includes(oldString)) {
             return err('oldString not found in file. Check exact whitespace and content.');
           }
-          const newContent = args.replaceAll
-            ? content.split(args.oldString).join(args.newString)
-            : content.replace(args.oldString, args.newString);
+          const newContent = replaceAll
+            ? content.split(oldString).join(newString)
+            : content.replace(oldString, newString);
           fs.writeFileSync(filePath, newContent, 'utf-8');
-          return ok({ filePath: args.filePath, replaced: args.replaceAll ? 'all' : 'first' });
+          return ok({ filePath: relPath, replaced: replaceAll ? 'all' : 'first' });
         } else {
           return err('Must provide oldString, startLine+endLine (+ optional oldString for sed-like find/replace), or append=true.');
         }
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
   const runningProcesses = new Map<string, ChildProcess>();
 
@@ -358,32 +365,36 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
     });
   }
 
-  const bash = defineTool(
-    'bash',
-    'Execute a shell command in the workspace directory. Returns stdout and stderr. Commands ending with "&" run in background (detached, killed on cancel). Supports cancellation.',
-  )
-    .required('command', 'string', 'Shell command to execute')
-    .param('timeout', 'number', 'Max seconds to wait for a foreground command (5-3600, default 600). Ignored for background commands.')
-    .cancelable()
-    .onCancel((callId) => {
+  const bash = defineTool({
+    name: 'bash',
+    description: 'Execute a shell command in the workspace directory. Returns stdout and stderr. Commands ending with "&" run in background (detached, killed on cancel). Supports cancellation.',
+    // .loose() keeps injected bookkeeping keys (e.g. __call_id__) in parsed args
+    // while the model-facing schema only declares command/timeout.
+    parameters: z.object({
+      command: z.string().describe('Shell command to execute'),
+      timeout: z.number().optional().describe('Max seconds to wait for a foreground command (5-3600, default 600). Ignored for background commands.'),
+    }).loose(),
+    cancelable: true,
+    onCancel: (callId) => {
       const proc = runningProcesses.get(callId);
       if (proc && proc.pid) killProcessGroup(proc.pid);
       runningProcesses.delete(callId);
       const bg = bgProcesses.get(callId);
       if (bg && bg.pid) killProcessGroup(bg.pid);
       bgProcesses.delete(callId);
-    })
-    .handle(async (args) => {
+    },
+    execute: async (args) => {
       try {
-        if (isDangerousCommand(args.command)) {
+        const { command: rawCommand, timeout: rawTimeout } = args;
+        if (isDangerousCommand(rawCommand)) {
           return err('Command blocked: potentially dangerous operation');
         }
-        const isBackground = /&\s*$/.test(args.command.trim());
-        const cmd = isBackground ? args.command.trim().replace(/&\s*$/, '').trim() : args.command;
+        const isBackground = /&\s*$/.test(rawCommand.trim());
+        const cmd = isBackground ? rawCommand.trim().replace(/&\s*$/, '').trim() : rawCommand;
         const { command: safeCommand } = sandbox.wrapCommand(cmd);
         const env = sandbox.isEnabled() ? sandbox.getRestrictedEnv() : undefined;
         const callId = (args as any).__call_id__ || 'unknown';
-        const timeoutSec = Math.min(3600, Math.max(5, args.timeout ?? 600));
+        const timeoutSec = Math.min(3600, Math.max(5, rawTimeout ?? 600));
         const timeoutMs = timeoutSec * 1000;
 
         if (isBackground) {
@@ -420,51 +431,55 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const listDir = defineTool(
-    'list_dir',
-    'List contents of a directory. Shows files and subdirectories.',
-  )
-    .required('dirPath', 'string', 'Path to directory (relative to workspace root, default: ".")')
-    .handle((args) => {
+  const listDir = defineTool({
+    name: 'list_dir',
+    description: 'List contents of a directory. Shows files and subdirectories.',
+    parameters: z.object({
+      dirPath: z.string().describe('Path to directory (relative to workspace root, default: ".")'),
+    }),
+    execute: ({ dirPath: relPath }) => {
       try {
-        const dirPath = path.resolve(workspaceRoot, args.dirPath || '.');
-        if (!isWorkspacePath(args.dirPath || '.', workspaceRoot)) {
+        const dirPath = path.resolve(workspaceRoot, relPath || '.');
+        if (!isWorkspacePath(relPath || '.', workspaceRoot)) {
           return err('Access denied: directory is outside workspace');
         }
         if (!fs.existsSync(dirPath)) {
-          return err(`Directory not found: ${args.dirPath || '.'}`);
+          return err(`Directory not found: ${relPath || '.'}`);
         }
         const entries = fs.readdirSync(dirPath, { withFileTypes: true });
         const items = entries.map(e => ({
           name: e.name,
           type: e.isDirectory() ? 'directory' : 'file',
         }));
-        return ok({ dirPath: args.dirPath || '.', items });
+        return ok({ dirPath: relPath || '.', items });
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const grepSearch = defineTool(
-    'grep_search',
-    'Search file contents using regex. Returns matching lines with file and line numbers.',
-  )
-    .required('pattern', 'string', 'Regex pattern to search for')
-    .param('include', 'string', 'File pattern to include (e.g., "*.ts", "*.{ts,tsx}")')
-    .param('path', 'string', 'Directory to search in (default: workspace root)')
-    .param('ignoreCase', 'boolean', 'Case-insensitive search (default: false)')
-    .handle((args) => {
+  const grepSearch = defineTool({
+    name: 'grep_search',
+    description: 'Search file contents using regex. Returns matching lines with file and line numbers.',
+    parameters: z.object({
+      pattern: z.string().describe('Regex pattern to search for'),
+      include: z.string().optional().describe('File pattern to include (e.g., "*.ts", "*.{ts,tsx}")'),
+      path: z.string().optional().describe('Directory to search in (default: workspace root)'),
+      ignoreCase: z.boolean().optional().describe('Case-insensitive search (default: false)'),
+    }),
+    execute: ({ pattern, include, path: relPath, ignoreCase }) => {
       try {
-        const searchPath = args.path ? path.resolve(workspaceRoot, args.path) : workspaceRoot;
-        if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
+        const searchPath = relPath ? path.resolve(workspaceRoot, relPath) : workspaceRoot;
+        if (relPath && !isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: path is outside workspace');
         }
         const rgArgs = ['--json', '--no-heading', '--line-number'];
-        if (args.include) rgArgs.push('--glob', args.include);
-        if (args.ignoreCase) rgArgs.push('--ignore-case');
-        rgArgs.push(args.pattern, searchPath);
+        if (include) rgArgs.push('--glob', include);
+        if (ignoreCase) rgArgs.push('--ignore-case');
+        rgArgs.push(pattern, searchPath);
         const result = spawnSync('rg', rgArgs, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, cwd: workspaceRoot });
         const matches: any[] = [];
         for (const line of (result.stdout || '').trim().split('\n').filter(Boolean)) {
@@ -479,47 +494,51 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
             }
           } catch { /* skip invalid JSON */ }
         }
-        return ok({ pattern: args.pattern, matchCount: matches.length, matches: matches.slice(0, 100), truncated: matches.length > 100 });
+        return ok({ pattern, matchCount: matches.length, matches: matches.slice(0, 100), truncated: matches.length > 100 });
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const globFiles = defineTool(
-    'glob_files',
-    'Find files matching a glob pattern (supports **, braces, and gitignore). Returns list of file paths.',
-  )
-    .required('pattern', 'string', 'Glob pattern (e.g., "**/*.ts", "src/**/*.tsx", "{*.ts,*.js}")')
-    .handle((args) => {
+  const globFiles = defineTool({
+    name: 'glob_files',
+    description: 'Find files matching a glob pattern (supports **, braces, and gitignore). Returns list of file paths.',
+    parameters: z.object({
+      pattern: z.string().describe('Glob pattern (e.g., "**/*.ts", "src/**/*.tsx", "{*.ts,*.js}")'),
+    }),
+    execute: ({ pattern }) => {
       try {
-        const result = spawnSync('rg', ['--files', '--no-require-git', '-g', args.pattern], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        const result = spawnSync('rg', ['--files', '--no-require-git', '-g', pattern], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
         const files = (result.stdout || '').trim().split('\n').filter(Boolean);
-        return ok({ pattern: args.pattern, fileCount: files.length, files: files.slice(0, 200) });
+        return ok({ pattern, fileCount: files.length, files: files.slice(0, 200) });
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
-  const astGrep = defineTool(
-    'ast_grep',
-    'Search code using AST patterns. Returns matches with file, line, and matched code. Use for structural code search.',
-  )
-    .required('pattern', 'string', 'AST pattern to match (e.g., "const $X = $Y" or "function $NAME($$$ARGS) { $$$ }")')
-    .required('lang', 'string', 'Programming language (typescript, javascript, python, rust, go, java, etc.)')
-    .param('path', 'string', 'File or directory to search (default: workspace root)')
-    .param('rewrite', 'string', 'Optional rewrite template (e.g., "let $X = $Y")')
-    .handle((args) => {
+  const astGrep = defineTool({
+    name: 'ast_grep',
+    description: 'Search code using AST patterns. Returns matches with file, line, and matched code. Use for structural code search.',
+    parameters: z.object({
+      pattern: z.string().describe('AST pattern to match (e.g., "const $X = $Y" or "function $NAME($$$ARGS) { $$$ }")'),
+      lang: z.string().describe('Programming language (typescript, javascript, python, rust, go, java, etc.)'),
+      path: z.string().optional().describe('File or directory to search (default: workspace root)'),
+      rewrite: z.string().optional().describe('Optional rewrite template (e.g., "let $X = $Y")'),
+    }),
+    execute: ({ pattern, lang, path: relPath, rewrite }) => {
       try {
-        const searchPath = args.path ? path.resolve(workspaceRoot, args.path) : workspaceRoot;
-        if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
+        const searchPath = relPath ? path.resolve(workspaceRoot, relPath) : workspaceRoot;
+        if (relPath && !isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: path is outside workspace');
         }
-        const sgArgs = ['run', '--pattern', args.pattern, '--lang', args.lang, '--json', 'compact'];
-        if (args.rewrite) sgArgs.push('--rewrite', args.rewrite);
+        const sgArgs = ['run', '--pattern', pattern, '--lang', lang, '--json', 'compact'];
+        if (rewrite) sgArgs.push('--rewrite', rewrite);
         sgArgs.push(searchPath);
         const result = spawnSync('sg', sgArgs, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
         if (result.status !== 0) {
-          return ok({ pattern: args.pattern, lang: args.lang, matchCount: 0, matches: [] });
+          return ok({ pattern, lang, matchCount: 0, matches: [] });
         }
         const matches = JSON.parse(result.stdout || '[]');
         const formatted = matches.map((m: any) => ({
@@ -528,53 +547,57 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           matched: m.matched,
           replacement: m.replacement || null,
         }));
-        return ok({ pattern: args.pattern, lang: args.lang, matchCount: formatted.length, matches: formatted.slice(0, 100) });
+        return ok({ pattern, lang, matchCount: formatted.length, matches: formatted.slice(0, 100) });
       } catch (e: any) {
         return err(e.message || 'ast-grep execution failed');
       }
-    });
+    },
+  });
 
-  const astEdit = defineTool(
-    'ast_edit',
-    'Rewrite code using AST patterns. Permanently modifies files in the workspace. Use for structural refactoring.',
-  )
-    .required('pattern', 'string', 'AST pattern to match')
-    .required('rewrite', 'string', 'Rewrite template')
-    .required('lang', 'string', 'Programming language')
-    .param('path', 'string', 'File or directory to edit (default: workspace root)')
-    .handle((args) => {
+  const astEdit = defineTool({
+    name: 'ast_edit',
+    description: 'Rewrite code using AST patterns. Permanently modifies files in the workspace. Use for structural refactoring.',
+    parameters: z.object({
+      pattern: z.string().describe('AST pattern to match'),
+      rewrite: z.string().describe('Rewrite template'),
+      lang: z.string().describe('Programming language'),
+      path: z.string().optional().describe('File or directory to edit (default: workspace root)'),
+    }),
+    execute: ({ pattern, rewrite, lang, path: relPath }) => {
       try {
-        const editPath = args.path ? path.resolve(workspaceRoot, args.path) : workspaceRoot;
-        if (args.path && !isWorkspacePath(args.path, workspaceRoot)) {
+        const editPath = relPath ? path.resolve(workspaceRoot, relPath) : workspaceRoot;
+        if (relPath && !isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: path is outside workspace');
         }
-        const result = spawnSync('sg', ['rw', '--pattern', args.pattern, '--rewrite', args.rewrite, '--lang', args.lang, editPath], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        const result = spawnSync('sg', ['rw', '--pattern', pattern, '--rewrite', rewrite, '--lang', lang, editPath], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
         return ok({ result: (result.stdout || '').trim() || 'Successfully applied rewrites' });
       } catch (e: any) {
         return err(e.message || 'ast-grep rewrite failed');
       }
-    });
+    },
+  });
 
-  const applyPatch = defineTool(
-    'apply_patch',
-    'Apply a unified diff patch to a file. PREFERRED for files >1MB (the diff is far smaller than full content). Generate a context diff (diff -u old new) with surrounding lines. For large files, read_file the section first, construct the change, then apply the patch.',
-  )
-    .required('filePath', 'string', 'Path to the file to patch (relative to workspace root)')
-    .required('patch', 'string', 'The unified diff patch content')
-    .handle((args) => {
+  const applyPatch = defineTool({
+    name: 'apply_patch',
+    description: 'Apply a unified diff patch to a file. PREFERRED for files >1MB (the diff is far smaller than full content). Generate a context diff (diff -u old new) with surrounding lines. For large files, read_file the section first, construct the change, then apply the patch.',
+    parameters: z.object({
+      filePath: z.string().describe('Path to the file to patch (relative to workspace root)'),
+      patch: z.string().describe('The unified diff patch content'),
+    }),
+    execute: ({ filePath: relPath, patch }) => {
       try {
-        const filePath = path.resolve(workspaceRoot, args.filePath);
-        if (!isWorkspacePath(args.filePath, workspaceRoot)) {
+        const filePath = path.resolve(workspaceRoot, relPath);
+        if (!isWorkspacePath(relPath, workspaceRoot)) {
           return err('Access denied: file is outside workspace');
         }
         if (isSecretPath(filePath)) {
           return err('Access denied: file is protected');
         }
         if (!fs.existsSync(filePath)) {
-          return err(`File not found: ${args.filePath}`);
+          return err(`File not found: ${relPath}`);
         }
 
-        const patchContent = args.patch.endsWith('\n') ? args.patch : args.patch + '\n';
+        const patchContent = patch.endsWith('\n') ? patch : patch + '\n';
 
         const result = spawnSync('patch', ['-t', filePath], {
           cwd: workspaceRoot,
@@ -588,11 +611,12 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
           const errorMessage = (result.stderr || result.stdout || '').trim();
           return err(`Patch failed (exit code ${result.status}):\n${errorMessage}`);
         }
-        return ok({ filePath: args.filePath, result: (result.stdout || '').trim(), action: 'patched' });
+        return ok({ filePath: relPath, result: (result.stdout || '').trim(), action: 'patched' });
       } catch (e: any) {
         return err(e.message);
       }
-    });
+    },
+  });
 
   return [
     readFile,

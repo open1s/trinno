@@ -22,6 +22,7 @@ import { composeRoot } from './infrastructure/config/di.js';
 import { setOnBgExit, cancelBackgroundJob, setOnBgStart } from './infrastructure/http/coding_tools.js';
 import { SubagentNotification } from './infrastructure/subagent-manager.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
+import { EzbosError } from '@open1s/ezbos';
 import { getAgentFactory } from './infrastructure/agent-factory.js';
 import { getModelConfig } from './infrastructure/config/model-config.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
@@ -410,11 +411,23 @@ async function runJobWithPubSub(
     await handler(localAbort.signal, localEmit);
   } catch (err) {
     if (!localAbort.signal.aborted) {
-      await localEmit('error', { error: err instanceof Error ? err.message : String(err) });
+      await localEmit('error', errorPayload(err));
     }
   } finally {
     await commandSub.stop();
   }
+}
+
+/**
+ * Structured error payload for the webview: message plus, when the failure
+ * came from ezbos, its machine-readable code (CONFIGURATION | TOOL_EXECUTION |
+ * INVALID_ARGUMENTS | STREAM_ERROR | CANCELLED | TIMEOUT). The extra `code`
+ * field lets the panel distinguish a retryable timeout from a hard
+ * configuration error without string-matching messages.
+ */
+export function errorPayload(err: unknown): { error: string; code?: string } {
+  const error = err instanceof Error ? err.message : String(err);
+  return err instanceof EzbosError ? { error, code: err.code } : { error };
 }
 
 function formatUnknownSlash(text: string): string {
@@ -460,7 +473,7 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
     await command.execute(args, deps, capturingEmit, signal);
   } catch (err) {
     if (!signal.aborted) {
-      localEmit('error', { error: err instanceof Error ? err.message : String(err) });
+      localEmit('error', errorPayload(err));
     }
   }
 
@@ -947,7 +960,7 @@ ${conversationText}
       });
     });
   } catch (err) {
-    emit('error', { error: err instanceof Error ? err.message : String(err) });
+    emit('error', errorPayload(err));
   } finally {
     started.stop().catch(() => { });
   }
@@ -1962,7 +1975,7 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
       const retryAfter = parseRetryAfter(errMsg);
       localEmit('rate-limited', { retryAfter, error: errMsg });
     } else {
-      localEmit('error', { error: errMsg });
+      localEmit('error', errorPayload(err));
     }
     // On non-cancel error, discard the agent so next message creates a fresh one
     if (errMsg !== 'cancelled') {

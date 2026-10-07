@@ -19,7 +19,7 @@ describe('Bus tool-event monitor (pub/sub contract)', function () {
     // Mirror the worker's agent setup: a real agent bound to the real bash tool.
     const tools = createCodingTools(testDir, false);
     const bashDef = tools.find((t: any) => t.name === 'bash')!;
-    brain.agent('trinno-chat').with_tools(bashDef).with_systemPrompt('test');
+    brain.agent('trinno-chat').withTools(bashDef).withSystemPrompt('test');
   });
 
   after(async () => {

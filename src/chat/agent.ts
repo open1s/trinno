@@ -59,6 +59,50 @@ let workerReady = false;
 let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined; messageId?: string } | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
+
+// ---------------------------------------------------------------------------
+// Single-flight dispatch queue.
+//
+// The worker stdio protocol is single in-flight: token lines carry no
+// messageId, so only ONE request's stream may be attached to stdout at a
+// time. Previously each sender did `removeListener(previous)` on attach,
+// which meant concurrent callers silently stole the in-flight handler and
+// the stolen stream never saw its own 'done' (rapid-input e2e: 2/10
+// completed). Every sender now acquires the dispatch slot first and
+// releases it on its terminal event (done/error/rate-limited/cancel/
+// worker-unavailable), so concurrent sends serialize instead of clobbering
+// each other.
+// ---------------------------------------------------------------------------
+let dispatchChain: Promise<void> = Promise.resolve();
+let releaseInFlight: (() => void) | null = null;
+
+/** Wait for the in-flight dispatch to settle, then claim the slot.
+ *  Returns the release function the caller MUST invoke exactly once on a
+ *  terminal path (makeSettle makes this idempotent). */
+function acquireDispatch(): Promise<() => void> {
+  const prev = dispatchChain;
+  let release!: () => void;
+  dispatchChain = new Promise<void>(resolve => { release = resolve; });
+  return prev.then(() => {
+    releaseInFlight = release;
+    return release;
+  });
+}
+
+function releaseDispatch(release: () => void): void {
+  if (releaseInFlight === release) releaseInFlight = null;
+  release();
+}
+
+/** Idempotent terminal wrapper: safe to call on every terminal path. */
+function makeSettle(release: () => void): () => void {
+  let settled = false;
+  return () => {
+    if (settled) return;
+    settled = true;
+    releaseDispatch(release);
+  };
+}
 // Persistent approval UI callback — survives across requests so that
 // tool-approval-needed events are never lost to per-request callback races
 // (slash commands / compact / paper paths don't register per-request approval).
@@ -271,6 +315,9 @@ export async function sendMessage(
   workspaceRoot?: string
 ): Promise<void> {
   log.info({ messageId, textLength: text.length, sessionId }, 'sendMessage called');
+  const release = await acquireDispatch();
+  const settle = makeSettle(release);
+  try {
   currentCallbacks = { token: onToken, done: onDone, approval: onApproval, messageId };
 
   await ensureWorker();
@@ -279,6 +326,7 @@ export async function sendMessage(
   if (!workerProcess || !workerReady) {
     log.warn('worker not available');
     onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available. Please ensure tsx is installed.' });
+    settle();
     onDone();
     return;
   }
@@ -347,21 +395,25 @@ export async function sendMessage(
             dataBuffer = '';
             log.trace({ traceId: payload.messageId }, '[TRACE] agent←worker: stream complete');
             cleanup();
+            settle();
             onDone(msg);
             break;
           case 'error':
             if (msg.messageId && msg.messageId !== payload.messageId) break;
             log.warn({ error: msg.error }, 'handleData got error');
             cleanup();
+            settle();
             onError(msg.error);
             break;
           case 'rate-limited':
             if (currentCallbacks?.done) {
               const doneCb = currentCallbacks.done;
               cleanup();
+              settle();
               doneCb({ rateLimited: true, retryAfter: msg.retryAfter, error: msg.error });
             } else {
               cleanup();
+              settle();
             }
             break;
           case 'insert-cell':
@@ -396,6 +448,10 @@ export async function sendMessage(
   log.trace({ traceId: payload.messageId, textLength: payload.text?.length, sessionId: payload.sessionId }, '[TRACE] agent→worker: forwarding chat message');
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
   log.trace('[TRACE] agent→worker: stdin.write completed');
+  } catch (err) {
+    settle();
+    throw err;
+  }
 }
 
 export function cancelGeneration(): void {
@@ -411,6 +467,9 @@ export function cancelGeneration(): void {
   // would trigger onDone → processQueue → auto-drain before the panel has
   // a chance to handle in-flight removal and status updates.
   currentCallbacks = null;
+  // Free the single-flight dispatch slot; otherwise every queued sender
+  // would wait forever for a 'done' that cancel suppressed.
+  if (releaseInFlight) releaseDispatch(releaseInFlight);
 }
 
 export function cancelTool(toolName: string, toolId?: string): void {
@@ -532,6 +591,7 @@ export function disposeAgent(): void {
   currentCallbacks = null;
   activeDataHandler = null;
   workerMessageHandler = null;
+  if (releaseInFlight) releaseDispatch(releaseInFlight);
 }
 
 export interface CompactMessage {
@@ -549,6 +609,9 @@ export async function sendCompactRequest(
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string }
 ): Promise<void> {
   log.info({ messageCount: messages.length }, 'sendCompactRequest called');
+  const release = await acquireDispatch();
+  const settle = makeSettle(release);
+  try {
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
 
   await ensureWorker();
@@ -556,6 +619,7 @@ export async function sendCompactRequest(
   if (!workerProcess || !workerReady) {
     log.warn('worker not available for compact');
     onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    settle();
     onDone();
     return;
   }
@@ -613,10 +677,12 @@ export async function sendCompactRequest(
             drainRemainingLines(compactBuffer);
             compactBuffer = '';
             cleanup();
+            settle();
             onDone(msg);
             break;
           case 'error':
             cleanup();
+            settle();
             onError(msg.error);
             break;
         }
@@ -638,6 +704,10 @@ export async function sendCompactRequest(
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+  } catch (err) {
+    settle();
+    throw err;
+  }
 }
 
 export async function sendSlashRequest(
@@ -650,12 +720,16 @@ export async function sendSlashRequest(
   workspaceRoot?: string
 ): Promise<void> {
   log.info({ text }, 'sendSlashRequest called');
+  const release = await acquireDispatch();
+  const settle = makeSettle(release);
+  try {
   currentCallbacks = { token: onToken, done: onDone, approval: undefined, messageId };
 
   await ensureWorker();
 
   if (!workerProcess || !workerReady) {
     onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    settle();
     onDone();
     return;
   }
@@ -696,11 +770,13 @@ export async function sendSlashRequest(
           case 'done':
             if (msg.messageId && msg.messageId !== payload.messageId) break;
             cleanup();
+            settle();
             onDone(msg);
             break;
           case 'error':
             if (msg.messageId && msg.messageId !== payload.messageId) break;
             cleanup();
+            settle();
             onError(msg.error);
             break;
         }
@@ -722,6 +798,10 @@ export async function sendSlashRequest(
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+  } catch (err) {
+    settle();
+    throw err;
+  }
 }
 
 export async function sendPaperRequest(
@@ -731,12 +811,16 @@ export async function sendPaperRequest(
   onError: (err: string) => void,
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string }
 ): Promise<void> {
+  const release = await acquireDispatch();
+  const settle = makeSettle(release);
+  try {
   currentCallbacks = { token: onToken, done: onDone, approval: undefined };
 
   await ensureWorker();
 
   if (!workerProcess || !workerReady) {
     onToken({ type: 'token', role: 'assistant', tokenType: 'Text', text: 'AI worker not available.' });
+    settle();
     onDone();
     return;
   }
@@ -807,10 +891,12 @@ export async function sendPaperRequest(
             drainPaperLines(paperBuffer);
             paperBuffer = '';
             cleanup();
+            settle();
             onDone({ ...msg, writeFilePath: writeFileCmd.filePath, writeFileContent: writeFileCmd.content });
             break;
           case 'error':
             cleanup();
+            settle();
             onError(msg.error);
             break;
         }
@@ -832,6 +918,10 @@ export async function sendPaperRequest(
   activeDataHandler = handleData;
   workerProcess.stdout?.on('data', handleData);
   workerProcess.stdin?.write(JSON.stringify(payload) + '\n');
+  } catch (err) {
+    settle();
+    throw err;
+  }
 }
 
 export async function requestMcpStatus(): Promise<void> {

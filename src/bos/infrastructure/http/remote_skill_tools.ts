@@ -1,4 +1,5 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
+import { z } from 'zod';
 import {
   loadRemoteSkill,
   searchRemoteSkills,
@@ -9,16 +10,18 @@ import {
 } from '../remote_skills.js';
 
 export function createRemoteSkillTools(workspaceRoot: string) {
-  const findRemoteSkill = defineTool(
-    'find_skill',
-    'Discover skills by keyword across both local skill directories and remote skill repos. Local: ~/.bos/skills/ and ~/.agents/skills/. Remote: cloned from bos.config.json: skills_registry.skills. Each result\'s "name" is the skill folder/file name — use load_offline_skill to load it. First remote call may clone repos (network); subsequent calls use cache.',
-  )
-    .required('query', 'string', 'Search query — keywords or tags')
-    .param('limit', 'number', 'Max hits to return (1-20, default 10)')
-    .handle(async (args) => {
+  const findRemoteSkill = defineTool({
+    name: 'find_skill',
+    description:
+      'Discover skills by keyword across both local skill directories and remote skill repos. Local: ~/.bos/skills/ and ~/.agents/skills/. Remote: cloned from bos.config.json: skills_registry.skills. Each result\'s "name" is the skill folder/file name — use load_offline_skill to load it. First remote call may clone repos (network); subsequent calls use cache.',
+    parameters: z.object({
+      query: z.string().describe('Search query — keywords or tags'),
+      limit: z.number().optional().describe('Max hits to return (1-20, default 10)'),
+    }),
+    execute: async ({ query, limit: rawLimit }) => {
       try {
-        const limit = Math.min(Math.max(args.limit ?? 10, 1), 20);
-        const localHits = searchLocalSkills(args.query as string, limit);
+        const limit = Math.min(Math.max(rawLimit ?? 10, 1), 20);
+        const localHits = searchLocalSkills(query, limit);
         const results: any[] = localHits.map(h => ({
           name: h.name,
           description: h.description,
@@ -29,7 +32,7 @@ export function createRemoteSkillTools(workspaceRoot: string) {
         const registry = loadRemoteSkillsFromBosConfig();
         if (registry.length > 0) {
           const index = await buildRemoteSkillIndex(workspaceRoot, registry);
-          const remoteHits = await searchRemoteSkills(args.query as string, index, limit);
+          const remoteHits = await searchRemoteSkills(query, index, limit);
           for (const h of remoteHits) {
             results.push({
               name: h.name,
@@ -38,12 +41,12 @@ export function createRemoteSkillTools(workspaceRoot: string) {
               ...(h.tags !== undefined ? { tags: h.tags } : {}),
               source: 'remote',
               score: h.score,
-               usage: `load_offline_skill({ name: ${JSON.stringify(h.name)} })`,
+              usage: `load_offline_skill({ name: ${JSON.stringify(h.name)} })`,
             });
           }
         }
         return ok({
-          query: args.query,
+          query,
           count: results.length,
           results,
           hint: results.length === 0
@@ -53,16 +56,17 @@ export function createRemoteSkillTools(workspaceRoot: string) {
       } catch (e: any) {
         return err(e.message || String(e));
       }
-    });
-
-  const loadRemoteSkillTool = defineTool(
-    'load_offline_skill',
-    'Load a skill by name. Tries local skill directories first (~/.bos/skills/, ~/.agents/skills/), then falls back to remote repos cloned from bos.config.json. Name is the skill folder/file name (e.g. "find-skills").',
-  )
-    .required('name', 'string', 'Skill name (e.g. "find-skills", "paper-writer")')
-    .handle(async (args) => {
+    },
+  });
+  const loadRemoteSkillTool = defineTool({
+    name: 'load_offline_skill',
+    description:
+      'Load a skill by name. Tries local skill directories first (~/.bos/skills/, ~/.agents/skills/), then falls back to remote repos cloned from bos.config.json. Name is the skill folder/file name (e.g. "find-skills").',
+    parameters: z.object({
+      name: z.string().describe('Skill name (e.g. "find-skills", "paper-writer")'),
+    }),
+    execute: async ({ name }) => {
       try {
-        const name = args.name as string;
         const local = loadLocalSkill(name);
         if (local) {
           return ok({ name, filePath: local.filePath, source: 'local', content: local.content });
@@ -90,16 +94,18 @@ export function createRemoteSkillTools(workspaceRoot: string) {
       } catch (e: any) {
         return err(e.message || String(e));
       }
-    });
+    },
+  });
 
-  const loadBestRemoteSkill = defineTool(
-    'load_best_skill',
-    'Find and load the best matching skill in one step. Searches local skill directories (~/.bos/skills/, ~/.agents/skills/) and remote repos, picks the highest-scoring match, returns its content. Use this instead of the two-step find → load process.',
-  )
-    .required('query', 'string', 'Search keywords to find the most relevant skill')
-    .handle(async (args) => {
+  const loadBestRemoteSkill = defineTool({
+    name: 'load_best_skill',
+    description:
+      'Find and load the best matching skill in one step. Searches local skill directories (~/.bos/skills/, ~/.agents/skills/) and remote repos, picks the highest-scoring match, returns its content. Use this instead of the two-step find → load process.',
+    parameters: z.object({
+      query: z.string().describe('Search keywords to find the most relevant skill'),
+    }),
+    execute: async ({ query }) => {
       try {
-        const query = args.query as string;
         if (!query || query.trim().length === 0) {
           return err('Query is required');
         }
@@ -148,7 +154,9 @@ export function createRemoteSkillTools(workspaceRoot: string) {
       } catch (e: any) {
         return err(e.message || String(e));
       }
-    });
+    },
+  });
 
   return [findRemoteSkill, loadRemoteSkillTool, loadBestRemoteSkill];
 }
+

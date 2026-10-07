@@ -90,7 +90,7 @@ async function main() {
   log.info('=== TRIZ Library Ready ===');
   log.info('Use the tools with an EZBOS AgentBuilder:');
   log.info('  const agent = new AgentBuilder("triz-agent")');
-  log.info('    .with_tools(...deps.tools)');
+  log.info('    .withTools(...deps.tools)');
   log.info('    .start();');
 
   await deps.aiAgent.close();

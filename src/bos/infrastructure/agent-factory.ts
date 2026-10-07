@@ -39,6 +39,16 @@ export interface AgentConfig {
   onMcpStatus?: McpStatusCallback;
   skipDefaultHooks?: boolean;
   skipDefaultTools?: boolean;
+  /** ezbos 2.x resilience options (circuit breaker + rate limit). Omit for defaults. */
+  resilience?: ResilienceConfig;
+}
+
+export interface ResilienceConfig {
+  circuitBreakerMaxFailures?: number;
+  circuitBreakerCooldownSecs?: number;
+  rateLimitCapacity?: number;
+  rateLimitWindowSecs?: number;
+  rateLimitMaxRetries?: number;
 }
 export interface SessionConfig {
   brainOsSession: string;
@@ -53,6 +63,17 @@ const DEFAULT_SKILLS_DIRS = [
 const DEFAULT_MCP_SERVERS: McpServerConfig[] = [];
 
 const DEFAULT_PLUGINS: any[] = [];
+
+// ezbos 2.x withResilience defaults: trip the circuit breaker after 5
+// consecutive failures (cooldown 30s) and cap the model client at 120
+// requests/minute with 3 rate-limit retries.
+const DEFAULT_RESILIENCE: ResilienceConfig = {
+  circuitBreakerMaxFailures: 5,
+  circuitBreakerCooldownSecs: 30,
+  rateLimitCapacity: 120,
+  rateLimitWindowSecs: 60,
+  rateLimitMaxRetries: 3,
+};
 
 const POOL_MAX_SIZE = 16;
 
@@ -296,46 +317,47 @@ class AgentFactory {
     const skillsDirs = config.skillsDirs ?? DEFAULT_SKILLS_DIRS;
 
     let builder = this.brain.agent(config.name, (config.onMcpStatus ? { onMcp: config.onMcpStatus } : {}) as any)
-      .with_systemPrompt(config.systemPrompt)
-      .with_temperature(temperature)
-      .with_maxTokens(maxTokens);
+      .withSystemPrompt(config.systemPrompt)
+      .withTemperature(temperature)
+      .withMaxTokens(maxTokens)
+      .withResilience({ ...DEFAULT_RESILIENCE, ...config.resilience });
 
-    for (const tool of allTools) {
-      builder = builder.with_tools(tool);
+    if (allTools.length > 0) {
+      builder = builder.withTools(...allTools);
     }
 
-    for (const hook of allHooks) {
-      builder = builder.with_hooks(hook);
+    if (allHooks.length > 0) {
+      builder = builder.withHooks(...allHooks);
     }
 
-    for (const plugin of allPlugins) {
-      builder = builder.with_plugins(plugin);
+    if (allPlugins.length > 0) {
+      builder = builder.withPlugins(...allPlugins);
     }
 
     if (config.model) {
-      builder = builder.with_model(config.model);
+      builder = builder.withModel(config.model);
     }
     if (config.baseUrl) {
-      builder = builder.with_baseUrl(config.baseUrl);
+      builder = builder.withBaseUrl(config.baseUrl);
     }
     if (config.apiKey) {
-      builder = builder.with_apiKey(config.apiKey);
+      builder = builder.withApiKey(config.apiKey);
     }
     if (config.timeoutSecs) {
-      builder = builder.with_timeout(config.timeoutSecs);
+      builder = builder.withTimeout(config.timeoutSecs);
     }
     if (config.apiMode) {
-      builder = builder.with_apiMode(config.apiMode);
+      builder = builder.withApiMode(config.apiMode);
     }
     if (config.reasoningEffort) {
-      builder = builder.with_reasoningEffort(config.reasoningEffort);
+      builder = builder.withReasoningEffort(config.reasoningEffort);
     }
 
     for (const server of mcpServers) {
       if (server.type === 'stdio' && server.command) {
-        builder = builder.with_mcp_process(server.name, server.command, server.args || []);
+        builder = builder.withMcpProcess(server.name, server.command, server.args || []);
       } else if (server.type === 'http' && server.url) {
-        builder = builder.with_mcp_http(server.name, server.url);
+        builder = builder.withMcpHttp(server.name, server.url);
       }
     }
 

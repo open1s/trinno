@@ -1,4 +1,5 @@
 import { defineTool, ok } from '@open1s/ezbos';
+import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createModuleLogger } from '../logging/logger.js';
@@ -51,35 +52,32 @@ function saveTodos(baseDir: string, store: TodoStore): void {
 }
 
 export function createTodoTools(workspaceRoot: string) {
-  const validStatuses = new Set(['pending', 'in_progress', 'completed', 'cancelled']);
-  const validPriorities = new Set(['high', 'medium', 'low']);
-
-  const todowrite = defineTool(
-    'todowrite',
-    'Create and maintain a structured task list for the current session. Persists to disk at .bos/memory/todo-store.json — todos survive session restarts. Tracks progress, organizes multi-step work. Use proactively for 3+ distinct steps, non-trivial multi-step tasks, or when user provides multiple tasks. Update status in real time: exactly one "in_progress" at a time, mark "completed" only after verification.',
-  )
-    .required('todos', 'array', 'Array of todo objects: { content: string, status: "pending"|"in_progress"|"completed"|"cancelled", priority: "high"|"medium"|"low" }. The full list replaces the current todos — include ALL todos (completed + pending + new), not just the ones you changed.')
-    .handle((args: any) => {
-      const todos: TodoItem[] = Array.isArray(args.todos) ? args.todos : [];
-      const inProgressCount = todos.filter((t: TodoItem) => t?.status === 'in_progress').length;
-
+  const todowrite = defineTool({
+    name: 'todowrite',
+    description:
+      'Create and maintain a structured task list for the current session. Persists to disk at .bos/memory/todo-store.json — todos survive session restarts. Tracks progress, organizes multi-step work. Use proactively for 3+ distinct steps, non-trivial multi-step tasks, or when user provides multiple tasks. Update status in real time: exactly one "in_progress" at a time, mark "completed" only after verification.',
+    parameters: z.object({
+      todos: z
+        .array(
+          z
+            .object({
+              content: z.string().min(1),
+              status: z.enum(['pending', 'in_progress', 'completed', 'cancelled']),
+              priority: z.enum(['high', 'medium', 'low']),
+            })
+            .loose(),
+        )
+        .describe(
+          'Array of todo objects: { content: string, status: "pending"|"in_progress"|"completed"|"cancelled", priority: "high"|"medium"|"low" }. The full list replaces the current todos — include ALL todos (completed + pending + new), not just the ones you changed.',
+        ),
+    }),
+    execute: ({ todos }) => {
+      const inProgressCount = todos.filter(t => t.status === 'in_progress').length;
       if (inProgressCount > 1) {
         return { ok: false, error: 'Only one todo can be in_progress at a time. Mark the current one completed first.' };
       }
 
-      for (const t of todos) {
-        if (!t || typeof t.content !== 'string' || !t.content.trim()) {
-          return { ok: false, error: 'Each todo must have a non-empty "content" string.' };
-        }
-        if (!validStatuses.has(t.status)) {
-          return { ok: false, error: `Invalid status "${t.status}". Use: pending, in_progress, completed, cancelled.` };
-        }
-        if (!validPriorities.has(t.priority)) {
-          return { ok: false, error: `Invalid priority "${t.priority}". Use: high, medium, low.` };
-        }
-      }
-
-      const store: TodoStore = { version: STORE_VERSION, todos, updatedAt: 0 };
+      const store: TodoStore = { version: STORE_VERSION, todos: todos as TodoItem[], updatedAt: 0 };
       try {
         saveTodos(workspaceRoot, store);
       } catch (err) {
@@ -87,18 +85,20 @@ export function createTodoTools(workspaceRoot: string) {
       }
 
       const completed = todos.filter(t => t.status === 'completed').length;
-      const total = todos.length;
-      return ok({ ok: true, count: total, completed, todos });
-    });
+      return ok({ ok: true, count: todos.length, completed, todos });
+    },
+  });
 
-  const todoread = defineTool(
-    'todoread',
-    'Read the current todo list from disk. Use this at the start of a session to restore state, or to check progress without modifying todos.',
-  )
-    .handle((_args: any) => {
+  const todoread = defineTool({
+    name: 'todoread',
+    description:
+      'Read the current todo list from disk. Use this at the start of a session to restore state, or to check progress without modifying todos.',
+    parameters: z.object({}),
+    execute: () => {
       const store = loadTodos(workspaceRoot);
       return ok({ ok: true, count: store.todos.length, todos: store.todos, updatedAt: store.updatedAt });
-    });
+    },
+  });
 
   return [todowrite, todoread];
 }

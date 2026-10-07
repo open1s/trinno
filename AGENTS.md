@@ -29,6 +29,8 @@ npm run test:pipeline # npx mocha dist/test/suite/publication-trends-year-extrac
 npm run test:undo     # npx mocha --ui bdd --timeout 200000 dist/test/suite/undo-e2e.test.js — spawns worker + real jj repo (requires jj)
 npm run test:token    # TRINNO_RUN_TOKEN_TEST=1 npx mocha --timeout 180000 dist/test/suite/token-growth.test.js — verifies per-message token cost is linear (requires configured LLM model, makes real API calls)
 npm run test:agent-notify # npx mocha --ui bdd --timeout 10000 dist/test/suite/subagent-notification.test.js — unit tests for subagent notification pipeline (no VS Code, no LLM)
+npm run test:background    # npx mocha --ui bdd --timeout 30000 dist/test/suite/background-e2e.test.js — background job lifecycle (no VS Code)
+npm run test:tools         # typed-tool contract + worker errorPayload + cancel/background suites (17 tests, no VS Code, no LLM)
 npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignores src/bos/)
 ```
 
@@ -98,7 +100,7 @@ src/
 ### Tool & slash-command registration
 
 - **Slash commands** are registered in `src/bos/worker.ts` (~line 47) via `slashRegistry.register(cmd, aliases?)`. To add a new command: create `src/bos/slash-commands/<name>.ts`, export from `index.ts`, register in `worker.ts`, **and** add an entry to `staticSlashCommands` in `src/chat/panel.ts` (line ~189) AND to the hardcoded fallback list in `src/chat/webview/chat.js` (line ~60). The webview's hardcoded list is used for completion-popup before the welcome message arrives.
-- **AI tools** are defined in `src/bos/infrastructure/http/triz_tools.ts` and `src/bos/infrastructure/http/papers_tools.ts` using `@open1s/ezbos`'s `defineTool().required().param().handle()`. They're wired into the agent in `src/bos/infrastructure/config/di.ts` (`composeRoot` returns them in `deps.tools`).
+- **AI tools** are defined in `src/bos/infrastructure/http/*_tools.ts` with the ezbos 2.x **typed** form `defineTool({name, description, parameters: z.ZodType, execute})` — the legacy `defineTool().required().param().handle()` builder is banned (enforced by `src/test/suite/typed-tools.test.ts`). See `docs/ezbos-2-migration.md` for all conventions. They're wired into the agent in `src/bos/infrastructure/config/di.ts` (`composeRoot` returns them in `deps.tools`).
 - **Workspace root propagation**: the panel reads `trinno.chat.trpWorkspace` (or auto-detects) and must pass it as the **last argument** to `sendMessage` (signature has it) and `sendSlashRequest` (no signature — pass `getDefaultWorkspaceRoot()` as the 7th arg). The worker stashes it in `globalThis.__TRP_WORKSPACE_ROOT`, then `composeRoot` reads it. The worker defaults to `process.cwd()` if the panel didn't pass one — that's the wrong place (VS Code install dir), so always pass `getDefaultWorkspaceRoot()` from the panel.
 
 ### Worker process
@@ -139,6 +141,7 @@ The worker (`src/bos/worker.ts`) is compiled to `dist/bos/worker.js` during `npm
 - `CLAUDE.md` — agent skill references (triage, to-issues, to-prd, diagnose, tdd, improve-codebase-architecture, zoom-out).
 - `docs/agents/` — `domain.md`, `issue-tracker.md`, `triage-labels.md`.
 - `docs/adr/001-hybrid-attachment-strategy.md` — only ADR so far.
+- `docs/ezbos-2-migration.md` — ezbos 2.x idioms: typed defineTool, error/cancellation contracts, streaming, resilience, test commands.
 - `CONTEXT.md` — template, not yet filled in.
 - `demo/` — `drone-frame-analysis.md`, `06_References/`, `07_Patent/` — sample output of a Trinno session (good for sanity-checking what the tools should produce).
 

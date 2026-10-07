@@ -1,4 +1,5 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
+import { z } from 'zod';
 import { downloadPaper, listDownloadedPapers } from '../../../papers/downloader.js';
 import type { PhaseWriter } from '../persistence/phase_writer.js';
 import * as fs from 'fs';
@@ -7,22 +8,24 @@ import * as path from 'path';
 import { resolveInWorkspace } from '../config/workspaceGuard.js';
 
 export function createPapersTools(phaseWriter: PhaseWriter) {
-  const downloadPaperTool = defineTool(
-    'papers_download',
-    'Download a paper by DOI, arXiv ID, PMID, or any URL (publisher, Zenodo, bioRxiv, ' +
-    'file.scholarin.cn, pubscholar.cn, etc.). ',
-  )
-    .required('identifier', 'string', 'DOI, arXiv ID, PMID, or any URL (https://...) of the paper to download')
-    .param('outputDir', 'string', 'Override output directory (defaults to <workspace>/06_References/, falls back to ~/.trinno/papers/ if unwritable)')
-    .handle(async (args) => {
+  const downloadPaperTool = defineTool({
+    name: 'papers_download',
+    description:
+      'Download a paper by DOI, arXiv ID, PMID, or any URL (publisher, Zenodo, bioRxiv, ' +
+      'file.scholarin.cn, pubscholar.cn, etc.). ',
+    parameters: z.object({
+      identifier: z.string().describe('DOI, arXiv ID, PMID, or any URL (https://...) of the paper to download'),
+      outputDir: z.string().optional().describe('Override output directory (defaults to <workspace>/06_References/, falls back to ~/.trinno/papers/ if unwritable)'),
+    }),
+    execute: async ({ identifier, outputDir }) => {
       const wsRoot = phaseWriter.getWorkspaceRoot() || process.cwd();
       let primary: string;
-      if (args.outputDir?.trim()) {
-        const guard = resolveInWorkspace(args.outputDir.trim(), wsRoot);
+      if (outputDir?.trim()) {
+        const guard = resolveInWorkspace(outputDir.trim(), wsRoot);
         if (guard.ok) {
           primary = guard.resolved;
         } else {
-          primary = args.outputDir.trim();
+          primary = outputDir.trim();
         }
       } else {
         primary = defaultOutputDir(phaseWriter);
@@ -42,7 +45,7 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
           continue;
         }
         try {
-          const result = await downloadPaper({ identifier: args.identifier, outputDir: dir });
+          const result = await downloadPaper({ identifier, outputDir: dir });
           if (result.ok) {
             return ok({
               ok: true,
@@ -64,17 +67,19 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
       }
 
       return err(formatFailure(attempts, primary, candidates, lastManualUrls, lastMeta));
-    });
+    },
+  });
 
-  const listDownloadedTool = defineTool(
-    'papers_list_downloaded',
-    'List papers previously downloaded by Trinno.',
-  )
-    .param('outputDir', 'string', 'Override output directory (defaults to <workspace>/06_References/)')
-    .handle((args) => {
+  const listDownloadedTool = defineTool({
+    name: 'papers_list_downloaded',
+    description: 'List papers previously downloaded by Trinno.',
+    parameters: z.object({
+      outputDir: z.string().optional().describe('Override output directory (defaults to <workspace>/06_References/)'),
+    }),
+    execute: ({ outputDir }) => {
       let primary: string;
-      if (args.outputDir?.trim()) {
-        const guard = resolveInWorkspace(args.outputDir.trim(), phaseWriter.getWorkspaceRoot() || process.cwd());
+      if (outputDir?.trim()) {
+        const guard = resolveInWorkspace(outputDir.trim(), phaseWriter.getWorkspaceRoot() || process.cwd());
         if (!guard.ok) return err(guard.error);
         primary = guard.resolved;
       } else {
@@ -94,7 +99,8 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
       }
       all.sort((a, b) => b.mtime - a.mtime);
       return ok({ count: all.length, directories: dirs, papers: all });
-    });
+    },
+  });
 
   return [downloadPaperTool, listDownloadedTool];
 }

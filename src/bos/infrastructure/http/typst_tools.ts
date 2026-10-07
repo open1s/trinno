@@ -1,4 +1,5 @@
 import { defineTool, ok, err } from '@open1s/ezbos';
+import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
@@ -9,13 +10,13 @@ import { resolveInWorkspace } from '../config/workspaceGuard.js';
 const log = createModuleLogger('typst-tools');
 
 export function createTypstTools(workspaceRoot: string) {
-  const typstLint = defineTool(
-    'typst_lint',
-    'Check Typst file for syntax errors using LSP',
-  )
-    .required('filePath', 'string', 'Path to the .typ file to lint')
-    .handle(async (args) => {
-      const filePath = args.filePath as string;
+  const typstLint = defineTool({
+    name: 'typst_lint',
+    description: 'Check Typst file for syntax errors using LSP',
+    parameters: z.object({
+      filePath: z.string().describe('Path to the .typ file to lint'),
+    }),
+    execute: async ({ filePath }) => {
       const guard = resolveInWorkspace(filePath, workspaceRoot);
       if (!guard.ok) {
         return err(guard.error);
@@ -76,13 +77,14 @@ export function createTypstTools(workspaceRoot: string) {
           return err(e.message || 'typst lint failed');
         }
       }
-    });
+    },
+  });
 
-  const typstLspStatus = defineTool(
-    'typst_lsp_status',
-    'Check Typst LSP server health. Returns connection status and server info.',
-  )
-    .handle(async () => {
+  const typstLspStatus = defineTool({
+    name: 'typst_lsp_status',
+    description: 'Check Typst LSP server health. Returns connection status and server info.',
+    parameters: z.object({}),
+    execute: async () => {
       try {
         const lsp = await getTypstLspClient(workspaceRoot);
         const isRunning = lsp.isInitialized;
@@ -94,7 +96,8 @@ export function createTypstTools(workspaceRoot: string) {
       } catch (e: any) {
         return err(`LSP not available: ${e.message}`);
       }
-    });
+    },
+  });
 
   return [typstLint, typstLspStatus];
 }
