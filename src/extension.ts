@@ -12,8 +12,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(vscode.commands.registerCommand('trinno-chat.openConfig', () => {
     ensureConfigTemplate(CONFIG_TOML);
-    vscode.workspace.openTextDocument(CONFIG_TOML).then(doc => {
-      vscode.window.showTextDocument(doc, { preview: false });
+    void vscode.workspace.openTextDocument(CONFIG_TOML).then(doc => {
+      void vscode.window.showTextDocument(doc, { preview: false });
+    }, (err: unknown) => {
+      void vscode.window.showErrorMessage(`Failed to open config: ${err instanceof Error ? err.message : String(err)}`);
     });
   }));
 

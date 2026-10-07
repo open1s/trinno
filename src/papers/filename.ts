@@ -14,7 +14,8 @@ const RESERVED_WIN = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 function sanitizeSegment(s: string, max: number): string {
   let out = (s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
   out = out.replace(ILLEGAL, ' ').replace(WHITESPACE, ' ').trim().replace(TRAILING_DOTS, '');
-  if (out.length > max) out = out.slice(0, max).trim();
+  // Re-strip trailing dots after truncation ("aa..a" cut at 'max' can end on a dot).
+  if (out.length > max) out = out.slice(0, max).trim().replace(TRAILING_DOTS, '');
   if (RESERVED_WIN.test(out)) out = '_' + out;
   if (!out) out = 'untitled';
   return out;
@@ -34,6 +35,11 @@ export function buildFilename(meta: PaperMeta, fallbackExt = 'pdf'): string {
     const over = raw.length - MAX_TOTAL;
     raw = `${authorPart} (${year}) ${titleSeg.slice(0, Math.max(0, titleSeg.length - over))}.${fallbackExt}`;
   }
+  // Windows reserves the whole base name regardless of extension (CON.pdf is
+  // still illegal); the per-segment guard above cannot see the final name.
+  const finalExt = path.extname(raw);
+  const finalBase = raw.slice(0, raw.length - finalExt.length);
+  if (RESERVED_WIN.test(finalBase)) raw = '_' + raw;
   return raw;
 }
 

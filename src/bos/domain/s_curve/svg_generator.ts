@@ -3,6 +3,16 @@ import { SCurveStage, STAGE_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS, STAGE_DES
 import { StageDetectionService } from './services.js';
 import { LocaleConfig, DEFAULT_LOCALE, stageLabel, svgLabel, milestoneLabel, t, stageStrategy } from '../../domain/shared/i18n.js';
 
+/** Escape the five XML-relevant characters for untrusted text interpolated into SVG/HTML. */
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export interface SvgOptions {
   width?: number;
   height?: number;
@@ -174,7 +184,7 @@ export class SvgCurveGenerator {
 
         // Label above the milestone
         const labelY = my - size - 8;
-        const labelText = `${m.year}: ${m.label}`;
+        const labelText = `${m.year}: ${escapeXml(m.label)}`;
         svg += `<text x="${mx}" y="${labelY}" text-anchor="middle" font-size="9" fill="${color}" font-weight="bold">${labelText}</text>`;
       }
     }
@@ -209,9 +219,9 @@ export class SvgCurveGenerator {
     }
 
     svg += `<text x="${margin.left + chartW / 2}" y="${height - 15}" text-anchor="middle" font-size="13" fill="#333" font-weight="bold">${svgLabel('timeAxis', lang)}</text>`;
-    svg += `<text x="15" y="${margin.top + chartH / 2}" text-anchor="middle" font-size="13" fill="#333" font-weight="bold" transform="rotate(-90, 15, ${margin.top + chartH / 2})">${sCurve.performanceMetric}</text>`;
+    svg += `<text x="15" y="${margin.top + chartH / 2}" text-anchor="middle" font-size="13" fill="#333" font-weight="bold" transform="rotate(-90, 15, ${margin.top + chartH / 2})">${escapeXml(sCurve.performanceMetric)}</text>`;
 
-    svg += `<text x="${margin.left + chartW / 2}" y="${margin.top - 30}" text-anchor="middle" font-size="16" fill="#333" font-weight="bold">${sCurve.technologyName} — ${svgLabel('scurveAnalysis', lang)}</text>`;
+    svg += `<text x="${margin.left + chartW / 2}" y="${margin.top - 30}" text-anchor="middle" font-size="16" fill="#333" font-weight="bold">${escapeXml(sCurve.technologyName)} — ${svgLabel('scurveAnalysis', lang)}</text>`;
     svg += `<text x="${margin.left + chartW / 2}" y="${margin.top - 12}" text-anchor="middle" font-size="11" fill="#666">${svgLabel('currentStage', lang)}: ${stageLabel(sCurve.s1Stage, lang)} | ${svgLabel('s2Stage', lang)}: ${stageLabel(sCurve.s2Stage, lang)}</text>`;
 
     if (options.showLegend !== false) {
@@ -253,9 +263,9 @@ export class SvgCurveGenerator {
       ly += 14;
       svg += `<text x="${lx}" y="${ly + 5}" font-size="10" fill="#666">${svgLabel('crossoverYear', lang)}: ~${Math.round(crossover)}</text>`;
       ly += 14;
-      svg += `<text x="${lx}" y="${ly + 5}" font-size="10" fill="#666">${svgLabel('maxS1', lang)}: ${Math.round(sCurve.s1Parameters.L)} ${sCurve.performanceMetric}</text>`;
+      svg += `<text x="${lx}" y="${ly + 5}" font-size="10" fill="#666">${svgLabel('maxS1', lang)}: ${Math.round(sCurve.s1Parameters.L)} ${escapeXml(sCurve.performanceMetric)}</text>`;
       ly += 14;
-      svg += `<text x="${lx}" y="${ly + 5}" font-size="10" fill="#666">${svgLabel('maxS2', lang)}: ${Math.round(sCurve.s2Parameters.L)} ${sCurve.performanceMetric}</text>`;
+      svg += `<text x="${lx}" y="${ly + 5}" font-size="10" fill="#666">${svgLabel('maxS2', lang)}: ${Math.round(sCurve.s2Parameters.L)} ${escapeXml(sCurve.performanceMetric)}</text>`;
 
       ly += 30;
       svg += `<rect x="${lx - 5}" y="${ly - 5}" width="${margin.right - 10}" height="65" fill="#fff3e0" stroke="#ff9800" stroke-width="1" rx="4"/>`;
@@ -322,7 +332,7 @@ export class SvgCurveGenerator {
 
     const chars = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-    let chart = `\n  ${sCurve.technologyName} — ${svgLabel('scurveAnalysis', lang)} (${sCurve.performanceMetric})\n\n`;
+    let chart = `\n  ${escapeXml(sCurve.technologyName)} — ${svgLabel('scurveAnalysis', lang)} (${escapeXml(sCurve.performanceMetric)})\n\n`;
 
     for (let row = height; row >= 0; row--) {
       const threshold = (row / height) * maxY;

@@ -28,8 +28,9 @@ export class RawFactsSaver {
   async saveFacts(facts: SCurveRawFacts): Promise<string> {
     mkdirSync(this.outputDir, { recursive: true });
 
-    const timestamp = facts.timestamp || new Date().toISOString().replace(/[:.]/g, '-');
-    const safeName = facts.technologyName.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
+    const timestamp = (facts.timestamp || new Date().toISOString()).replace(/[:.]/g, '-');
+    // Cap the length so a long technology name cannot exceed filesystem limits.
+    const safeName = facts.technologyName.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_').slice(0, 80);
     const filename = `facts_${safeName}_${timestamp}.json`;
     const filepath = join(this.outputDir, filename);
 

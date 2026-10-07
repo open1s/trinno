@@ -53,6 +53,11 @@ export const undoCommand: SlashCommand = {
       return;
     }
 
+    // Derive from the repo, not module state: a worker restart resets
+    // hasSnapshot while the "AI:" description is still on @.
+    const descAtStart = spawnSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'description'], { cwd: ws, encoding: 'utf-8', timeout: 10000 });
+    hasSnapshot = ((descAtStart.stdout as string)?.trim() || '').startsWith('AI:');
+
     if (!hasSnapshot) {
       emit('token', { tokenType: 'Text', text: 'Nothing to undo — no prior prompt changes found.\n' });
       emit('done', {});

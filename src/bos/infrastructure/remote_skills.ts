@@ -180,6 +180,13 @@ export function searchLocalSkills(query: string, limit: number): LocalSkillEntry
 }
 
 export function loadLocalSkill(name: string): { content: string; filePath: string } | null {
+  // Confine to skill directories: reject traversal segments before path.join,
+  // mirroring the remote-skill address checks (TOOLS call this with model input).
+  if (!name || name.length > 512) return null;
+  const segs = name.split('/');
+  for (const seg of segs) {
+    if (!seg || seg === '.' || seg === '..' || !VALID_SEG.test(seg)) return null;
+  }
   for (const dir of LOCAL_SKILLS_DIRS) {
     const dirPath = path.join(dir, name);
     if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {

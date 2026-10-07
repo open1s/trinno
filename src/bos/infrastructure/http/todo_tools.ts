@@ -1,4 +1,4 @@
-import { defineTool, ok } from '@open1s/ezbos';
+import { defineTool, ok, err } from '@open1s/ezbos';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -74,14 +74,14 @@ export function createTodoTools(workspaceRoot: string) {
     execute: ({ todos }) => {
       const inProgressCount = todos.filter(t => t.status === 'in_progress').length;
       if (inProgressCount > 1) {
-        return { ok: false, error: 'Only one todo can be in_progress at a time. Mark the current one completed first.' };
+        return err('Only one todo can be in_progress at a time. Mark the current one completed first.');
       }
 
       const store: TodoStore = { version: STORE_VERSION, todos: todos as TodoItem[], updatedAt: 0 };
       try {
         saveTodos(workspaceRoot, store);
-      } catch (err) {
-        return { ok: false, error: `Failed to save todos: ${err}` };
+      } catch (e) {
+        return err(`Failed to save todos: ${e}`);
       }
 
       const completed = todos.filter(t => t.status === 'completed').length;

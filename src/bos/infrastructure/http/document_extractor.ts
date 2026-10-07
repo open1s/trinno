@@ -115,9 +115,22 @@ function parseAttrs(tag: string): Record<string, string> {
   return attrs;
 }
 
+/**
+ * href attributes are HTML-escaped: PLOS emits "&amp;type=printable", and
+ * new URL() does not decode it, so the server sees a bogus "amp;type" param.
+ */
+function decodeHtmlEntities(u: string): string {
+  return u
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&apos;/g, "'");
+}
+
 function resolve(u: string, baseUrl: string): string | null {
   try {
-    return new url.URL(u, baseUrl).toString();
+    return new url.URL(decodeHtmlEntities(u), baseUrl).toString();
   } catch {
     return null;
   }

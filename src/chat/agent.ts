@@ -56,7 +56,7 @@ export const AgentEvent = {
 
 let workerProcess: childProcess.ChildProcess | null = null;
 let workerReady = false;
-let currentCallbacks: { token: TokenCallback; done: DoneCallback; approval: ApprovalCallback | undefined; messageId?: string } | null = null;
+let currentCallbacks: { token: TokenCallback; done: DoneCallback; error?: (err: string) => void; approval: ApprovalCallback | undefined; messageId?: string } | null = null;
 let workerMessageHandler: ((chunk: Buffer) => void) | null = null;
 let activeDataHandler: ((chunk: Buffer) => void) | null = null;
 
@@ -102,6 +102,25 @@ function makeSettle(release: () => void): () => void {
     settled = true;
     releaseDispatch(release);
   };
+}
+
+/**
+ * Settle a request whose worker died mid-stream. Without this the dispatch
+ * slot is never released and every later send blocks forever.
+ */
+function failInFlightRequest(proc: childProcess.ChildProcess, reason: string): void {
+  if (activeDataHandler) {
+    try { proc.stdout?.removeListener('data', activeDataHandler); } catch { /* proc gone */ }
+  }
+  activeDataHandler = null;
+  const cb = currentCallbacks;
+  currentCallbacks = null;
+  if (releaseInFlight) releaseDispatch(releaseInFlight);
+  if (!cb) return;
+  try {
+    if (cb.error) cb.error(reason);
+    else cb.done({ error: reason });
+  } catch { /* panel callback must not break teardown */ }
 }
 // Persistent approval UI callback — survives across requests so that
 // tool-approval-needed events are never lost to per-request callback races
@@ -206,15 +225,17 @@ async function ensureWorker(): Promise<void> {
   proc.on('exit', (code, signal) => {
     log.warn({ code, signal }, 'bos worker exited');
     if (workerProcess === proc) {
-      workerProcess = null;
       workerReady = false;
+      failInFlightRequest(proc, 'AI worker exited unexpectedly');
+      workerProcess = null;
     }
   });
   proc.on('error', (err) => {
     log.warn({ err }, 'bos worker spawn error');
     if (workerProcess === proc) {
-      workerProcess = null;
       workerReady = false;
+      failInFlightRequest(proc, 'AI worker failed to start');
+      workerProcess = null;
     }
   });
 
@@ -318,7 +339,7 @@ export async function sendMessage(
   const release = await acquireDispatch();
   const settle = makeSettle(release);
   try {
-  currentCallbacks = { token: onToken, done: onDone, approval: onApproval, messageId };
+  currentCallbacks = { token: onToken, done: onDone, error: onError, approval: onApproval, messageId };
 
   await ensureWorker();
   log.debug({ workerReady }, 'ensureWorker done');
@@ -339,7 +360,7 @@ export async function sendMessage(
   const effectiveApiKey = modelConfig?.apiKey ?? config.global_model?.api_key ?? '';
   const effectiveApiMode = modelConfig?.apiMode ?? config.global_model?.api_mode ?? '';
   const effectiveReasoningEffort = modelConfig?.reasoningEffort ?? config.global_model?.reasoning_effort ?? '';
-  log.warn({ config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, apiMode: effectiveApiMode, reasoningEffort: effectiveReasoningEffort, hasModelConfig: !!modelConfig } }, 'model used for request');
+  log.warn({ config: { model: effectiveModel, baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey ? '[redacted]' : '', apiMode: effectiveApiMode, reasoningEffort: effectiveReasoningEffort, hasModelConfig: !!modelConfig } }, 'model used for request');
   const payload = {
     type: 'chat',
     messageId,
@@ -504,48 +525,17 @@ export function sendRecoverSession(sessionId: string, messages: { role: string; 
 }
 
 export async function sendSetWorkspaceRoot(workspaceRoot: string): Promise<void> {
+  if (!workspaceRoot) return;
   await ensureWorker();
-  const proc = workerProcess;
-  const stdin = proc?.stdin;
-  const stdout = proc?.stdout;
-  if (!stdin || !stdout) return;
-
-  return new Promise<void>((resolve) => {
-    let buffer = '';
-    let settled = false;
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      stdout.removeListener('data', handleData);
-      clearTimeout(timer);
-      resolve();
-    };
-    const handleData = (chunk: Buffer): void => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'done' || msg.type === 'error') {
-            finish();
-            return;
-          }
-        } catch { /* ignore non-JSON */ }
-      }
-    };
-    const timer = setTimeout(finish, 15000);
-    stdout.on('data', handleData);
-    stdin.write(JSON.stringify({
-      type: 'chat',
-      messageId: `set_workspace_${Date.now()}`,
-      text: ' ',
-      workspaceRoot,
-    }) + '\n');
-  });
+  const stdin = workerProcess?.stdin;
+  if (!stdin) return;
+  // Dedicated message type: reusing 'chat' with a blank prompt corrupted the
+  // single in-flight stdio protocol (its stdout listener consumed another
+  // request's done) and burned a wasted LLM round. The worker sets the root
+  // without emitting a stream, and enqueue ordering keeps it ahead of the
+  // request that follows.
+  stdin.write(JSON.stringify({ type: 'set-workspace', workspaceRoot }) + '\n');
 }
-
 export async function undoLastAiInsert(): Promise<boolean> {
   const last = insertStack.pop();
   if (!last) return false;
@@ -612,7 +602,7 @@ export async function sendCompactRequest(
   const release = await acquireDispatch();
   const settle = makeSettle(release);
   try {
-  currentCallbacks = { token: onToken, done: onDone, approval: undefined };
+  currentCallbacks = { token: onToken, done: onDone, error: onError, approval: undefined };
 
   await ensureWorker();
 
@@ -673,12 +663,20 @@ export async function sendCompactRequest(
             onToken(buildTokenMsg(msg));
             break;
           case 'done':
-            if (msg.compacted !== true) break;
+            // Compact's own done carries compacted:true; a done with a
+            // messageId but no compacted flag is a foreign stream's terminal
+            // event (e.g. a workspace-root chat) — ignore it.
+            if (msg.compacted !== true && msg.messageId) break;
             drainRemainingLines(compactBuffer);
             compactBuffer = '';
             cleanup();
             settle();
             onDone(msg);
+            break;
+          case 'rate-limited':
+            cleanup();
+            settle();
+            onError(msg.error || 'Rate limited');
             break;
           case 'error':
             cleanup();
@@ -723,7 +721,7 @@ export async function sendSlashRequest(
   const release = await acquireDispatch();
   const settle = makeSettle(release);
   try {
-  currentCallbacks = { token: onToken, done: onDone, approval: undefined, messageId };
+  currentCallbacks = { token: onToken, done: onDone, error: onError, approval: undefined, messageId };
 
   await ensureWorker();
 
@@ -773,6 +771,11 @@ export async function sendSlashRequest(
             settle();
             onDone(msg);
             break;
+          case 'rate-limited':
+            cleanup();
+            settle();
+            onError(msg.error || 'Rate limited');
+            break;
           case 'error':
             if (msg.messageId && msg.messageId !== payload.messageId) break;
             cleanup();
@@ -814,7 +817,7 @@ export async function sendPaperRequest(
   const release = await acquireDispatch();
   const settle = makeSettle(release);
   try {
-  currentCallbacks = { token: onToken, done: onDone, approval: undefined };
+  currentCallbacks = { token: onToken, done: onDone, error: onError, approval: undefined };
 
   await ensureWorker();
 
@@ -893,6 +896,11 @@ export async function sendPaperRequest(
             cleanup();
             settle();
             onDone({ ...msg, writeFilePath: writeFileCmd.filePath, writeFileContent: writeFileCmd.content });
+            break;
+          case 'rate-limited':
+            cleanup();
+            settle();
+            onError(msg.error || 'Rate limited');
             break;
           case 'error':
             cleanup();

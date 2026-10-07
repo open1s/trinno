@@ -25,7 +25,8 @@ export function createPapersTools(phaseWriter: PhaseWriter) {
         if (guard.ok) {
           primary = guard.resolved;
         } else {
-          primary = outputDir.trim();
+          // Do not fall back to the raw path: it escaped the workspace guard.
+          return err(guard.error);
         }
       } else {
         primary = defaultOutputDir(phaseWriter);

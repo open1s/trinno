@@ -9,6 +9,13 @@ import { createModuleLogger } from '../logging/logger.js';
 
 const log = createModuleLogger('search');
 
+/** Hard ceiling for any single search HTTP request. */
+const SEARCH_TIMEOUT_MS = 15_000;
+
+function searchTimeoutSignal(): AbortSignal {
+  return AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+}
+
 export interface BraveSearchConfig {
   apiKey: string;
   baseUrl?: string;
@@ -94,6 +101,7 @@ export class MultiSourceSearchService implements SearchService {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ q: query, num: maxResults }),
+          signal: searchTimeoutSignal(),
         });
 
         if (response.ok) {
@@ -165,6 +173,7 @@ export class MultiSourceSearchService implements SearchService {
     try {
       const response = await fetch(
         `${baseUrl}/paper/search?query=${encodeURIComponent(query)}&limit=${maxResults}&fields=title,abstract,authors,year,externalIds,url`,
+        { signal: searchTimeoutSignal() },
       );
 
       if (response.ok) {
@@ -220,6 +229,7 @@ export class MultiSourceSearchService implements SearchService {
         const response = await fetch(
           `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query + ' technical solution engineering')}&count=${maxResults}`,
           {
+            signal: searchTimeoutSignal(),
             headers: {
               'Accept': 'application/json',
               'Accept-Encoding': 'gzip',
@@ -278,6 +288,7 @@ export class MultiSourceSearchService implements SearchService {
     const response = await fetch(
       `https://api.search.brave.com/res/v1/news/search?q=${encodeURIComponent(query)}&count=${maxResults}`,
       {
+        signal: searchTimeoutSignal(),
         headers: {
           'Accept': 'application/json',
           'Accept-Encoding': 'gzip',
@@ -306,6 +317,7 @@ export class MultiSourceSearchService implements SearchService {
     const response = await fetch(
       `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query + ' blog')}&count=${maxResults}`,
       {
+        signal: searchTimeoutSignal(),
         headers: {
           'Accept': 'application/json',
           'Accept-Encoding': 'gzip',

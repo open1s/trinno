@@ -73,6 +73,7 @@ function ensureAutoDirs(root: string): string | null {
 async function generateScopeAndEval(
   hypothesis: string,
   deps: TrizDeps,
+  signal?: AbortSignal,
 ): Promise<{ scope: string; eval: string }> {
   const factory = getAgentFactory();
   const mc = getModelConfig();
@@ -101,6 +102,15 @@ async function generateScopeAndEval(
   });
   const agent = await builder.start();
 
+  // Cancelling /auto during pre-analysis must close the planner stream; the
+  // old single pre-flight check let it run to completion after cancel.
+  const onAbort = () => {
+    if (typeof agent.close === 'function') {
+      try { void agent.close(); } catch { /* ignore */ }
+    }
+  };
+  if (signal) signal.addEventListener('abort', onAbort, { once: true });
+
   try {
     const prompt = [
       'Generate scope.md and eval.md for this research hypothesis:',
@@ -112,6 +122,7 @@ async function generateScopeAndEval(
     ].join('\n');
 
     const result = await agent.streamCollect(prompt);
+    if (signal?.aborted) throw new Error('Cancelled');
     const text = result
       .filter((t: any) => t.type === 'Text')
       .map((t: any) => t.text)
@@ -129,6 +140,7 @@ async function generateScopeAndEval(
       eval: evalMatch?.[1]?.trim() ?? `# Evaluation — AutoResearch\n\n**Hypothesis:** ${hypothesis}\n\n## Primary Metric\n\nSee scope.md for details.\n`,
     };
   } finally {
+    if (signal) signal.removeEventListener('abort', onAbort);
     if (typeof agent.close === 'function') {
       await agent.close();
     }
@@ -283,7 +295,13 @@ export const autoCommand: SlashCommand = {
         'Generating scope.md and eval.md via AI analysis...',
       ].join('\n') });
 
-      const result = await generateScopeAndEval(raw, deps);
+      const result = await generateScopeAndEval(raw, deps, signal);
+
+      if (signal.aborted) {
+        emit('token', { tokenType: 'Text', text: '\n\n_Analysis cancelled — no scope/eval files written._\n' });
+        emit('done', {});
+        return;
+      }
 
       const issues = await validateScopeAndEval(result.scope, result.eval);
       if (issues.length > 0) {

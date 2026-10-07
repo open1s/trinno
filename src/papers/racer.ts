@@ -17,76 +17,86 @@ export async function raceSources(opts: RaceOptions): Promise<RaceResult | null>
   const { identifier, sources, signal, onSourceStart, onSourceFail } = opts;
 
   const failures: { source: string; error: string }[] = [];
+
+  // Internal controller: aborted as soon as the race settles so losing sources
+  // stop downloading instead of running to completion in the background.
+  const raceCtrl = new AbortController();
+  const abortRace = (): void => { try { raceCtrl.abort(); } catch { /* ignore */ } };
+  const onExternalAbort = (): void => abortRace();
+  const cleanupSignal = (): void => { signal?.removeEventListener('abort', onExternalAbort); };
+
+  if (signal) {
+    if (signal.aborted) return null;
+    signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  const effSignal = raceCtrl.signal;
+
   const candidates = sources
     .slice()
     .sort((a, b) => a.rank - b.rank)
     .map((source) => {
       const run = async (): Promise<SourceCandidate | null> => {
-        if (signal?.aborted) return null;
+        if (effSignal.aborted) return null;
         onSourceStart?.(source.name);
         try {
-          return await source.resolve(identifier, signal);
+          return await source.resolve(identifier, effSignal);
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
-          failures.push({ source: source.name, error: msg });
-          onSourceFail?.(source.name, msg);
+          // Sources killed by our own settle/abort are not real failures, and
+          // must not mutate race state or emit progress after it settled.
+          if (!effSignal.aborted) {
+            failures.push({ source: source.name, error: msg });
+            onSourceFail?.(source.name, msg);
+          }
           return null;
         }
       };
       return { source, run };
     });
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {
+    cleanupSignal();
+    return null;
+  }
 
   const RACE_WINDOW_MS = 200;
 
-return new Promise<RaceResult | null>((resolve) => {
+  return new Promise<RaceResult | null>((resolve) => {
     let settled = false;
     const resolved: SourceCandidate[] = [];
     let windowTimer: NodeJS.Timeout | null = null;
     let candidateCount = 0;
     let pendingCandidates = candidates.length;
 
-    const onAbortHandler = () => {
+    const settle = (result: RaceResult | null): void => {
       if (settled) return;
       settled = true;
       if (windowTimer) clearTimeout(windowTimer);
-signal?.removeEventListener('abort', onAbortHandler);
-      resolve(null);
+      cleanupSignal();
+      signal?.removeEventListener('abort', onAbortHandler);
+      abortRace();
+      resolve(result);
     };
 
-    const checkFinish = () => {
+    const onAbortHandler = (): void => {
+      settle(null);
+    };
+
+    const checkFinish = (): void => {
       if (settled) return;
       if (candidateCount >= pendingCandidates) {
-        if (resolved.length > 0) {
-          settled = true;
-          if (windowTimer) clearTimeout(windowTimer);
-          signal?.removeEventListener('abort', onAbortHandler);
-          resolve({ candidates: resolved, failures });
-        } else {
-          settled = true;
-          if (windowTimer) clearTimeout(windowTimer);
-          signal?.removeEventListener('abort', onAbortHandler);
-          resolve(null);
-        }
+        settle(resolved.length > 0 ? { candidates: resolved, failures } : null);
       }
     };
 
-    const finishNow = () => {
-      if (settled) return;
-      settled = true;
-      if (windowTimer) clearTimeout(windowTimer);
-      signal?.removeEventListener('abort', onAbortHandler);
-      if (resolved.length > 0) {
-        resolve({ candidates: resolved, failures });
-      } else {
-        resolve(null);
-      }
+    const finishNow = (): void => {
+      settle(resolved.length > 0 ? { candidates: resolved, failures } : null);
     };
 
     for (let i = 0; i < candidates.length; i++) {
       const entry = candidates[i]!;
       entry.run().then((result) => {
+        if (settled) return;
         candidateCount++;
         if (result) {
           resolved.push(result);

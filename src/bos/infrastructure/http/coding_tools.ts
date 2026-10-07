@@ -481,6 +481,11 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (ignoreCase) rgArgs.push('--ignore-case');
         rgArgs.push(pattern, searchPath);
         const result = spawnSync('rg', rgArgs, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, cwd: workspaceRoot });
+        if (result.error) return err(`grep_search failed to run rg: ${result.error.message}`);
+        // rg: exit 1 = no matches (ok), >=2 = real failure (bad regex, unreadable path)
+        if (result.status !== null && result.status > 1) {
+          return err(`grep_search failed (rg exit ${result.status}): ${(result.stderr || '').trim().slice(0, 500)}`);
+        }
         const matches: any[] = [];
         for (const line of (result.stdout || '').trim().split('\n').filter(Boolean)) {
           try {
@@ -510,6 +515,10 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
     execute: ({ pattern }) => {
       try {
         const result = spawnSync('rg', ['--files', '--no-require-git', '-g', pattern], { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
+        if (result.error) return err(`glob_files failed to run rg: ${result.error.message}`);
+        if (result.status !== null && result.status > 1) {
+          return err(`glob_files failed (rg exit ${result.status}): ${(result.stderr || '').trim().slice(0, 500)}`);
+        }
         const files = (result.stdout || '').trim().split('\n').filter(Boolean);
         return ok({ pattern, fileCount: files.length, files: files.slice(0, 200) });
       } catch (e: any) {
@@ -537,10 +546,13 @@ export function createCodingTools(workspaceRoot: string, sandboxEnabled?: boolea
         if (rewrite) sgArgs.push('--rewrite', rewrite);
         sgArgs.push(searchPath);
         const result = spawnSync('sg', sgArgs, { encoding: 'utf-8', cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 });
-        if (result.status !== 0) {
-          return ok({ pattern, lang, matchCount: 0, matches: [] });
+        if (result.error) return err(`ast_grep failed to run sg: ${result.error.message}`);
+        // ast-grep: exit 1 = no matches (ok), >=2 = real failure
+        if (result.status !== null && result.status > 1) {
+          return err(`ast_grep failed (sg exit ${result.status}): ${(result.stderr || '').trim().slice(0, 500)}`);
         }
-        const matches = JSON.parse(result.stdout || '[]');
+        const sgStdout = (result.stdout || '').trim();
+        const matches = sgStdout ? JSON.parse(sgStdout) : [];
         const formatted = matches.map((m: any) => ({
           file: m.file,
           line: m.line,

@@ -67,14 +67,17 @@ export function createSlashCommandRegistry(): SlashCommandRegistry {
     register(cmd, extraAliases) {
       const key = cmd.name.toLowerCase();
       if (commands.has(key)) {
-        log.warn({ cmdName: cmd.name }, 'duplicate command registration');
+        // Built-ins are registered first; a user skill with the same name must
+        // not silently replace (and destroy) the built-in command.
+        log.warn({ cmdName: cmd.name }, 'duplicate command registration ignored');
+        return;
       }
       commands.set(key, cmd);
       if (extraAliases) {
         for (const a of extraAliases) {
           const aliasKey = a.toLowerCase();
-          if (aliases.has(aliasKey)) {
-            log.warn({ alias: a }, 'duplicate alias registration');
+          if (aliases.has(aliasKey) || commands.has(aliasKey)) {
+            log.warn({ alias: a }, 'duplicate alias registration ignored');
             continue;
           }
           aliases.set(aliasKey, key);

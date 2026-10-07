@@ -224,6 +224,10 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (signal?.aborted) throw new Error('Request aborted');
 
+    // True when OUR per-request timer aborted the fetch (as opposed to an
+    // external cancel): undici reports both as "this operation was aborted".
+    let selfTimedOut = false;
+
     try {
       if (attempt > 0) {
         const delay = retryBackoffMs * Math.pow(2, attempt - 1) + Math.random() * 100;
@@ -233,22 +237,22 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
       const ctrl = new AbortController();
       const onAbort = () => ctrl.abort();
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      const timer = setTimeout(() => { selfTimedOut = true; ctrl.abort(); }, timeoutMs);
 
       try {
         let currentUrl = url;
         const collectedCookies: Array<{ name: string; value: string }> = [];
         let finalResponse: { body: Buffer; contentType: string | null; url: string; status: number; headers: Record<string, string>; contentLength: number | null } | null = null;
 
-        const doRedirect = redirect !== false && redirect !== 'manual';
-
         for (let hop = 0; hop <= maxRedirects; hop++) {
-          const cookieHeader = doRedirect ? undefined : buildCookieHeader(cookieJar, currentUrl);
+          // Cookies are independent of redirect handling: in the default
+          // 'auto' mode they were never sent or collected (empty jar).
+          const cookieHeader = buildCookieHeader(cookieJar, currentUrl);
           const reqHeaders: Record<string, string> = {
             'User-Agent': userAgent,
             'Accept': accept,
             ...headers,
-            ...(doRedirect ? {} : (cookieHeader ? { 'Cookie': cookieHeader } : {})),
+            ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
           };
 
           if (resumeFrom !== undefined && resumeFrom > 0 && hop === 0) {
@@ -263,7 +267,7 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
             ...(requestBody ? { body: requestBody } : {}),
           });
 
-          if (!doRedirect) {
+          {
             const setCookies = fetchRes.headers.getSetCookie();
             mergeCookies(cookieJar, setCookies, currentUrl);
             for (const cs of setCookies) {
@@ -275,18 +279,25 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
           if (fetchRes.status >= 300 && fetchRes.status < 400) {
             const location = fetchRes.headers.get('location');
             if (!location) throw new Error(`Redirect ${fetchRes.status} without Location header`);
+            // Redirects are always walked by hand (Node's fetch 'follow' mode
+            // hangs on large bodies), so this branch must continue for
+            // 'auto', 'manual' and false alike.
             currentUrl = new URL(location, currentUrl).href;
-            if (doRedirect) continue;
-            // When redirect is 'auto', we still need to follow manually
-            // because we need to handle cookies and the body
             continue;
           }
 
-          // Clear timeout before reading body (large files take time to download)
+          // Body read keeps BOTH deadlines: a fresh body timer (servers that
+          // stall mid-body) and the external abort listener (user cancel), so
+          // neither the timeout nor cancellation is lost after the headers.
           clearTimeout(timer);
-          if (signal) signal.removeEventListener('abort', onAbort);
-
-          const ab = await fetchRes.arrayBuffer();
+          const bodyTimer = setTimeout(() => { selfTimedOut = true; ctrl.abort(); }, timeoutMs);
+          let ab: ArrayBuffer;
+          try {
+            ab = await fetchRes.arrayBuffer();
+          } finally {
+            clearTimeout(bodyTimer);
+            if (signal) signal.removeEventListener('abort', onAbort);
+          }
           const body = Buffer.from(ab);
           const contentType = (fetchRes.headers.get('content-type') || '').split(';')[0]?.trim().toLowerCase() || null;
           const contentLength = fetchRes.headers.get('content-length');
@@ -302,7 +313,11 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
         }
 
         if (isRetryableStatus(finalResponse.status, retryOnStatus)) {
-          throw new Error(`HTTP ${finalResponse.status}`);
+          // Tag retryability on the error: the message matches none of
+          // isRetryableError's patterns, so 429/5xx never retried.
+          const statusErr = new Error(`HTTP ${finalResponse.status}`) as Error & { retryable?: boolean };
+          statusErr.retryable = true;
+          throw statusErr;
         }
 
         saveCookieJar(cookieJar, cookieJarPath);
@@ -323,7 +338,8 @@ export async function httpRequest(opts: HttpRequestOptions): Promise<HttpRespons
     } catch (e: unknown) {
       lastError = e instanceof Error ? e : new Error(String(e));
       if (signal?.aborted) throw lastError;
-      if (!isRetryableError(lastError)) throw lastError;
+      const taggedRetryable = (lastError as Error & { retryable?: boolean }).retryable === true;
+      if (!taggedRetryable && !selfTimedOut && !isRetryableError(lastError)) throw lastError;
       if (attempt >= maxRetries) throw lastError;
     }
   }

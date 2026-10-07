@@ -8,7 +8,7 @@ suite('AfterToolCall Hook', () => {
 
 		const { afterHook } = createToolPermissionHook({});
 		await afterHook.callback({
-			data: { tool_name: 'read_file', tool_id: 'tool_123', result: { ok: 'file content here' } },
+			data: { tool_name: 'bash', tool_id: 'tool_123', result: { ok: 'file content here' } },
 		} as any);
 
 		assert.strictEqual(emitted?.tokenType, 'ToolResult');
@@ -30,6 +30,49 @@ suite('AfterToolCall Hook', () => {
 		assert.strictEqual(emitted?.tokenType, 'ToolResult');
 		assert.strictEqual(emitted?.text, 'Permission denied');
 		assert.strictEqual(emitted?.toolId, 'tool_456');
+		assert.strictEqual(emitted?.status, 'error');
+	});
+
+	test('after hook emits completed for ezbos 2.x ok() envelope', async () => {
+		const { createToolPermissionHook, setApprovalEmitter } = await import('../../bos/infrastructure/config/toolPermissionHook');
+		let emitted: any = null;
+		setApprovalEmitter((type: string, data: any) => { emitted = data; });
+
+		const { afterHook } = createToolPermissionHook({});
+		await afterHook.callback({
+			data: { tool_name: 'bash', tool_id: 'tool_789', result: { success: true, data: 'file content here' } },
+		} as any);
+
+		assert.strictEqual(emitted?.tokenType, 'ToolResult');
+		assert.strictEqual(emitted?.text, 'file content here');
+		assert.strictEqual(emitted?.status, 'completed');
+	});
+
+	test('after hook emits error for ezbos 2.x err() envelope', async () => {
+		const { createToolPermissionHook, setApprovalEmitter } = await import('../../bos/infrastructure/config/toolPermissionHook');
+		let emitted: any = null;
+		setApprovalEmitter((type: string, data: any) => { emitted = data; });
+
+		const { afterHook } = createToolPermissionHook({});
+		await afterHook.callback({
+			data: { tool_name: 'bash', tool_id: 'tool_790', result: { success: false, error: 'Content too short' } },
+		} as any);
+
+		assert.strictEqual(emitted?.text, 'Content too short');
+		assert.strictEqual(emitted?.status, 'error');
+	});
+
+	test('after hook treats a plain "Error:" string result as an error', async () => {
+		const { createToolPermissionHook, setApprovalEmitter } = await import('../../bos/infrastructure/config/toolPermissionHook');
+		let emitted: any = null;
+		setApprovalEmitter((type: string, data: any) => { emitted = data; });
+
+		const { afterHook } = createToolPermissionHook({});
+		await afterHook.callback({
+			data: { tool_name: 'bash', tool_id: 'tool_791', result: 'Error: file not found' },
+		} as any);
+
+		assert.strictEqual(emitted?.text, 'Error: file not found');
 		assert.strictEqual(emitted?.status, 'error');
 	});
 });

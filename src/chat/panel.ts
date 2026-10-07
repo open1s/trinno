@@ -34,6 +34,11 @@ import {
 import { buildContextWithSummary } from './compaction';
 
 let chatView: vscode.WebviewView | null = null;
+// resolveWebviewView runs again whenever the view is disposed and re-created;
+// global agent-event bridges must be bound once, and the per-view visibility
+// listener must be disposed before re-binding, or events post N times.
+let webviewEventListenersBound = false;
+let visibilityDisposable: vscode.Disposable | null = null;
 let sessionStore: SessionStore | null = null;
 let currentSession: Session | null = null;
 let currentStreamingId: string | null = null;
@@ -299,25 +304,29 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       this.context.subscriptions
     );
 
-    agentEvents.on(AgentEvent.TodoUpdate, (todos: Array<{ content: string; status: string; priority: string }>) => {
-      if (chatView) {
-        chatView.webview.postMessage({ type: 'todo-update', todos } as any);
-      }
-    });
+    if (!webviewEventListenersBound) {
+      webviewEventListenersBound = true;
+      agentEvents.on(AgentEvent.TodoUpdate, (todos: Array<{ content: string; status: string; priority: string }>) => {
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'todo-update', todos } as any);
+        }
+      });
 
-    agentEvents.on(AgentEvent.GoalProgress, (msg: { completed: number; total: number; items?: string[] }) => {
-      if (chatView) {
-        chatView.webview.postMessage({ type: 'goal-progress', completed: msg.completed, total: msg.total, items: msg.items } as any);
-        sendGoalStatus();
-      }
-    });
-    agentEvents.on(AgentEvent.SubagentStatus, (subagents: Array<{ jobId: string; name: string; status: string; elapsedMs: number; output: string }>) => {
-      if (chatView) {
-        chatView.webview.postMessage({ type: 'subagent-status', subagents } as any);
-      }
-    });
+      agentEvents.on(AgentEvent.GoalProgress, (msg: { completed: number; total: number; items?: string[] }) => {
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'goal-progress', completed: msg.completed, total: msg.total, items: msg.items } as any);
+          sendGoalStatus();
+        }
+      });
+      agentEvents.on(AgentEvent.SubagentStatus, (subagents: Array<{ jobId: string; name: string; status: string; elapsedMs: number; output: string }>) => {
+        if (chatView) {
+          chatView.webview.postMessage({ type: 'subagent-status', subagents } as any);
+        }
+      });
+    }
 
-    chatView.onDidChangeVisibility(() => {
+    visibilityDisposable?.dispose();
+    visibilityDisposable = chatView.onDidChangeVisibility(() => {
       if (chatView?.visible) {
         this.sendWelcome();
       }
@@ -652,6 +661,12 @@ async function deleteSessionById(sessionId: string): Promise<void> {
 
   await deleteSession(sessionId);
   sessionStore.sessions = sessionStore.sessions.filter(s => s.id !== sessionId);
+
+  // Drop the in-memory session first: switchSession() saves currentSession before
+  // switching, which would resurrect the just-deleted file on disk.
+  if (currentSession && currentSession.id === sessionId) {
+    currentSession = null;
+  }
 
   if (sessionStore.activeSessionId === sessionId) {
     if (sessionStore.sessions.length > 0) {
@@ -1105,7 +1120,7 @@ async function handleDownloadCommand(identifier: string): Promise<void> {
         '- `/download arXiv:2401.01234`\n' +
         '- `/download 2401.01234`\n' +
         '- `/download https://doi.org/10.1126/science.aec6396`\n\n' +
-        'PDFs are saved to `<workspace>/.trinno/papers/` (or `~/.trinno/papers/` outside a workspace).',
+        'PDFs are saved to `<workspace>/06_References/` (or `~/.trinno/papers/` outside a workspace).',
       ),
     } as any);
     return;

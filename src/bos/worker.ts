@@ -113,7 +113,6 @@ let depsInitPromise: Promise<void> | null = null;
 let lastApiKey: string | undefined;
 let currentJobId = 0;
 let currentAgent: any = null;
-let currentSessionIdForCancel: string | null = null;
 
 const subagentNotifications: SubagentNotification[] = [];
 
@@ -166,7 +165,6 @@ slashRegistry.register(autoCommand, ['a', 'autoresearch']);
 slashRegistry.register(sandboxCommand, ['sb']);
 slashRegistry.register(downloadCommand, ['d', 'dl', 'get']);
 
-let pendingSlashOutput: string | null = null;
 
 function loadSkillsFromDir(dirPath: string): void {
   try {
@@ -176,6 +174,10 @@ function loadSkillsFromDir(dirPath: string): void {
       if (!entry.isDirectory()) continue;
       const skillPath = path.join(dirPath, entry.name, 'SKILL.md');
       if (!fs.existsSync(skillPath)) continue;
+      if (slashRegistry.get(entry.name)) {
+        log.warn({ skill: entry.name }, 'skill name collides with a built-in slash command; skipped');
+        continue;
+      }
       const content = fs.readFileSync(skillPath, 'utf-8');
       const descMatch = content.match(/description:\s*([^\n]+)/);
       const description = descMatch ? descMatch[1]!.trim().replace(/^["']|["']$/g, '') : `Apply ${entry.name} skill`;
@@ -233,7 +235,10 @@ process.stdout.write(JSON.stringify({ type: 'ready' }) + '\n');
 function emit(type: string, data: any): void {
   if (abortController?.signal.aborted && type !== 'done' && type !== 'error' && type !== 'subagent-status') return;
   const line = JSON.stringify({ type, ...data }) + '\n';
-  if (emitQueue.length < EMIT_QUEUE_MAX) {
+  // Terminal events must never be dropped: losing the final done/error under
+  // stdout backpressure hangs the panel forever.
+  const terminal = type === 'done' || type === 'error';
+  if (terminal || emitQueue.length < EMIT_QUEUE_MAX) {
     emitQueue.push(line);
     scheduleDrain();
   } else {
@@ -451,9 +456,25 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
   }
 
   if (depsInitPromise) await depsInitPromise;
+  // Mirror the chat path's deps init: without the api key (and permission /
+  // sandbox settings) an AI-augmented slash tool authenticates without a key,
+  // and a settings key change would leave stale deps pinned forever.
+  const modelCfg = (globalThis as any).__TRP_MODEL_CONFIG || {};
+  const slashApiKey: string | undefined = modelCfg.apiKey;
+  if (deps && slashApiKey !== lastApiKey) {
+    await closeDeps(deps);
+    deps = null;
+    depsInitPromise = null;
+  }
   if (!deps) {
     const wsRoot = (globalThis as any).__TRP_WORKSPACE_ROOT || process.cwd();
-    deps = await composeRoot({ workspaceRoot: wsRoot });
+    const brainOptions: any = { workspaceRoot: wsRoot };
+    if (slashApiKey) brainOptions.apiKey = slashApiKey;
+    const toolPerms = (globalThis as any).__TRP_TOOL_PERMISSIONS;
+    if (toolPerms) brainOptions.toolPermissions = toolPerms;
+    brainOptions.sandboxEnabled = (globalThis as any).__TRP_SANDBOX_ENABLED !== false;
+    deps = await composeRoot(brainOptions);
+    lastApiKey = slashApiKey;
     setupSubagentManager();
     await initApprovalBus(deps.brain);
     await startToolEventMonitor(deps.brain);
@@ -463,24 +484,12 @@ async function handleSlashCommand(text: string, signal: AbortSignal, localEmit: 
 
   const { command, args } = match;
 
-  let capturedOutput = '';
-  const capturingEmit: typeof localEmit = (type, data) => {
-    if (type === 'token' && data.tokenType === 'Text') {
-      capturedOutput += data.text;
-    }
-    localEmit(type, data);
-  };
-
   try {
-    await command.execute(args, deps, capturingEmit, signal);
+    await command.execute(args, deps, localEmit, signal);
   } catch (err) {
-    if (!signal.aborted) {
-      localEmit('error', errorPayload(err));
-    }
-  }
-
-  if (capturedOutput) {
-    pendingSlashOutput = capturedOutput;
+    // Always surface the failure: swallowing it when the signal was aborted
+    // leaves the panel with neither done nor error (permanent hang).
+    localEmit('error', errorPayload(err));
   }
 
   return true;
@@ -577,7 +586,6 @@ function handleCancel(): void {
   cancelAllPendingApprovals();
   if (currentAgent) {
     currentAgent.stop().catch(() => { });
-    currentSessionIdForCancel = null;
   }
   // Discard all cached agents so next message creates fresh
   activeAgents.clear();
@@ -985,6 +993,9 @@ async function drainMsgQueue(): Promise<void> {
       await item.run();
     } catch (err) {
       log.error({ err, msgType: item.type }, 'message processing error');
+      // composeRoot/deps-init failures escape the handlers' inner try/catch
+      // (they run before it); without this the panel waits forever.
+      emit('error', errorPayload(err));
     }
   }
   msgQueueProcessing = false;
@@ -1032,6 +1043,14 @@ process.stdin.on('data', (chunk: Buffer) => {
                 depsInitPromise = null;
                 deps = null;
               }
+            }
+          });
+          break;
+        case 'set-workspace':
+          enqueue('set-workspace', async () => {
+            if (msg.workspaceRoot) {
+              (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
+              chdirToWorkspace();
             }
           });
           break;
@@ -1184,6 +1203,8 @@ process.stdin.on('data', (chunk: Buffer) => {
               apiMode: msg.apiMode,
               reasoningEffort: msg.reasoningEffort,
             };
+            (globalThis as any).__TRP_TOOL_PERMISSIONS = msg.toolPermissions;
+            (globalThis as any).__TRP_SANDBOX_ENABLED = msg.sandboxEnabled;
             currentJobId++;
             const slashJobId = String(currentJobId);
             if (msg.usePubSub) {
@@ -1194,7 +1215,11 @@ process.stdin.on('data', (chunk: Buffer) => {
                 }
               });
             } else {
-              const matched = await handleSlashCommand(msg.text, abortController?.signal ?? new AbortController().signal, emit);
+              // Fresh controller per slash dispatch: a prior cancel aborts the
+              // module-global controller, which would otherwise drop every emit
+              // (including done) and hang the panel.
+              abortController = new AbortController();
+              const matched = await handleSlashCommand(msg.text, abortController.signal, emit);
               if (!matched) {
                 emit('error', { error: formatUnknownSlash(msg.text) });
               }
@@ -1491,7 +1516,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
     });
 
     let config = (agent as any)._config;
-    log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey, apiMode: config.apiMode, reasoningEffort: config.reasoningEffort } }, 'model info');
+    log.warn({ config: { model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey ? '[redacted]' : '', apiMode: config.apiMode, reasoningEffort: config.reasoningEffort } }, 'model info');
     started = await agent.start();
     activeAgents.set(sessionKey, { started, agent, model: model || null, baseUrl: baseUrl || null, apiKey: apiKey || null, apiMode: apiMode || null, reasoningEffort: reasoningEffort || null, skillContent: skillContent || null });
 
@@ -1608,7 +1633,16 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
   }
 
   currentAgent = started;
-  currentSessionIdForCancel = sessionId || null;
+
+  // One abort listener for the whole agent loop. A per-round `once` listener
+  // was never removed on normal completion, so a later cancel fired every
+  // leaked listener at once.
+  let rejectCurrentRound: ((e: Error) => void) | null = null;
+  const onLoopAbort = () => {
+    started.stop().catch(() => { });
+    rejectCurrentRound?.(new Error('cancelled'));
+  };
+  if (signal) signal.addEventListener('abort', onLoopAbort);
 
   try {
     const chatStartTime = Date.now();
@@ -1648,8 +1682,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
       await new Promise<void>((resolve, reject) => {
         // Abort listener — rejects so the handler exits immediately (catch block)
         // avoiding the ~60-100s stall from exportSession() / commandSub.stop()
-        const onAbort = () => { started.stop().catch(() => { }); reject(new Error('cancelled')); };
-        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+        rejectCurrentRound = reject;
 
         started.stream(msg, withMockInjector((token: any) => {
           if (token.type === 'Error') {
@@ -1984,58 +2017,11 @@ Do not call update_goal unless the goal is complete or the strict blocked audit 
       activeAgents.delete(sessionKey);
     }
   } finally {
+    if (signal) signal.removeEventListener('abort', onLoopAbort);
     // Keep currentAgent alive for reuse across messages
-    currentSessionIdForCancel = null;
   }
 }
 
-async function syncSessionAfterCommand(
-  _brain: any,
-  existingSession: string,
-  commandText: string,
-  capturedOutput: string,
-): Promise<string | undefined> {
-  try {
-    const f = getAgentFactory();
-    const mc = getModelConfig();
-    const syncAgent = f.create({
-      name: 'session-sync',
-      systemPrompt: 'You are Research Master — a context synchronization agent. Acknowledge new slash-command output silently and integrate it as Evidence/Modeling in the 7-phase pipeline without re-explaining.',
-      ...(mc.model ? { model: mc.model } : {}),
-      ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
-      ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
-      ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
-      ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
-    });
-    const started = await syncAgent.start();
-    try {
-      started.importSession(existingSession);
-    } catch {
-      return undefined;
-    }
-    const syncMsg =
-      `<system_context>\n` +
-      `The following command was executed and its output was displayed to the user:\n\n` +
-      `<command>${commandText}</command>\n\n` +
-      `<output>\n${capturedOutput}\n</output>\n` +
-      `\nAcknowledge this silently.</system_context>`;
-    const result = await new Promise<string | undefined>((resolve) => {
-      started.stream(syncMsg, (token: any) => {
-        if (token.type === 'Done') {
-          let session: string | undefined;
-          try { session = started.exportSession(); } catch { }
-          resolve(session);
-        } else if (token.type === 'Error') {
-          resolve(undefined);
-        }
-      });
-    });
-    started.stop().catch(() => { });
-    return result;
-  } catch {
-    return undefined;
-  }
-}
 
 process.on('SIGTERM', () => {
   abortController?.abort();

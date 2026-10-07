@@ -8,7 +8,16 @@ export const sCurveCommand: SlashCommand = {
   usage: '/s-curve <technology name> <performance metric> [TRL <level>]',
   async execute(args: string, deps: TrizDeps, emit: (type: string, data: any) => void, signal: AbortSignal) {
     const trlMatch = args.match(/TRL\s*(\d+)/i);
-    const trlOverride: TRLLevel | undefined = trlMatch ? (parseInt(trlMatch[1]!, 10) as TRLLevel) : undefined;
+    let trlOverride: TRLLevel | undefined;
+    if (trlMatch) {
+      const parsedTrl = parseInt(trlMatch[1]!, 10);
+      if (parsedTrl < 1 || parsedTrl > 9) {
+        emit('token', { tokenType: 'Text', text: `Invalid TRL ${parsedTrl}: expected a level from 1 to 9.\n` });
+        emit('done', {});
+        return;
+      }
+      trlOverride = parsedTrl as TRLLevel;
+    }
 
     const baseArgs = args.replace(/TRL\s*\d+/i, '').trim();
     const parts = baseArgs.split(/\s+/);

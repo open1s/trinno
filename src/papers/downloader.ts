@@ -43,10 +43,9 @@ export function getDefaultSources(email?: string): PaperSource[] {
 }
 
 const MIN_BYTES = 1_000;
-const PDF_MAGIC = Buffer.from([0x25, 0x50, 0x44, 0x46]);
-const DOCX_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+// OOXML (docx/xlsx/pptx), EPUB and plain ZIP all start with this header;
+// detectFormatFromBuffer sniffs the archive contents to disambiguate.
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-const EPUB_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
 const FORMAT_EXT: Record<string, string> = {
   'application/pdf': 'pdf',
@@ -219,16 +218,21 @@ async function lookupMetadata(parsed: ParsedIdentifier, signal: AbortSignal | un
 
 function detectFormatFromBuffer(buf: Buffer): string | null {
   if (buf.length >= 5 && buf.subarray(0, 5).toString('utf8') === '%PDF-') return 'application/pdf';
-  if (buf.length >= 4 && buf.subarray(0, 4).equals(DOCX_MAGIC)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  if (buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return 'application/zip';
-  if (buf.length >= 4 && (buf.subarray(0, 4).equals(EPUB_MAGIC))) {
-    return 'application/epub+zip';
+  if (buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) {
+    // All ZIP containers share the PK header, so DOCX used to win
+    // unconditionally and every EPUB/ZIP was written as .docx. Sniff the entry
+    // names stored in the first local file headers instead.
+    const head = buf.subarray(0, Math.min(buf.length, 4096)).toString('latin1');
+    if (head.includes('application/epub+zip')) return 'application/epub+zip';
+    if (head.includes('word/')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (head.includes('xl/')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (head.includes('ppt/')) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    return 'application/zip';
   }
   if (buf.length >= 6 && buf.subarray(0, 6).toString('utf8') === '{\\rtf1') return 'application/rtf';
-  if (buf.length >= 5 && buf.subarray(0, 5).toString('utf8') === '<!DOC' || buf.length >= 5 && buf.subarray(0, 5).toString('utf8') === '<html') return 'text/html';
+  if (buf.length >= 5 && (buf.subarray(0, 5).toString('utf8') === '<!DOC' || buf.subarray(0, 5).toString('utf8') === '<html')) return 'text/html';
   return null;
 }
-
 function detectFormatFromUrl(url: string): string | null {
   let pathname: string = url;
   try {
@@ -246,99 +250,6 @@ function extForFormat(format: string | undefined): string {
   return FORMAT_EXT[format] ?? format.split('/').pop()?.split('+')[0] ?? 'bin';
 }
 
-const FILE_LINK_RE = /\.(pdf|docx?|pptx?|epub|ps)(\?|#|$)/i;
-const DOWNLOAD_URL_RE = /\/(pdf|download|fulltext|full-text|supplement)\//i;
-
-const DOWNLOAD_TEXT_RE = /\b(pdf|download|full ?text|全文)\b/i;
-
-function fileUrlPriority(u: string): number {
-  if (/\.pdf(\?|#|$)/i.test(u)) return 0;
-  if (/\.docx(\?|#|$)/i.test(u)) return 1;
-  if (/\.doc(\?|#|$)/i.test(u)) return 2;
-  if (/\.pptx(\?|#|$)/i.test(u)) return 3;
-  if (/\.ppt(\?|#|$)/i.test(u)) return 4;
-  if (/\.epub(\?|#|$)/i.test(u)) return 5;
-  if (/\.ps(\?|#|$)/i.test(u)) return 6;
-  return 7;
-}
-
-function isFileUrl(u: string): boolean {
-  return FILE_LINK_RE.test(u) || DOWNLOAD_URL_RE.test(u) || /\b(format|type)=pdf/i.test(u);
-}
-
-/**
- * Extract direct file URLs (PDF/DOC/DOCX/PPT/PPTX/EPUB) from an HTML page.
- * Checks <meta>, <link>, <embed>, <iframe>, and <a> tags.
- * For <a> tags also inspects link text and title.
- * Resolves relative URLs against baseUrl. Sorted by priority.
- */
-export function extractFileUrlsFromHtml(html: string, baseUrl: string): string[] {
-  const found = new Set<string>();
-
-  const ATTR_RE = /(name|content|property|itemprop|href|src|rel)\s*=\s*["']([^"']+)["']/gi;
-
-  // <meta> — check every meta's content for a file URL
-  const metaTagRe = /<meta\s[^>]*>/gi;
-  for (const m of html.matchAll(metaTagRe)) {
-    const tag = m[0];
-    ATTR_RE.lastIndex = 0;
-    const attrs: Record<string, string> = {};
-    for (const a of tag.matchAll(ATTR_RE)) {
-      attrs[a[1]!.toLowerCase()] = a[2]!;
-    }
-    const u = attrs['content'];
-    if (u && isFileUrl(u)) found.add(u);
-  }
-
-  // <link> — check href + rel="pdf" / rel="alternate"
-  const linkTagRe = /<link\s[^>]*>/gi;
-  for (const m of html.matchAll(linkTagRe)) {
-    const tag = m[0];
-    const href = tag.match(/href\s*=\s*["']([^"']+)["']/i);
-    const rel = tag.match(/rel\s*=\s*["']([^"']+)["']/i);
-    const u = href?.[1];
-    if (!u) continue;
-    if (isFileUrl(u)) found.add(u);
-    else if (rel && /pdf|alternate/i.test(rel[1]!) && /\.pdf(?:\?|#|$)/i.test(u)) found.add(u);
-  }
-
-  // <embed> / <iframe> — check src
-  const embedRe = /<(?:embed|iframe)\s[^>]*src\s*=\s*["']([^"']+)["'][^>]*>/gi;
-  for (const m of html.matchAll(embedRe)) {
-    const u = m[1];
-    if (u && isFileUrl(u)) found.add(u);
-  }
-
-  // <a> — match full tag with inner text to also check link text / title
-  const anchorFullRe = /<a\s[^>]*>.*?<\/a>/gis;
-  for (const m of html.matchAll(anchorFullRe)) {
-    const tag = m[0];
-    const href = tag.match(/href\s*=\s*["']([^"']+)["']/i);
-    const u = href?.[1];
-    if (!u) continue;
-    if (isFileUrl(u)) {
-      found.add(u);
-      continue;
-    }
-    // No extension in URL — check link text and attributes for download signals
-    const inner = tag.replace(/<[^>]*>/g, '');
-    const title = tag.match(/title\s*=\s*["']([^"']+)["']/i);
-    if (DOWNLOAD_TEXT_RE.test(inner) || (title && DOWNLOAD_TEXT_RE.test(title[1]!))) {
-      found.add(u);
-    }
-  }
-
-  const resolved: string[] = [];
-  for (const u of found) {
-    try {
-      resolved.push(new URL(u, baseUrl).toString());
-    } catch { /* skip invalid */ }
-  }
-
-  resolved.sort((a, b) => fileUrlPriority(a) - fileUrlPriority(b));
-  return resolved;
-}
-
 async function fetchFile(url: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<{ buffer: Buffer; contentType: string | null; extHint: string | null }> {
   const res = await httpRequest({
     url,
@@ -347,6 +258,11 @@ async function fetchFile(url: string, signal: AbortSignal | undefined, timeoutMs
     redirect: 'manual',
     maxRetries: 1,
   });
+  // httpRequest only throws for retryable statuses; a 401/403/404/410 body is
+  // an error page, not a paper.
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`HTTP ${res.status}`);
+  }
   return {
     buffer: res.body,
     contentType: res.contentType,
@@ -449,10 +365,16 @@ export async function downloadPaper(
       continue;
     }
 
+    // A Content-Type is only trustworthy when it maps to a concrete format;
+    // 'application/octet-stream' (the common case for sci-hub mirrors) must not
+    // override the actual buffer magic, or a real PDF lands as .bin.
+    const trustedContentType = contentType && contentType !== 'application/octet-stream' && FORMAT_EXT[contentType]
+      ? contentType
+      : null;
     const format =
-      candidate.format ||
-      contentType ||
       detectFormatFromBuffer(buffer) ||
+      candidate.format ||
+      trustedContentType ||
       detectFormatFromUrl(candidate.pdfUrl) ||
       'application/octet-stream';
 
@@ -466,9 +388,12 @@ export async function downloadPaper(
       for (const e of extracted) {
         try {
           const inner = await fetchFile(e.url, opts.signal, 15_000);
+          const innerTrustedContentType = inner.contentType && inner.contentType !== 'application/octet-stream' && FORMAT_EXT[inner.contentType]
+            ? inner.contentType
+            : null;
           const innerFormat =
-            inner.contentType ||
             detectFormatFromBuffer(inner.buffer) ||
+            innerTrustedContentType ||
             detectFormatFromUrl(e.url) ||
             'application/octet-stream';
           if (innerFormat !== 'text/html' && inner.buffer.length >= MIN_BYTES) {
@@ -500,9 +425,21 @@ export async function downloadPaper(
     if (parsed.pmid) fallback.pmid = parsed.pmid;
     const meta: PaperMeta = candidate.meta ?? fallback;
     const ext = extForFormat(resolvedFormat);
-    const filename = dedupeFilename(outputDir, buildFilename(meta, ext));
-    const fullPath = path.join(outputDir, filename);
-    fs.writeFileSync(fullPath, resolvedBuffer);
+    const initialName = dedupeFilename(outputDir, buildFilename(meta, ext));
+    const nameExt = path.extname(initialName);
+    const nameBase = initialName.slice(0, initialName.length - nameExt.length);
+    // Exclusive create closes the dedupe TOCTOU window: concurrent downloads of
+    // the same paper can no longer overwrite each other.
+    let fullPath = path.join(outputDir, initialName);
+    for (let n = 1; ; n++) {
+      try {
+        fs.writeFileSync(fullPath, resolvedBuffer, { flag: 'wx' });
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n > 999) throw e;
+        fullPath = path.join(outputDir, nameBase + ' (' + n + ')' + nameExt);
+      }
+    }
 
     onProgress?.({ source: candidate.source, status: 'success', filePath: fullPath });
 

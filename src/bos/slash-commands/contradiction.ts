@@ -166,20 +166,33 @@ Be concise. Think step by step, break into smaller parts.`,
           ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
           ...(mc.apiMode ? { apiMode: mc.apiMode } : {}),
           ...(mc.reasoningEffort ? { reasoningEffort: mc.reasoningEffort } : {}),
+          timeoutSecs: 120,
         });
 
         started = await agent.start();
       await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        // A stalled stream emits no further tokens, so checking signal.aborted
+        // inside the token callback can never settle the promise; the abort
+        // listener closes the probe and settles regardless.
+        const onAbort = () => {
+          try { started.close().catch(() => {}); } catch { /* ignore */ }
+          finish();
+        };
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
         started.stream(`Identify key technical contradictions for: ${topic}`, (token: any) => {
-          if (signal.aborted) {
-            started.close().catch(() => {});
-            resolve();
-            return;
-          }
+          if (signal.aborted) { onAbort(); return; }
           if (token.type === 'Text') emit('token', { tokenType: 'Text', text: token.text });
           else if (token.type === 'ReasoningContent') emit('token', { tokenType: 'ReasoningContent', text: token.text });
-          else if (token.type === 'Done') { started.close().catch(() => {}); resolve(); }
-          else if (token.type === 'Error') { started.close().catch(() => {}); emit('token', { tokenType: 'Text', text: `\n\n Error: ${token.error}` }); resolve(); }
+          else if (token.type === 'Done') { try { started.close().catch(() => {}); } catch { /* ignore */ } finish(); }
+          else if (token.type === 'Error') { try { started.close().catch(() => {}); } catch { /* ignore */ } emit('token', { tokenType: 'Text', text: `\n\n Error: ${token.error}` }); finish(); }
         });
       });
     } catch (err) {

@@ -1,4 +1,4 @@
-import { defineTool, ok } from '@open1s/ezbos';
+import { defineTool, ok, err } from '@open1s/ezbos';
 import { z } from 'zod';
 import { addMemory, searchMemories, listMemories, loadMemoryStore, saveMemoryStore } from '../../../chat/memory.js';
 
@@ -21,10 +21,10 @@ export function createMemoryTools(memoryDir: string) {
     execute: ({ content: raw, type, tags }) => {
       const content = raw.trim();
       if (content.length < 10) {
-        return { ok: false, error: 'Content too short (min 10 chars). Be specific.' };
+        return err('Content too short (min 10 chars). Be specific.');
       }
       if (content.length > 2000) {
-        return { ok: false, error: 'Content too long (max 2000 chars). Be concise.' };
+        return err('Content too long (max 2000 chars). Be concise.');
       }
       const entry = addMemory(memoryDir, {
         type,

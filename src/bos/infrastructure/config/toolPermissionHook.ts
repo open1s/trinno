@@ -227,6 +227,18 @@ const id = data.call_id || data.tool_id || data.toolId || `auto_${++approvalCoun
       } else if (typeof result === 'object' && 'err' in result) {
         resultText = typeof result.err === 'string' ? result.err : JSON.stringify(result.err);
         isError = true;
+      } else if (typeof result === 'object' && typeof result.success === 'boolean') {
+        // ezbos 2.x envelope: ok() → {success:true, data}; err() → {success:false, error}
+        const env = result as { success: boolean; data?: unknown; error?: unknown };
+        if (!env.success) {
+          isError = true;
+          resultText = typeof env.error === 'string' ? env.error : JSON.stringify(env.error);
+        } else {
+          resultText = typeof env.data === 'string' ? env.data : JSON.stringify(env.data);
+        }
+      } else if (typeof result === 'string' && result.startsWith('Error:')) {
+        isError = true;
+        resultText = result;
       } else {
         resultText = typeof result === 'string' ? result : JSON.stringify(result);
       }
