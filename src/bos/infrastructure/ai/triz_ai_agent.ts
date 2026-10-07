@@ -136,6 +136,45 @@ ${getLanguagePrompt(this.locale.language)}`;
     return streamAgent(this.agent!, prompt);
   }
 
+  /**
+   * ARIZ-85C narrative pass: turns the deterministic ARIZ stages into a short,
+   * decisive sequence (mini-problem -> first measurable experiment).
+   */
+  async analyzeAriz(
+    problem: string,
+    options: { system?: string; improvingName?: string; worseningName?: string; principleHints?: string[] } = {},
+  ): Promise<string> {
+    if (!this.agent) await this.initialize();
+
+    const lines: string[] = [
+      'Apply the ARIZ-85C algorithm to this problem and compress it into a short, decisive narrative.',
+      '',
+      `Problem: ${problem}`,
+    ];
+    if (options.system) lines.push(`System: ${options.system}`);
+    if (options.improvingName || options.worseningName) {
+      lines.push(`Technical contradiction: improving "${options.improvingName ?? '?'}" vs worsening "${options.worseningName ?? '?'}"`);
+    }
+    if (options.principleHints && options.principleHints.length > 0) {
+      lines.push(`Candidate principles from the matrix: ${options.principleHints.join(', ')}`);
+    }
+
+    lines.push(
+      '',
+      'Return at most 12 lines total, in this exact order:',
+      '1. Mini-problem (one sentence)',
+      '2. Technical contradiction (one sentence)',
+      '3. Ideal Final Result (one sentence)',
+      '4. Physical contradiction (one sentence)',
+      '5. Chosen separation principle (time | space | condition | whole-parts) and why',
+      '6. The single first experiment to run, with its measurable acceptance test',
+      '',
+      getLanguagePrompt(this.locale.language),
+    );
+
+    return streamAgent(this.agent!, lines.join('\n'));
+  }
+
   async evaluateSolution(
     solution: string,
     criteria: string[],

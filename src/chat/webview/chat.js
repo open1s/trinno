@@ -106,6 +106,7 @@
     { name: 'ideality', description: 'Evaluate system ideality (benefits/costs/harms)' },
     { name: 'principles', description: 'List or search the 40 TRIZ inventive principles' },
     { name: 'su-field', description: 'Substance-Field model analysis' },
+    { name: 'ariz', description: 'Run the ARIZ-85C inventive problem-solving algorithm' },
     { name: 'patent', description: 'Incrementally write a patent document (LLM appends section by section)' },
     { name: 'download', description: 'Download a paper PDF by DOI / arXiv ID / PMID / URL' },
     { name: 'get', description: 'Search OpenAlex and auto-download the top match (or top 3 with "all")' },

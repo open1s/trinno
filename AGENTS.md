@@ -30,7 +30,7 @@ npm run test:undo     # npx mocha --ui bdd --timeout 200000 dist/test/suite/undo
 npm run test:token    # TRINNO_RUN_TOKEN_TEST=1 npx mocha --timeout 180000 dist/test/suite/token-growth.test.js — verifies per-message token cost is linear (requires configured LLM model, makes real API calls)
 npm run test:agent-notify # npx mocha --ui bdd --timeout 10000 dist/test/suite/subagent-notification.test.js — unit tests for subagent notification pipeline (no VS Code, no LLM)
 npm run test:background    # npx mocha --ui bdd --timeout 30000 dist/test/suite/background-e2e.test.js — background job lifecycle (no VS Code)
-npm run test:tools         # typed-tool contract + worker errorPayload + cancel/background suites (17 tests, no VS Code, no LLM)
+npm run test:tools         # typed-tool contract + worker errorPayload + ARIZ engine/tool + cancel/background suites (27 tests, VS Code-free; the ARIZ AI paths use fakes)
 npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignores src/bos/)
 ```
 
@@ -142,6 +142,7 @@ The worker (`src/bos/worker.ts`) is compiled to `dist/bos/worker.js` during `npm
 - `docs/agents/` — `domain.md`, `issue-tracker.md`, `triage-labels.md`.
 - `docs/adr/001-hybrid-attachment-strategy.md` — only ADR so far.
 - `docs/ezbos-2-migration.md` — ezbos 2.x idioms: typed defineTool, error/cancellation contracts, streaming, resilience, test commands.
+- `docs/ariz.md` — ARIZ-85C workflow: `/ariz` slash command, `triz_ariz` tool (always AI-augmented), 8-stage engine, tests.
 - `CONTEXT.md` — template, not yet filled in.
 - `demo/` — `drone-frame-analysis.md`, `06_References/`, `07_Patent/` — sample output of a Trinno session (good for sanity-checking what the tools should produce).
 

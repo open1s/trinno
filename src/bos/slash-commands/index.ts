@@ -15,3 +15,4 @@ export { undoCommand, takeSnapshot } from './undo.js';
 export { autoCommand } from './auto.js';
 export { sandboxCommand } from './sandbox.js';
 export { downloadCommand } from './download.js';
+export { arizCommand } from './ariz.js';

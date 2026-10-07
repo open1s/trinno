@@ -17,6 +17,7 @@ import { AiSCurveDataExtractor } from '../s_curve/ai_data_extractor.js';
 import { getParameterByIndex } from '../../domain/principle/parameters.js';
 import type { ExtractedDataPoint } from '../s_curve/ai_data_extractor.js';
 import type { TRLLevel } from '../../domain/s_curve/value_objects.js';
+import { ArizEngine } from '../../domain/ariz/engine.js';
 
 const sCurveDataCache = new Map<string, ExtractedDataPoint[]>();
 
@@ -376,6 +377,71 @@ export function createTrizTools(
     },
   });
 
+  const ariz = defineTool({
+    name: 'triz_ariz',
+    description:
+      'Run the ARIZ-85C inventive problem-solving algorithm step by step. Returns the 8 ARIZ stages (mini-problem, technical contradiction, IFR, physical contradiction, separation principles, Su-Field + 76 standard solutions, ideality, plan) with deterministic findings. Supply improvingParameter/worseningParameter (1-39) for a real contradiction-matrix lookup; supply tool/product/field for a Su-Field model. The AI always drafts the narrative pass on top of these stages when a model is configured (aiNarrative), degrading gracefully to the deterministic stages if the model is unavailable.',
+    parameters: z.object({
+      problem: z.string().describe('Problem statement to solve, in the user\'s own words'),
+      system: z.string().optional().describe('Technical system under analysis (optional)'),
+      tool: z.string().optional().describe('Su-Field S1: the acting tool/component (optional)'),
+      product: z.string().optional().describe('Su-Field S2: the object being acted on (optional)'),
+      field: z.string().optional().describe('Su-Field field: mechanical, thermal, chemical, electrical, magnetic, optical, acoustic, biological (optional)'),
+      suFieldType: z.enum(['complete', 'incomplete', 'harmful', 'insufficient', 'excessive']).optional().describe('Force the Su-Field class instead of auto-detecting it'),
+      improvingParameter: z.number().optional().describe('TRIZ parameter (1-39) that should improve'),
+      worseningParameter: z.number().optional().describe('TRIZ parameter (1-39) that worsens'),
+    }),
+    execute: async ({ problem, system, tool, product, field, suFieldType, improvingParameter, worseningParameter }) => {
+      try {
+        const engine = new ArizEngine(principleEngine, suFieldService);
+        const result = engine.build({
+          problem,
+          ...(system !== undefined ? { system } : {}),
+          ...(tool !== undefined ? { tool } : {}),
+          ...(product !== undefined ? { product } : {}),
+          ...(field !== undefined ? { field } : {}),
+          ...(suFieldType !== undefined ? { suFieldType } : {}),
+          ...(improvingParameter !== undefined ? { improvingParameter } : {}),
+          ...(worseningParameter !== undefined ? { worseningParameter } : {}),
+        });
+        // ARIZ always involves the model when one is configured: the deterministic
+        // stages above ground the AI pass, and a model failure degrades to those
+        // stages instead of losing the analysis.
+        const notes = [...result.notes];
+        let aiNarrative: string | null = null;
+        if (aiAgent) {
+          const arizOptions: { system?: string; improvingName?: string; worseningName?: string; principleHints: string[] } = {
+            principleHints: result.principles.map(p => `#${p.index} ${p.name}`),
+          };
+          if (system) arizOptions.system = system;
+          const improvingName = improvingParameter !== undefined ? getParameterByIndex(improvingParameter)?.name : undefined;
+          const worseningName = worseningParameter !== undefined ? getParameterByIndex(worseningParameter)?.name : undefined;
+          if (improvingName) arizOptions.improvingName = improvingName;
+          if (worseningName) arizOptions.worseningName = worseningName;
+          try {
+            aiNarrative = await aiAgent.analyzeAriz(problem, arizOptions);
+          } catch (e: unknown) {
+            notes.push(`AI narrative failed (deterministic ARIZ stages kept): ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else {
+          notes.push('AI narrative skipped: no model configured (deterministic ARIZ stages only).');
+        }
+
+        return ok({
+          stageCount: result.stages.length,
+          stages: result.stages.map(s => ({ id: s.id, title: s.title, goal: s.goal, findings: s.findings, questions: s.questions })),
+          principles: result.principles,
+          separationPrinciples: result.separation,
+          suField: result.suField ?? null,
+          notes,
+          aiNarrative,
+        });
+      } catch (e: unknown) {
+        return err(e instanceof Error ? e.message : String(e));
+      }
+    },
+  });
+
   const currentDatetime = defineTool({
     name: 'current_datetime',
     description: 'Get the current date and time. Returns ISO 8601 formatted datetime, Unix timestamp, and human-readable local time in multiple formats.',
@@ -489,6 +555,7 @@ export function createTrizTools(
     ideality,
     sCurve,
     search,
+    ariz,
     currentDatetime,
     updateGoal,
   ];

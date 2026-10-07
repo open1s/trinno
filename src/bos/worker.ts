@@ -42,6 +42,7 @@ import {
   autoCommand,
   sandboxCommand,
   downloadCommand,
+  arizCommand,
   readGoalForWorker,
   writeGoalForWorker,
   isGoalActive,
@@ -156,6 +157,7 @@ slashRegistry.register(sCurveCommand, ['sc', 'scurve']);
 slashRegistry.register(idealityCommand, ['i', 'ideal']);
 slashRegistry.register(principlesCommand, ['p', 'princ']);
 slashRegistry.register(suFieldCommand, ['sf', 'sufield']);
+slashRegistry.register(arizCommand, ['az']);
 slashRegistry.register(initCommand, ['setup', 'new']);
 slashRegistry.register(pingCommand);
 slashRegistry.register(undoCommand, ['u']);

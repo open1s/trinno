@@ -139,7 +139,7 @@
     "test": "node ./dist/test/runTest.js",
     "test:pipeline": "npx --yes mocha --ui bdd --timeout 30000 \"dist/test/suite/publication-trends-year-extraction.test.js\"",
     "test:background": "npx --yes mocha --ui bdd --timeout 30000 \"dist/test/suite/background-e2e.test.js\"",
-    "test:tools": "TRINNO_LOG_DIR=/tmp/trinno-logs npx --yes mocha --ui bdd --timeout 30000 --exit \"dist/test/suite/typed-tools.test.js\" \"dist/test/suite/worker-error-payload.test.js\" \"dist/test/suite/tool-cancel.test.js\" \"dist/test/suite/background-e2e.test.js\"",
+    "test:tools": "TRINNO_LOG_DIR=/tmp/trinno-logs npx --yes mocha --ui bdd --timeout 30000 --exit \"dist/test/suite/typed-tools.test.js\" \"dist/test/suite/worker-error-payload.test.js\" \"dist/test/suite/ariz.test.js\" \"dist/test/suite/tool-cancel.test.js\" \"dist/test/suite/background-e2e.test.js\"",
     "lint": "eslint src/chat/*.ts",
     "cold-start": "bash scripts/verify-cold-start.sh"
   },
