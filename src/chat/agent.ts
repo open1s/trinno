@@ -6,6 +6,7 @@ import { getChatConfig } from './settings';
 import { DEFAULT_TOOL_PERMISSIONS } from '../bos/infrastructure/config/toolPermissions';
 import { extractNotebookContext, insertCellAt, undoLastInsert, formatContextForPrompt } from './context';
 import { createModuleLogger } from '../bos/infrastructure/logging/logger';
+import { isStaleCancel } from '../bos/cancel_target';
 
 const log = createModuleLogger('chat-agent');
 
@@ -408,6 +409,9 @@ export async function sendMessage(
         const msg = JSON.parse(line);
         switch (msg.type) {
           case 'token':
+            // A superseded generation can still flush a few tokens while it
+            // unwinds; never merge them into the turn that replaced it.
+            if (msg.messageId && msg.messageId !== payload.messageId) break;
             onToken(buildTokenMsg(msg));
             break;
           case 'done':
@@ -476,6 +480,16 @@ export async function sendMessage(
 }
 
 export function cancelGeneration(messageId?: string): void {
+  // A cancel that names a turn which is no longer the registered in-flight one
+  // is stale (e.g. a message was just sent while a stop click from the previous
+  // turn was still in flight). Tearing down here would remove the CURRENT
+  // turn's data handler, so its tokens and done event would be dropped and the
+  // panel would wait forever. A stale cancel is therefore ignored in full —
+  // including the dispatch release, which belongs to the newer turn.
+  if (isStaleCancel(messageId, currentCallbacks?.messageId ?? null)) {
+    log.warn({ messageId, currentMessageId: currentCallbacks?.messageId ?? null }, '[CANCEL] ignoring stale cancel for a superseded turn');
+    return;
+  }
   if (workerProcess?.stdin) {
     // Name the generation this cancel is meant to stop so the worker can drop
     // it when the turn has already been superseded.

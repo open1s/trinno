@@ -769,8 +769,17 @@ function removeFromQueue(queueId: string): void {
 
 function forceExecuteQueueItem(queueId: string): void {
   const idx = messageQueue.findIndex(q => q.queueId === queueId);
-  if (idx < 0) return;
+  if (idx < 0) {
+    // The webview only offers ▶ on pending items; anything else is a stale click
+    // (already dispatched or removed) and must not be sent a second time.
+    log.warn({ queueId, inFlight: currentQueueId, isGenerating }, '[QUEUE] force-execute ignored: item is not pending');
+    return;
+  }
 
+  log.info(
+    { queueId, inFlight: currentQueueId, isGenerating, pending: messageQueue.length },
+    '[QUEUE] force-execute: halting the current turn and dispatching the queued item',
+  );
   cancelGeneration(currentStreamingId ?? undefined);
   finalizeCurrentMessage();
   // In-flight item was already removed from extension queue

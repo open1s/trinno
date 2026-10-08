@@ -30,7 +30,7 @@ npm run test:undo     # npx mocha --ui bdd --timeout 200000 dist/test/suite/undo
 npm run test:token    # TRINNO_RUN_TOKEN_TEST=1 npx mocha --timeout 180000 dist/test/suite/token-growth.test.js — verifies per-message token cost is linear (requires configured LLM model, makes real API calls)
 npm run test:agent-notify # npx mocha --ui bdd --timeout 10000 dist/test/suite/subagent-notification.test.js — unit tests for subagent notification pipeline (no VS Code, no LLM)
 npm run test:background    # npx mocha --ui bdd --timeout 30000 dist/test/suite/background-e2e.test.js — background job lifecycle (no VS Code)
-npm run test:tools         # typed-tool contract + worker errorPayload + ARIZ engine/tool + cancel/background suites (27 tests, VS Code-free; the ARIZ AI paths use fakes)
+npm run test:tools         # typed-tool contract + worker errorPayload + ARIZ engine/tool + cancel/background + cancel-targeting suites (VS Code-free; the ARIZ AI paths use fakes)
 npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignores src/bos/)
 ```
 

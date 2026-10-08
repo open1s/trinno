@@ -19,6 +19,7 @@
  */
 
 import { composeRoot } from './infrastructure/config/di.js';
+import { isStaleCancel } from './cancel_target.js';
 import { setOnBgExit, cancelBackgroundJob, setOnBgStart } from './infrastructure/http/coding_tools.js';
 import { SubagentNotification } from './infrastructure/subagent-manager.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
@@ -584,7 +585,7 @@ function handleCancel(targetMessageId?: string): void {
   // meant to stop has already been superseded. Aborting here would kill the
   // newer request before it ever reaches the model — the round then ends with 0
   // tokens and the panel is left showing a generation that never finishes.
-  if (targetMessageId && currentMessageId && targetMessageId !== currentMessageId) {
+  if (isStaleCancel(targetMessageId, currentMessageId)) {
     log.warn({ targetMessageId, currentMessageId }, 'ignoring stale cancel for a superseded generation');
     return;
   }
@@ -1512,11 +1513,11 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
 
           switch (token.type) {
             case 'ReasoningContent':
-              localEmit('token', { tokenType: 'ReasoningContent', text: token.text });
+              localEmit('token', { tokenType: 'ReasoningContent', text: token.text, ...(messageId ? { messageId } : {}) });
               break;
             case 'Text':
               roundText += token.text;
-              localEmit('token', { tokenType: 'Text', text: token.text });
+              localEmit('token', { tokenType: 'Text', text: token.text, ...(messageId ? { messageId } : {}) });
               break;
             case 'ToolCall':
               if (token.id && token.name) toolCallNames.set(token.id, token.name);
@@ -1527,7 +1528,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
               }
               if (shouldEmitToolCall(token.name)) {
                 log.debug({ toolName: token.name, toolId: token.id }, '[TOOL-STATUS] ToolCall token → webview');
-                localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}) });
+                localEmit('token', { tokenType: 'ToolCall', text: token.name, toolId: token.id, ...(token.args ? { args: token.args } : {}), ...(messageId ? { messageId } : {}) });
               }
               break;
             case 'ToolResult':
@@ -1550,7 +1551,8 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
                   tokenType: 'ToolResult',
                   text: resultText,
                   toolId: token.id,
-                  status: 'completed'
+                  status: 'completed',
+                  ...(messageId ? { messageId } : {}),
                 });
               }
               break;
@@ -1563,6 +1565,7 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
                 completionTokens: token.completionTokens,
                 totalTokens: token.totalTokens,
                 promptTokensDetails: token.promptTokensDetails,
+                ...(messageId ? { messageId } : {}),
               });
               break;
             case 'Stop':
