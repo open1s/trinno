@@ -3,6 +3,30 @@
 All notable changes to **Trinno Research Assist** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-10-08
+
+### Added
+- **Prompt system.** Every LLM prompt now lives in `src/bos/prompts/` and is
+  assembled from typed blocks, with an explicit adherence tier per rule:
+  L0 (tool schemas / parser shapes), L1 (invariant blocks injected into every
+  call), L2 (runtime validation of the model output) and L3 (drift tests).
+- `docs/prompts.md` documents the tiers, the 19 registered prompts and how to
+  change one safely.
+
+### Changed
+- The TRL assessment prompt now declares the JSON schema its parser reads — it
+  previously specified none — and the S-curve data, estimator and summarizer
+  prompts name the keys the caller parses.
+- Extractor prompts end on the output-shape rule, so the model's final
+  instruction is about format rather than evidence.
+- The `/auto` state-file example is valid JSON instead of a placeholder
+  template, and prompts that referred to tools they never named now name them.
+
+### Fixed
+- Prompts are covered by a drift test: a prompt can no longer silently lose an
+  invariant or a section, name a tool that does not exist, omit a parsed JSON
+  key, ship a placeholder, exceed its budget, or vanish from the documentation.
+
 ## [2.0.0] - 2026-10-08
 
 ### Changed
