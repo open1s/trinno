@@ -115,6 +115,9 @@ const toolCallNames = new Map<string, string>();
 const prevTokens = new Map<string, { input: number; output: number }>();
 
 let abortController: AbortController | null = null;
+// The generation (panel messageId) that `abortController` belongs to, so a
+// late cancel for a superseded turn cannot abort the request that replaced it.
+let currentMessageId: string | null = null;
 let deps: Awaited<ReturnType<typeof composeRoot>> | null = null;
 let brain: any = null;
 let depsInitPromise: Promise<void> | null = null;
@@ -575,8 +578,16 @@ function withMockInjector(
   };
 }
 
-function handleCancel(): void {
-  log.warn({ hasAbortController: !!abortController, hasCurrentAgent: !!currentAgent }, '[DEBUG-DC] handleCancel called');
+function handleCancel(targetMessageId?: string): void {
+  log.warn({ targetMessageId, currentMessageId, hasAbortController: !!abortController, hasCurrentAgent: !!currentAgent }, '[DEBUG-DC] handleCancel called');
+  // A cancel naming a generation that is no longer current is stale: the turn it
+  // meant to stop has already been superseded. Aborting here would kill the
+  // newer request before it ever reaches the model — the round then ends with 0
+  // tokens and the panel is left showing a generation that never finishes.
+  if (targetMessageId && currentMessageId && targetMessageId !== currentMessageId) {
+    log.warn({ targetMessageId, currentMessageId }, 'ignoring stale cancel for a superseded generation');
+    return;
+  }
   cancelAllPendingApprovals();
   if (currentAgent) {
     currentAgent.stop().catch(() => { });
@@ -884,7 +895,16 @@ process.stdin.on('data', (chunk: Buffer) => {
                 );
               });
             } else {
+              // Supersede any still-running generation BEFORE installing this
+              // one's controller: the previous stream must not interleave with
+              // this one, and a cancel queued for the previous generation must
+              // not abort the request we are about to start.
+              const previousController = abortController;
+              if (previousController && !previousController.signal.aborted) {
+                previousController.abort();
+              }
               abortController = new AbortController();
+              currentMessageId = msg.messageId ?? null;
               await handleChatWithEmit(
                 msg.text,
                 msg.context ?? null,
@@ -909,7 +929,7 @@ process.stdin.on('data', (chunk: Buffer) => {
           });
           break;
         case 'cancel':
-          handleCancel();
+          handleCancel(msg.messageId);
           break;
         case 'cancelTool': {
           const callId = msg.toolId || (msg.toolName ? toolCallIds.get(msg.toolName) : undefined);

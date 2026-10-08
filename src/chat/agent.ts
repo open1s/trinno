@@ -475,9 +475,13 @@ export async function sendMessage(
   }
 }
 
-export function cancelGeneration(): void {
+export function cancelGeneration(messageId?: string): void {
   if (workerProcess?.stdin) {
-    workerProcess.stdin.write(JSON.stringify({ type: 'cancel' }) + '\n');
+    // Name the generation this cancel is meant to stop so the worker can drop
+    // it when the turn has already been superseded.
+    const msg: { type: 'cancel'; messageId?: string } = { type: 'cancel' };
+    if (messageId) msg.messageId = messageId;
+    workerProcess.stdin.write(JSON.stringify(msg) + '\n');
   }
   if (workerProcess?.stdout && activeDataHandler) {
     workerProcess.stdout.removeListener('data', activeDataHandler);

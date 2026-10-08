@@ -556,7 +556,7 @@ export function registerChatPanel(context: vscode.ExtensionContext): void {
 
 async function createNewSession(title?: string): Promise<void> {
   if (isGenerating) {
-    cancelGeneration();
+    cancelGeneration(currentStreamingId ?? undefined);
     finalizeCurrentMessage();
     clearQueue();
     // Give worker time to process cancellation
@@ -590,7 +590,7 @@ async function createNewSession(title?: string): Promise<void> {
 async function switchSession(sessionId: string): Promise<void> {
   // Cancel any ongoing generation before switching
   if (isGenerating) {
-    cancelGeneration();
+    cancelGeneration(currentStreamingId ?? undefined);
     finalizeCurrentMessage();
     clearQueue();
     // Give worker time to process cancellation
@@ -745,7 +745,7 @@ function addToQueue(text: string): QueuedMessage | null {
 function removeFromQueue(queueId: string): void {
   // Active (already-dequeued) item — cancel and clean up
   if (queueId === currentQueueId) {
-    cancelGeneration();
+    cancelGeneration(currentStreamingId ?? undefined);
     finalizeCurrentMessage();
     isGenerating = false;
     currentQueueId = null;
@@ -771,7 +771,7 @@ function forceExecuteQueueItem(queueId: string): void {
   const idx = messageQueue.findIndex(q => q.queueId === queueId);
   if (idx < 0) return;
 
-  cancelGeneration();
+  cancelGeneration(currentStreamingId ?? undefined);
   finalizeCurrentMessage();
   // In-flight item was already removed from extension queue
   // Webview still has it — tell it to remove
@@ -887,7 +887,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
   if (msg.type === 'userMessage') {
     await handleUserMessage(msg.text);
   } else if (msg.type === 'cancel') {
-    cancelGeneration();
+    cancelGeneration(currentStreamingId ?? undefined);
     finalizeCurrentMessage();
     isGenerating = false;
     if (currentQueueId) {
@@ -2132,7 +2132,7 @@ async function handleUserMessage(text: string): Promise<void> {
   const goalMatch = text.match(/^\/(goal|g)\b(.*)$/i);
   if (goalMatch) {
     if (isGenerating) {
-      cancelGeneration();
+      cancelGeneration(currentStreamingId ?? undefined);
       finalizeCurrentMessage();
       isGenerating = false;
       currentStreamingId = null;

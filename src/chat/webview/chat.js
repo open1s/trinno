@@ -490,7 +490,11 @@ function renderTodoBadges() {
     mcpDropdownEl.className = 'mcp-dropdown';
     document.body.appendChild(mcpDropdownEl);
 
-    sendBtn.addEventListener('click', sendMessage);
+    // Exactly ONE click handler: the button is state-dependent (send ➤ vs stop
+    // ■) and is reassigned via .onclick below. A permanent addEventListener here
+    // would fire alongside it, so clicking ■ sent the draft text *and* cancelled
+    // the request the click had just started.
+    sendBtn.onclick = sendMessage;
     inputEl.addEventListener('keydown', handleInputKeydown);
     inputEl.addEventListener('input', handleInput);
     attachBtn.addEventListener('click', toggleAttachMenu);
