@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research"><img alt="VS Code Marketplace" src="https://img.shields.io/badge/VS%20Code-Install-blue?logo=visualstudiocode"></a>
+  <a href="https://open-vsx.org/extension/Open1s/trinno-research"><img alt="Open VSX" src="https://img.shields.io/open-vsx/v/Open1s/trinno-research?label=Open%20VSX"></a>
   <a href="https://github.com/open1s/trinno/actions"><img alt="CI" src="https://github.com/open1s/trinno/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
@@ -38,7 +39,7 @@ Trinno guides you through a structured 8-phase TRIZ innovation analysis — from
 
 ## Quick Start
 
-1. **Install** from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research)
+1. **Install** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Open1s.trinno-research) or [Open VSX](https://open-vsx.org/extension/Open1s/trinno-research) (VSCodium, Theia, code-server, Gitpod)
 2. **Open** a workspace folder — Trinno auto-detects or creates the 8-phase directory structure
 3. **Set your API key** in `~/.bos/conf/config.toml` under `[global_model]` / `[llm.<provider>]` (or run `Open Trinno Config` from the command palette to scaffold the file)
 4. **Open the panel** — click the Research Assistant icon in the activity bar or press `Cmd+Shift+C`
@@ -138,6 +139,7 @@ Please analyze the patents in @01_Discover/patents.json and find the technical c
 - **Multilingual search**: EN + ZH queries in parallel, Chinese journal support
 - **Context-aware**: automatically reads your notebook and workspace files
 - **Tool-augmented**: file read/write/edit, web search, paper download, bash execution
+- **Contracted prompts**: every prompt declares which mechanism enforces it — tool schemas, an injected invariant block, runtime validation of the output, or a drift test ([docs/prompts.md](docs/prompts.md))
 - **Session management**: persistent chat history, compact summaries, multi-session switching
 
 ### Subagent Orchestration
@@ -199,7 +201,7 @@ Trinno uses TOML config files and a skills directory under `~/.bos/`:
 ```toml
 [general]
 name = "TRINNO"
-version = "1.4.21"
+version = "2.0.1"
 environment = "release"
 
 [global_model]
@@ -304,6 +306,7 @@ npm run compile             # build to dist/
 npm run watch               # incremental build (tsc -watch)
 npm run lint                # eslint src/chat/*.ts
 npm run test:pipeline       # fast pipeline tests (no VS Code, no LLM)
+npm run test:tools          # tool contract + ARIZ + cancel/background + prompt drift tests (63, no VS Code)
 npm run test:agent-notify   # unit tests for subagent notification pipeline
 npm run test:undo           # E2E undo verification (spawns worker + real jj repo)
 npm run test:token          # per-message token cost linearity (real API call)
@@ -326,6 +329,7 @@ src/
     slash-commands/   # /init, /search, /contradiction, /auto, /goal, ...
     domain/           # pure logic: contradiction, s-curve, principle, su-field
     application/      # use-cases: analyze_contradiction, evaluate_ideality
+    prompts/          # every LLM prompt + the adherence registry (see docs/prompts.md)
     infrastructure/   # AI tools, config, persistence, search, subagent
       http/           # TRIZ / paper / coding / subagent / remote-skill / websearch tool routers
       config/         # DI composition, tool permission hook, model config
