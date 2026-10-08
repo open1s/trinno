@@ -3,6 +3,35 @@
 All notable changes to **Trinno Research Assist** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-10-08
+
+### Fixed
+- **A message could be sent and cancelled at the same time.** The send button
+  carried two click handlers, so using it while a turn was streaming posted the
+  message *and* a cancel. The worker then aborted the controller belonging to the
+  request it had just started: the message never reached the model (the round
+  ended with `lastPromptTokens=0 / lastCompletionTokens=0`) and the chat kept
+  showing a generation that never finished.
+- **Cancelling could hit the wrong turn.** A cancel now names the generation it
+  means to stop. A cancel for an already-superseded turn is ignored by both the
+  extension and the worker instead of aborting the request that replaced it, and
+  stream output is tagged with its generation so an aborted turn's remaining
+  tokens can no longer appear in the next answer.
+- **Force-executing a queued message (▶) is now reliable.** It halts the current
+  turn and sends the queued one immediately, and a retry the halted turn was
+  waiting on can no longer re-send the forced message.
+
+### Changed
+- Starting a new request supersedes the previous stream before installing its
+  own controller, so two turns can no longer interleave their output.
+- The send button is a single state-dependent handler: it only cancels while it
+  is a stop button, and only sends while it is a send button.
+
+### Added
+- `src/test/suite/cancel-target.test.ts` covers generation targeting, including
+  the queue force-execute path end to end through the mock worker.
+- README documents the Open VSX install and the contracted prompt system.
+
 ## [2.0.1] - 2026-10-08
 
 ### Added

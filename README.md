@@ -201,7 +201,7 @@ Trinno uses TOML config files and a skills directory under `~/.bos/`:
 ```toml
 [general]
 name = "TRINNO"
-version = "2.0.1"
+version = "2.1.0"
 environment = "release"
 
 [global_model]
