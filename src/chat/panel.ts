@@ -776,10 +776,20 @@ function forceExecuteQueueItem(queueId: string): void {
     return;
   }
 
+  const hadRetryPending = !!rateLimitRetryCallback;
   log.info(
-    { queueId, inFlight: currentQueueId, isGenerating, pending: messageQueue.length },
+    { queueId, inFlight: currentQueueId, isGenerating, pending: messageQueue.length, hadRetryPending },
     '[QUEUE] force-execute: halting the current turn and dispatching the queued item',
   );
+  // A retry the halted turn was waiting on belongs to that turn. Left running it
+  // would fire after the forced item has taken over the currentQueueId slot and
+  // re-dispatch that item — a double send of the forced message.
+  if (rateLimitTimer) {
+    clearInterval(rateLimitTimer);
+    rateLimitTimer = null;
+  }
+  rateLimitRetryCallback = null;
+  rateLimitRetryCount = 0;
   cancelGeneration(currentStreamingId ?? undefined);
   finalizeCurrentMessage();
   // In-flight item was already removed from extension queue
