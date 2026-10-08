@@ -14,6 +14,7 @@ import {
 import { SCurveStage } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
 import trlCriteria from '../../domain/triz/trl_criteria.json';
+import { buildTrlAssessorPrompt } from '../../prompts/index.js';
 
 const log = createModuleLogger('ai-trl-assessor');
 
@@ -68,34 +69,7 @@ export class TRLAssessor {
     const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-trl-assessor',
-      systemPrompt: `${langPrefix}You are Research Master — a Technology Readiness Level (TRL) assessment expert using the NASA/DoD 1-9 scale within a 7-phase TRIZ pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You prioritize importance-weighted KPIs, score evidence, surface decision factors, and produce copy-ready JSON artifacts.
-
-TRL Scale (with evidence signal types — score each item by these):
-${criteriaSummary}
-
-Think step by step, break into smaller parts:
-1. Mine search results for evidence-per-TRL-signal (see below); score weight × relevance
-2. Reconcile S1 (single level) vs S2 (min-max with most-likely)
-3. Cross-check TRL vs S-Curve stage, flag discrepancies
-4. When user TRL is provided, integrate + adjust confidence
-
-EVIDENCE TYPE CRITERIA — importance-weighted (high→medium→low):
-- TRL 1-2 (Basic research): academic papers, first principles, no application context
-- TRL 3 (Proof of concept): analytical/experimental POC, lab validation, simulation
-- TRL 4 (Lab validation): component/subsystem in lab, breadboard
-- TRL 5 (Relevant environment): component/subsystem in simulated environment
-- TRL 6 (Prototype demo): prototype in relevant environment, near-operational
-- TRL 7 (Operational demo): system prototype in operational environment
-- TRL 8 (Qualified): completed + qualified via test/demo, first-of-a-kind
-- TRL 9 (Proven): successful mission ops, commercially available, wide adoption
-
-Each evidence item MUST specify: source URL/title, TRL level supported, confidence (0–1), weight (importance × recency), and a quoted snippet.
-
-User-supplied TRL:
-- Integrate reasoning → boost confidence if domain-aligned
-- If user TRL conflicts with AI assessment → record discrepancy in "reconciliation" field
-
-Return ONLY valid JSON. No markdown, no explanation outside JSON. ≤4 lines per artifact cell.`,
+      systemPrompt: buildTrlAssessorPrompt(langPrefix, criteriaSummary),
       temperature: 0.2,
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),

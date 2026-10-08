@@ -1,5 +1,6 @@
 import { getAgentFactory } from './agent-factory.js';
 import { loadLocalSkill } from './remote_skills.js';
+import { buildSubagentPrompt } from '../prompts/index.js';
 
 export interface SubagentInfo {
   jobId: string;
@@ -155,18 +156,7 @@ export class SubagentManager {
     const skillSection = skillContent?.content
       ? `\n## Skill Instructions\n\n${skillContent.content}\n`
       : `\n## Note: Skill "${skillName}" not found — proceeding without skill instructions.\n`;
-    const rules = [
-      `You are a focused subagent named "${name}".`,
-      skillSection,
-      `## Task\n\n${goal}`,
-      ``,
-      `## Rules`,
-      `- Read-only: you can read/search files and the web, but cannot modify anything.`,
-      `- After finishing, output the result and do NOT call more tools.`,
-      `- Do NOT ask for approval — act autonomously.`,
-      `- Never fabricate facts: cite the file path or source URL for every claim; if a fact is unverifiable, say so explicitly.`,
-      `- Keep output concise.`,
-    ].filter(Boolean).join('\n');
+    const rules = buildSubagentPrompt({ name, goal, skillSection });
 
     const info: SubagentInfo = {
       jobId,

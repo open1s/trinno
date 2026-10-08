@@ -41,6 +41,7 @@ npm run lint          # eslint src/chat/*.ts   (config: eslint.config.js; ignore
 - ✅ **Parallelize independent reads** (file_search + grep_search in one block)
 - ✅ **Serialize dependent edits** (wait for output before next edit)
 - ✅ **Mark progress in todo list**: Update status after each atomic task
+- ✅ **Changing a prompt?** Edit `src/bos/prompts/<area>.ts`, keep its registry metadata honest (`requiredSections`, `jsonKeys`, `namesTools`, `maxChars`), then run `npm run test:tools` — the drift test fails on a lost section or invariant, a renamed tool, or a broken JSON example
 
 ### Why These Rules Matter
 - `npm run compile` **must succeed before `npm run test`** — tests load from `dist/` 
@@ -143,6 +144,7 @@ The worker (`src/bos/worker.ts`) is compiled to `dist/bos/worker.js` during `npm
 - `docs/adr/001-hybrid-attachment-strategy.md` — only ADR so far.
 - `docs/ezbos-2-migration.md` — ezbos 2.x idioms: typed defineTool, error/cancellation contracts, streaming, resilience, test commands.
 - `docs/ariz.md` — ARIZ-85C workflow: `/ariz` slash command, `triz_ariz` tool (always AI-augmented), 8-stage engine, tests.
+- `docs/prompts.md` — prompt system: the L0–L3 adherence tiers, the registered prompt inventory, and the drift test that stops prompts losing rules silently.
 - `CONTEXT.md` — template, not yet filled in.
 - `demo/` — `drone-frame-analysis.md`, `06_References/`, `07_Patent/` — sample output of a Trinno session (good for sanity-checking what the tools should produce).
 

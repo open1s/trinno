@@ -5,6 +5,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { buildPaperInstructions } from '../bos/prompts/index.js';
 
 export type PaperType = 'research' | 'review';
 
@@ -435,26 +436,7 @@ export function buildPaperPrompt(title: string, data: ResearchData, paperType?: 
   const sections: string[] = [];
 
   const typeLabel = paperType === 'review' ? '综述论文' : '技术论文';
-  sections.push(`You are Research Master — self-directed, tool-first research agent。请基于以下研究数据撰写一篇完整的${typeLabel}，标题："${title}"\n`);
-
-  sections.push('要求：');
-  sections.push('1. 所有方法论（TRIZ、PRISMA、SWOT、PEST 等）仅作为分析引擎使用，论文正文中不得出现这些方法论名称');
-  sections.push('2. 输出结构：摘要 → 引言 → 问题分析 → 解决方案 → 技术发展趋势 → 路线图 → 风险评估 → 结论 → 参考文献');
-  sections.push('3. 内容专业、逻辑清晰、学术规范；evidence 行内注明 score/weight；decision factors 与 risks 显式列出');
-  sections.push('4. 不要编造参数编号、案例、数据；不确定时调用 websearch');
-  sections.push('5. 所有汉字必须为有效 UTF-8，不可出现乱码、缺字或编码错误');
-  sections.push('6. 参考文献只能引用下面提供的数据源；任何无法从提供数据验证的引用不得写入，必须写入时显式标注"未经源数据验证"');
-  sections.push('7. 请基于以下数据撰写完整论文，直接输出 markdown 格式内容，不要包含任何 XML 标签或 JSON。文末追加"## 验证实验"清单（含验证方法、预期结果、判定标准）');
-
-  if (targetJournal) {
-    sections.push(`\n### 目标期刊要求\n目标期刊：**${targetJournal}**`);
-    sections.push(`请按照 ${targetJournal} 的投稿指南调整论文格式与内容风格：`);
-    sections.push('- 章节划分符合该期刊的常规要求');
-    sections.push('- 参考文献格式遵循该期刊的引用规范');
-    sections.push('- 语言风格、摘要长度、关键词数量等符合该期刊惯例');
-    sections.push('- 在引言中简要说明本研究对该期刊读者群体的价值');
-  }
-
+  sections.push(buildPaperInstructions(title, typeLabel, targetJournal));
   sections.push('\n');
 
   if (data.synthesisMd) {

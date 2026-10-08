@@ -7,6 +7,7 @@ import { CachedSearchService } from '../search/cached_search.js';
 import { SearchResult } from '../../domain/solution/search_port.js';
 import { Milestone } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
+import { buildSCurveDataExtractorPrompt } from '../../prompts/index.js';
 
 const log = createModuleLogger('ai-scurve-data-extractor');
 
@@ -53,27 +54,7 @@ async initialize(): Promise<void> {
     const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-scurve-data-extractor',
-      systemPrompt: `${langPrefix}You are Research Master — a TRIZ S-Curve data extraction expert serving the Validation phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You produce copy-ready JSON evidence artifacts only. Importance-weighted, no fabrication, no synthesis.
-
-Hard contract (think step by step, extract only):
-1. Extract ONLY data explicitly stated in search results — never fabricate or estimate
-2. Each dataPoint must cite source URL + quoted snippet
-3. Each milestone must be directly mentioned in search results, not from training knowledge
-4. If no usable performance data (no year+numeric, no year-over-year) → return empty arrays, do NOT make up "realistic" data
-5. Quantity does not matter — 0 is valid
-6. Return ONLY valid JSON. No markdown, no commentary outside JSON
-7. Use websearch when search results are insufficient
-
-Score each extraction with importance weight (0–1) and evidence confidence (0–1) so decision factors carry through downstream phases.
-
-Schema to return:
-{
-  "dataPoints": [{"x": year, "y": performance_value, "stage": "infancy|growth|maturity|decline", "weight": 0-1, "confidence": 0-1, "source": "url"}],
-  "milestones": [{"year": number, "label": "string", "description": "1-2 sentence from results", "type": "invention|breakthrough|commercialization|standardization|peak|decline", "source": "url"}],
-  "sources": ["URLs from search results"],
-  "reasoning": "what data was found, what was missing, next-step tool calls",
-  "lifecycleInfo": {"inventionYear": number|null, "growthStartYear": number|null, "maturityStartYear": number|null, "currentYear": number}
-}`,
+      systemPrompt: buildSCurveDataExtractorPrompt(langPrefix),
       temperature: 0.1,
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),

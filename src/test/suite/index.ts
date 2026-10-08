@@ -19,6 +19,7 @@ export async function run(): Promise<void> {
 	mocha.addFile(path.resolve(testsRoot, 'rapid-input-e2e.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'common-agent.test.js'));
 	mocha.addFile(path.resolve(testsRoot, 'contradiction-matrix.test.js'));
+	mocha.addFile(path.resolve(testsRoot, 'prompt-contract.test.js'));
 
 	return new Promise<void>((resolve, reject) => {
 		mocha.run((failures: number) => {

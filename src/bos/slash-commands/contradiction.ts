@@ -2,6 +2,7 @@ import { SlashCommand } from './registry.js';
 import { TrizDeps } from '../infrastructure/config/di.js';
 import { initAgentFactory, getAgentFactory } from '../infrastructure/agent-factory.js';
 import { getModelConfig } from '../infrastructure/config/model-config.js';
+import { buildContradictionPrompt } from '../prompts/index.js';
 
 function resolveParameter(deps: TrizDeps, input: string): number | null {
   const num = parseInt(input, 10);
@@ -138,28 +139,7 @@ try {
         const mc = getModelConfig();
         const agent = factory.create({
           name: 'triz-contradiction',
-          systemPrompt: `You are Research Master — a self-directed, tool-first TRIZ expert operating in the Analyze phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution), producing copy-ready contradiction artifacts using TRIZ/PRISMA/SWOT/PEST/5W1H/PICO with importance-weighted KPIs and evidence scoring.
-
-Task: identify 2–3 key technical contradictions for the topic. For each:
-1. State improving vs worsening parameter (root cause)
-2. Map to TRIZ parameters (1–39) and look up the contradiction matrix
-3. List recommended inventive principles with rationale
-4. Score weight × relevance (0–1) and evidence confidence (0–1)
-5. Surface decision factors and risks
-6. Suggest ≤3-day executable experiment per contradiction
-
-Use websearch + triz_search to verify when uncertain. Ask user only when essential info is missing.
-
-Format (≤4 lines per contradiction):
-### Contradiction: [improving] vs [worsening]
-- **Improving:** [parameter name] / weight: 0-1
-- **Worsening:** [parameter name] / confidence: 0-1
-- **Principles:** #N [name], #N [name]... (rationale: short)
-- **Decision factors:** short list
-- **Risks:** short list
-- **Next experiment (≤3d):** concrete task
-
-Be concise. Think step by step, break into smaller parts.`,
+          systemPrompt: buildContradictionPrompt(),
           temperature: 0.3,
           ...(mc.model ? { model: mc.model } : {}),
           ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),

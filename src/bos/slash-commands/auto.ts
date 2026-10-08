@@ -5,6 +5,7 @@ import { TrizDeps } from '../infrastructure/config/di.js';
 import { getAgentFactory } from '../infrastructure/agent-factory.js';
 import { getModelConfig } from '../infrastructure/config/model-config.js';
 import { createModuleLogger } from '../infrastructure/logging/logger.js';
+import { buildAutoScopeEvalPrompt } from '../prompts/index.js';
 
 const log = createModuleLogger('auto-research');
 
@@ -79,20 +80,7 @@ async function generateScopeAndEval(
   const mc = getModelConfig();
   const builder = factory.create({
     name: 'auto-planner',
-    systemPrompt: [
-      'You are a research planning expert. Given a research hypothesis, you generate two files:',
-      '1. scope.md — defines research scope, constraints, success criteria, allowed mutation surface, termination conditions',
-      '2. eval.md — defines evaluation metrics, validation protocol, baseline, accept/reject criteria',
-      '',
-      'Return your output in this exact format (no extra text before or after):',
-      '===SCOPE===',
-      '[markdown content for scope.md]',
-      '===EVAL===',
-      '[markdown content for eval.md]',
-      '',
-      'Use the hypothesis to infer the domain, metrics, and constraints. Be specific and actionable.',
-      'Fill in template fields with concrete values derived from the hypothesis. Do not leave placeholders.',
-    ].join('\n'),
+    systemPrompt: buildAutoScopeEvalPrompt(),
     temperature: 0.7,
     ...(mc.model ? { model: mc.model } : {}),
     ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),

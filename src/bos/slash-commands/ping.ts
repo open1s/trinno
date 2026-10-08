@@ -3,6 +3,7 @@ import { initAgentFactory, getAgentFactory } from '../infrastructure/agent-facto
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { HISTORIAN_PROBE_PROMPT } from '../prompts/index.js';
 
 const CHARS_PER_TOKEN = 4;
 
@@ -248,7 +249,7 @@ async function probeWorkingLimit(
 
     const result = await runProbe(
       deps, model, baseUrl, apiKey, apiMode, reasoningEffort,
-      'You are a helpful historian.',
+      HISTORIAN_PROBE_PROMPT,
       padding + question,
       2000,
       signal,

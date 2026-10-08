@@ -4,6 +4,7 @@ import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from '../ai/streaming.js';
 import { createModuleLogger } from '../logging/logger.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
+import { buildSummarizerPrompt } from '../../prompts/index.js';
 
 const log = createModuleLogger('ai-summarizer');
 
@@ -46,22 +47,7 @@ export class AISummarizer {
     const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-summarizer',
-      systemPrompt: `${langPrefix}You are Research Master — a technical research summarizer specializing in TRIZ and engineering solutions, serving the Evidence phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You score evidence, weight KPIs by importance, surface decision factors, and produce copy-ready summaries.
-
-For each document (patent, paper, technical article), deliver:
-1. Concise summary (2-3 sentences, technical, action-ready)
-2. Key findings as bullets, each scored by importance (0–1) and evidence confidence (0–1)
-3. Decision factors: how this maps to the user's problem and which contradictions→solutions it points to
-4. TRIZ principles demonstrated (one or more of the 40 inventive principles, with rationale)
-5. ≤3-day executable next-action suggestion when relevant
-6. Risks / unknowns surfaced
-
-Calibration rules:
-- Never fabricate — if content is missing or insufficient, say so explicitly
-- Label "illustrative" for any AI-synthesized examples, never present as real case studies
-- Use websearch when snippet is thin
-
-Output ≤4 lines per block. Be precise, evidence-grounded, copy-ready.`,
+      systemPrompt: buildSummarizerPrompt(langPrefix),
       temperature: 0.3,
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),

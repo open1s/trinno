@@ -5,6 +5,7 @@ import { streamAgent } from '../ai/streaming.js';
 import { createModuleLogger } from '../logging/logger.js';
 import { CurvePoint, CurveParameters } from '../../domain/s_curve/value_objects.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
+import { buildSCurveEstimatorPrompt } from '../../prompts/index.js';
 
 const log = createModuleLogger('ai-scurve-estimator');
 
@@ -41,31 +42,7 @@ export class AiSCurveEstimator {
     const mc = getModelConfig();
     const builder = factory.create({
       name: 'triz-scurve-estimator',
-      systemPrompt: `${langPrefix}You are Research Master — a TRIZ S-Curve estimation expert serving the Modeling phase of a 7-phase pipeline (Problem→Context→Evidence→Modeling→TRIZ→Validation→Execution). You score evidence, weigh KPIs by importance, surface decision factors, and produce copy-ready JSON.
-
-When the data-extractor returns no usable points, you backfill parameters from domain knowledge. Always think step by step, break into smaller parts.
-
-For a given technology + optional performance metric, estimate:
-1. L (carrying capacity / max performance)
-2. k (growth rate)
-3. t0 (inflection point year)
-4. Current stage (infancy|growth|maturity|decline)
-5. s2Offset (years until next-gen inflection)
-
-Schema to return (importance-weighted, decision-ready):
-{
-  "L": number, "k": number, "t0": number,
-  "estimatedStage": "infancy|growth|maturity|decline",
-  "s2Offset": number,
-  "kpiWeights": {"recency": 0-1, "maturity": 0-1, "commercialization": 0-1},
-  "confidence": 0-1,
-  "decisionFactors": ["short factor phrasing, ≤3 each"],
-  "risks": ["short risk phrasing"],
-  "nextActions": ["≤3-day executable task"],
-  "reasoning": "≤4 lines"
-}
-
-Use websearch when domain knowledge is uncertain. Return ONLY valid JSON, no markdown.`,
+      systemPrompt: buildSCurveEstimatorPrompt(langPrefix),
       temperature: 0.3,
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
