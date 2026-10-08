@@ -1887,7 +1887,14 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
       },
       (compactErr) => {
         _autoCompactInProgress = false;
-        if (chatView) chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
+        // finalizeCurrentMessage() resets isGenerating; without it every later
+        // message queues forever behind a stream that no longer exists.
+        const failedMsgId = currentStreamingId ?? '';
+        finalizeCurrentMessage();
+        currentStreamingId = null;
+        currentStreamingMsg = null;
+        if (chatView) chatView.webview.postMessage({ type: 'error', messageId: failedMsgId, error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
+        setImmediate(() => processQueue());
         reject(compactErr);
       },
       selectedModelConfig,
@@ -1911,6 +1918,22 @@ async function handleUserMessage(text: string): Promise<void> {
   }
 
   lastUserMessageText = text;
+
+  // Slash-type commands used to jump the generation queue and then tag
+  // currentStreamingId, clobbering the in-flight chat's stream (whose onDone
+  // then dropped their tokens). Only session management may run mid-stream.
+  const isSessionManagement = /^\/(session|new)\b/i.test(text.trim());
+  if (isGenerating && !isSessionManagement) {
+    log.debug('isGenerating=true, queuing');
+    const queued = addToQueue(text);
+    if (!queued) {
+      chatView?.webview.postMessage({
+        type: 'user-message',
+        message: createAssistantMessageForText(`Queue is full (max ${MAX_QUEUE_SIZE} messages). Please wait for current message to complete or remove a queued message.`),
+      } as any);
+    }
+    return;
+  }
 
   const sessionMatch = text.match(/^\/session\s*(.*)$/i);
   if (sessionMatch) {
@@ -2126,7 +2149,7 @@ async function handleUserMessage(text: string): Promise<void> {
 
     if (!arg) {
       const count = currentSession.messages.length;
-      const estimatedTokens = Math.round(currentSession.messages.reduce((sum, m) => sum + m.content.length + m.reasoning.length, 0) / 4);
+      const estimatedTokens = Math.round(currentSession.messages.reduce((sum, m) => sum + m.content.length + (m.reasoning ?? '').length, 0) / 4);
       chatView.webview.postMessage({
         type: 'history-message', message: createAssistantMessageForText(
           `## Session Stats\n\n**Messages:** ${count}\n**Estimated tokens:** ~${estimatedTokens}\n\nUse \`/recover keep <N>\` to keep the last N message pairs and discard older ones.`,
@@ -2348,18 +2371,6 @@ async function handleUserMessage(text: string): Promise<void> {
     return;
   }
 
-  if (isGenerating) {
-    log.debug('isGenerating=true, queuing');
-    const item = addToQueue(text);
-    if (!item) {
-      chatView?.webview.postMessage({
-        type: 'user-message',
-        message: createAssistantMessageForText(`Queue is full (max ${MAX_QUEUE_SIZE} messages). Please wait for current message to complete or remove a queued message.`),
-      } as any);
-    }
-    return;
-  }
-
   const skillMatch = detectSkillCommand(text);
   let displayText = text;
   let skillContentForLLM: string | undefined;
@@ -2578,7 +2589,12 @@ async function handleUserMessage(text: string): Promise<void> {
           },
           (compactErr) => {
             _autoCompactInProgress = false;
-            if (chatView) chatView.webview.postMessage({ type: 'error', messageId: currentStreamingId ?? '', error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
+            const failedMsgId = currentStreamingId ?? '';
+            finalizeCurrentMessage();
+            currentStreamingId = null;
+            currentStreamingMsg = null;
+            if (chatView) chatView.webview.postMessage({ type: 'error', messageId: failedMsgId, error: `Auto-compact failed: ${compactErr}` } as ExtToWebViewMessage);
+            setImmediate(() => processQueue());
           },
           selectedModelConfig,
         );

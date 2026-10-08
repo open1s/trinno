@@ -26,9 +26,9 @@ describe('ARIZ-85C engine', () => {
   });
 
   it('resolves principles from the contradiction matrix when a parameter pair is given', () => {
-    const r = engine.build({ problem: 'x', improvingParameter: 1, worseningParameter: 2 });
-    assert.deepEqual(r.principles.map(p => p.index), [3, 13, 27, 1]);
-    for (const p of r.principles) assert.ok(p.rationale.includes('Contradiction matrix cell (1 vs 2)'));
+    const r = engine.build({ problem: 'x', improvingParameter: 1, worseningParameter: 3 });
+    assert.deepEqual(r.principles.map(p => p.index), [15, 8, 29, 34]);
+    for (const p of r.principles) assert.ok(p.rationale.includes('Contradiction matrix cell (1 vs 3)'));
     assert.ok(!r.notes.some(n => n.includes('keyword search')));
   });
 
