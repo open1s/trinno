@@ -24,6 +24,8 @@ import { setOnBgExit, cancelBackgroundJob, setOnBgStart } from './infrastructure
 import { SubagentNotification } from './infrastructure/subagent-manager.js';
 import { streamAgent } from './infrastructure/ai/streaming.js';
 import { EzbosError } from '@open1s/ezbos';
+import type { ChatImage } from './chat_image.js';
+import { buildChatContent, normalizeChatImages } from './chat_image.js';
 import { getAgentFactory } from './infrastructure/agent-factory.js';
 import { getModelConfig } from './infrastructure/config/model-config.js';
 import { createSlashCommandRegistry, SlashCommand } from './slash-commands/index.js';
@@ -859,7 +861,7 @@ process.stdin.on('data', (chunk: Buffer) => {
           break;
         case 'chat':
           enqueue('chat', async () => {
-            log.info({ textLen: msg.text?.length, sessionId: msg.sessionId }, 'recv chat');
+            log.info({ textLen: msg.text?.length, imageCount: normalizeChatImages(msg.images).length, sessionId: msg.sessionId }, 'recv chat');
             if (msg.workspaceRoot) {
               (globalThis as any).__TRP_WORKSPACE_ROOT = msg.workspaceRoot;
               chdirToWorkspace();
@@ -893,6 +895,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                   msg.sandboxEnabled,
                   msg.apiMode,
                   msg.reasoningEffort,
+                  msg.images,
                 );
               });
             } else {
@@ -925,6 +928,7 @@ process.stdin.on('data', (chunk: Buffer) => {
                 msg.sandboxEnabled,
                 msg.apiMode,
                 msg.reasoningEffort,
+                msg.images,
               );
             }
           });
@@ -1164,7 +1168,9 @@ export function buildRecoverSessionJson(messages: Array<{ role?: string; content
   });
 }
 
-async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean, apiMode?: string, reasoningEffort?: string): Promise<void> {
+async function handleChatWithEmit(text: string, context: string | null | undefined, persona: { name: string; prompt: string } | undefined, apiKey: string | undefined, systemSummary: string | undefined, localEmit: (type: string, data: any) => void, signal: AbortSignal, messageId?: string, sessionId?: string, brainOsSession?: string, skillContent?: string, model?: string, baseUrl?: string, toolPermissions?: ToolPermissionConfig, mcpServers?: McpServerConfig[], sandboxEnabled?: boolean, apiMode?: string, reasoningEffort?: string, images?: ChatImage[]): Promise<void> {
+  // The panel re-validated these already; the worker stdin is untyped too.
+  const chatImages = normalizeChatImages(images);
   text = `[You reference Current Time: ${new Date().toISOString()}]\n${text}`;
   const phaseT0 = Date.now();
   (globalThis as any).__TRP_MODEL_CONFIG = { model, baseUrl, apiKey, apiMode, reasoningEffort };
@@ -1489,7 +1495,11 @@ async function handleChatWithEmit(text: string, context: string | null | undefin
         // avoiding the ~60-100s stall from exportSession() / commandSub.stop()
         rejectCurrentRound = reject;
 
-        started.stream(msg, withMockInjector((token: any) => {
+        // Round one carries any pasted images as multimodal content; later
+        // rounds stay plain text — the model already saw the pixels.
+        const roundContent = roundIndex === 0 ? buildChatContent(msg, chatImages) : msg;
+
+        started.stream(roundContent, withMockInjector((token: any) => {
           if (token.type === 'Error') {
             log.warn({ error: token.error, aborted: signal.aborted }, '[DEBUG-DC] Error token received in stream callback');
           }
