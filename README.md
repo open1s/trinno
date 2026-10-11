@@ -106,8 +106,14 @@ Ask questions directly in the chat — Trinno automatically selects the right re
 Reference workspace files in messages with `@` — Trinno automatically reads the file and includes its content in the context:
 
 ```
-Please analyze the patents in @01_Discover/patents.json and find the technical contradictions with the technology implemented in @src/main.py
+Please analyze the patents in @01_Discover/patants.json and find the technical contradictions with the technology implemented in @src/main.py
 ```
+
+### Pasted Images
+
+Paste a screenshot or a copied figure (Ctrl/Cmd+V) straight into the chat input — it attaches to the next message and the model sees it on the first round of the turn. Up to 4 images per message; each shows as a removable thumbnail chip. Text pastes keep working as usual.
+
+> **Requires a vision-capable model.** A text-only model rejects the image parts and the turn fails with the provider error. Pasted images are kept in memory only — they are not saved to `06_References/` or restored when a session is reopened.
 
 ---
 
