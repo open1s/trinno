@@ -80,6 +80,12 @@
   let agentMenuVisible = false;
   let modelMenuVisible = false;
   let attachments = [];
+  // Pasted images ride alongside text attachments: { name, dataUrl }.
+  // Budgets mirror src/bos/chat_image.ts — the worker re-validates everything.
+  let images = [];
+  const MAX_IMAGES_PER_MESSAGE = 4;
+  const MAX_IMAGE_DATA_URL_CHARS = 1500000;
+  const MAX_IMAGE_DIMENSION = 1280;
   let agents = [{ name: 'ARTEMIS', description: 'Research + coding expert with hypothesis-driven workflow (TDD x Autoresearch)' }, { name: 'Research Assistant', description: 'TRIZ research expert' }];
   let models = [];
   let mcpServers = [];
@@ -505,7 +511,10 @@ function renderTodoBadges() {
       const removeBtn = e.target.closest('.chip-remove');
       if (removeBtn) {
         const index = parseInt(removeBtn.dataset.index, 10);
-        if (!isNaN(index)) removeAttachment(index);
+        if (!isNaN(index)) {
+          if (removeBtn.dataset.kind === 'image') removeImage(index);
+          else removeAttachment(index);
+        }
       }
     });
 
@@ -960,7 +969,122 @@ function renderTodoBadges() {
       `;
       attachmentsContainer.appendChild(chip);
     }
+    for (let i = 0; i < images.length; i++) {
+      const im = images[i];
+      const imgChip = document.createElement('div');
+      imgChip.className = 'attachment-chip image-chip';
+      const shortName = im.name.length > 18 ? im.name.slice(0, 15) + '…' : im.name;
+      imgChip.innerHTML =
+        '<img alt="' + escapeHtml(im.name) + '" src="' + im.dataUrl + '">' +
+        '<span class="chip-label" title="' + escapeHtml(im.name) + '">' + escapeHtml(shortName) + '</span>' +
+        '<button class="chip-remove" data-kind="image" data-index="' + i + '">&times;</button>';
+      attachmentsContainer.appendChild(imgChip);
+    }
   }
+
+  function removeImage(index) {
+    images.splice(index, 1);
+    renderAttachments();
+  }
+
+  /**
+   * Clipboard files become data URLs. Anything over the inline budget is
+   * re-encoded on a canvas (max MAX_IMAGE_DIMENSION per side) so a 5 MB
+   * screenshot still fits the payload the worker will accept.
+   */
+  function normalizePastedImage(file) {
+    return new Promise((resolve) => {
+      if (!file || !file.type || file.type.indexOf('image/') !== 0) return resolve(null);
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onload = () => {
+        const original = String(reader.result || '');
+        const finish = (dataUrl) => {
+          resolve(dataUrl && dataUrl.length <= MAX_IMAGE_DATA_URL_CHARS
+            ? { name: file.name || 'pasted-image', dataUrl }
+            : null);
+        };
+        if (original.length <= MAX_IMAGE_DATA_URL_CHARS) {
+          // Small enough to ship untouched — keep the original bytes.
+          finish(original);
+          return;
+        }
+        const img = new Image();
+        img.onerror = () => finish(original);
+        img.onload = () => {
+          try {
+            const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+            canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+            const ctx = canvas.getContext('2d');
+            // JPEG has no alpha — fill first or transparent pixels go black.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const png = canvas.toDataURL('image/png');
+            finish(png.length <= MAX_IMAGE_DATA_URL_CHARS ? png : canvas.toDataURL('image/jpeg', 0.85));
+          } catch {
+            finish(original);
+          }
+        };
+        img.src = original;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Add image files from a clipboard DataTransfer. Returns how many stuck. */
+  async function addPastedImages(items) {
+    const files = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item || item.kind !== 'file') continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    let added = 0;
+    for (const file of files) {
+      if (images.length >= MAX_IMAGES_PER_MESSAGE) break;
+      const img = await normalizePastedImage(file);
+      if (!img) continue;
+      images.push(img);
+      added++;
+    }
+    renderAttachments();
+    return added;
+  }
+
+  function showAttachmentNotice(text) {
+    const el = document.createElement('div');
+    el.className = 'attachment-notice';
+    el.textContent = text;
+    attachmentsContainer.appendChild(el);
+    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 4000);
+  }
+
+  // Paste an image (screenshot, copied figure) straight into the message.
+  // Text pastes are left alone — the default insert-into-input still runs.
+  document.addEventListener('paste', async (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items || !items.length) return;
+    let hasImage = false;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item && item.kind === 'file' && item.type && item.type.indexOf('image/') === 0) {
+        hasImage = true;
+        break;
+      }
+    }
+    if (!hasImage) return;
+    e.preventDefault();
+    const added = await addPastedImages(items);
+    if (added === 0) {
+      showAttachmentNotice(images.length >= MAX_IMAGES_PER_MESSAGE
+        ? 'Attachment limit is ' + MAX_IMAGES_PER_MESSAGE + ' images per message.'
+        : 'That image could not be attached.');
+    }
+  });
 
   function getAttachmentText() {
     if (attachments.length === 0) return '';
@@ -1439,19 +1563,27 @@ function renderTodoBadges() {
     hideCompletion();
     const text = inputEl.value.trim();
     const attText = getAttachmentText();
-    const fullText = attText ? (text ? attText + '\n\n' + text : attText) : text;
+    let fullText = attText ? (text ? attText + '\n\n' + text : attText) : text;
+    // An image-only paste still has to be a valid turn; the worker needs text.
+    if (!fullText && images.length) fullText = '[pasted image — no accompanying text]';
     if (!fullText) return;
-    vscode.postMessage({ type: 'trace', message: '[webview] user pressed enter', textLength: fullText.length, text: fullText.slice(0, 200) });
+    // Detach now: queued or sent, the chips stop belonging to the input.
+    const sentImages = images.slice();
+    images = [];
+    vscode.postMessage({ type: 'trace', message: '[webview] user pressed enter', textLength: fullText.length, imageCount: sentImages.length, text: fullText.slice(0, 200) });
 
     // If already generating, queue the message instead of blocking
     if (isGenerating) {
       if (messageQueue.length >= 20) {
+        // Nothing was sent — give the user their images back.
+        images = sentImages;
+        renderAttachments();
         const wrapper = inputEl.closest('.input-wrapper') || inputEl;
         wrapper.classList.add('queue-full-shake');
         setTimeout(() => wrapper.classList.remove('queue-full-shake'), 600);
         return;
       }
-      vscode.postMessage({ type: 'userMessage', text: fullText });
+      vscode.postMessage({ type: 'userMessage', text: fullText, images: sentImages });
       lastUserMessageText = fullText;
       inputEl.value = '';
       clearAttachments();
@@ -1467,7 +1599,7 @@ function renderTodoBadges() {
     inputEl.value = '';
     clearAttachments();
     autoResize();
-    vscode.postMessage({ type: 'userMessage', text: fullText });
+    vscode.postMessage({ type: 'userMessage', text: fullText, images: sentImages });
   }
 
   function ensureQueuePanel() {

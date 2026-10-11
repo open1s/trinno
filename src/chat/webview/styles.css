@@ -1432,6 +1432,27 @@ body {
   background: var(--vscode-list-hoverBackground, #e8e8e8);
 }
 
+.image-chip {
+  padding: 3px 6px 3px 3px;
+}
+
+.image-chip img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: var(--vscode-editor-background, #fff);
+  border: 1px solid var(--input-border);
+}
+
+.attachment-notice {
+  align-self: center;
+  font-size: 11px;
+  color: var(--vscode-errorForeground, #c00);
+  padding: 2px 4px;
+}
+
 .input-container {
   display: flex;
   gap: 6px;
