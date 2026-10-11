@@ -13,6 +13,7 @@
 1. **.instructions.md** — Agent behavior, task decomposition rules, response-size strategies, timeout prevention
 2. **CONTEXT.md** — Domain model, message flow, attachment pipeline
 3. **docs/adr/001-hybrid-attachment-strategy.md** — Why attachments work the way they do
+4. **docs/adr/002-pasted-image-transport.md** — How pasted images reach the model (separate `images` channel, `src/bos/chat_image.ts`, round-0 only)
 
 ## Don't edit
 
@@ -141,7 +142,8 @@ The worker (`src/bos/worker.ts`) is compiled to `dist/bos/worker.js` during `npm
 
 - `CLAUDE.md` — agent skill references (triage, to-issues, to-prd, diagnose, tdd, improve-codebase-architecture, zoom-out).
 - `docs/agents/` — `domain.md`, `issue-tracker.md`, `triage-labels.md`.
-- `docs/adr/001-hybrid-attachment-strategy.md` — only ADR so far.
+- `docs/adr/001-hybrid-attachment-strategy.md` — text attachments: inline vs `read_file` reference.
+- `docs/adr/002-pasted-image-transport.md` — pasted images: separate `images` channel, `src/bos/chat_image.ts`, round-0 only.
 - `docs/ezbos-2-migration.md` — ezbos 2.x idioms: typed defineTool, error/cancellation contracts, streaming, resilience, test commands.
 - `docs/ariz.md` — ARIZ-85C workflow: `/ariz` slash command, `triz_ariz` tool (always AI-augmented), 8-stage engine, tests.
 - `docs/prompts.md` — prompt system: the L0–L3 adherence tiers, the registered prompt inventory, and the drift test that stops prompts losing rules silently.

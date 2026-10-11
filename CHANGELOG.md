@@ -3,6 +3,21 @@
 All notable changes to **Trinno Research Assist** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Paste images into the chat input.** Ctrl/Cmd+V with a screenshot or a
+  copied figure on the clipboard attaches it to the next message as a
+  removable thumbnail chip (up to 4 per message). Images ride the send
+  queue, survive force-execute and a rate-limit retry, and reach the model
+  as multimodal content on the first round of the turn. Text pastes keep
+  their normal insert behaviour; an image-only paste is still a valid turn.
+
+  **Requires a vision-capable model** — with a text-only model the API
+  rejects the image parts and the turn fails with the provider error.
+  Images live in memory only: they are not persisted to 06_References/
+  and are not restored when a session is reopened.
+
 ## [2.1.0] - 2026-10-08
 
 ### Fixed
