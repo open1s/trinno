@@ -7,6 +7,8 @@ import { DEFAULT_TOOL_PERMISSIONS } from '../bos/infrastructure/config/toolPermi
 import { extractNotebookContext, insertCellAt, undoLastInsert, formatContextForPrompt } from './context';
 import { createModuleLogger } from '../bos/infrastructure/logging/logger';
 import { isStaleCancel } from '../bos/cancel_target';
+import type { ChatImage } from '../bos/chat_image.js';
+import { normalizeChatImages } from '../bos/chat_image.js';
 
 const log = createModuleLogger('chat-agent');
 
@@ -334,9 +336,11 @@ export async function sendMessage(
   brainOsSession?: string,
   skillContent?: string,
   modelConfig?: { model?: string; baseUrl?: string; apiKey?: string; apiMode?: string; reasoningEffort?: string },
+  images?: ChatImage[],
   workspaceRoot?: string
 ): Promise<void> {
-  log.info({ messageId, textLength: text.length, sessionId }, 'sendMessage called');
+  const chatImages = normalizeChatImages(images);
+  log.info({ messageId, textLength: text.length, imageCount: chatImages.length, sessionId }, 'sendMessage called');
   const release = await acquireDispatch();
   const settle = makeSettle(release);
   try {
@@ -366,6 +370,8 @@ export async function sendMessage(
     type: 'chat',
     messageId,
     text,
+    // Inline base64 pastes; absent for text-only turns so the JSON is unchanged.
+    ...(chatImages.length ? { images: chatImages } : {}),
     workspaceRoot: workspaceRoot || process.cwd(),
     context: (config.context?.auto_inject ?? true) ? formatContextForPrompt(ctx) : null,
     persona: {

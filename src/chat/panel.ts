@@ -198,6 +198,8 @@ function loadModelsFromConfig(): ModelConfig[] {
 }
 
 import { COMMON_AGENT_NAME, COMMON_AGENT_DESCRIPTION, getCommonAgentContent } from '../bos/agents/common-agent';
+import type { ChatImage } from '../bos/chat_image.js';
+import { normalizeChatImages } from '../bos/chat_image.js';
 
 const loadedAgents = loadAgentsFromBosDir();
 let selectedAgentContent: string | undefined = getCommonAgentContent();
@@ -727,11 +729,13 @@ function pushQueueState(): void {
   }
 }
 
-function addToQueue(text: string): QueuedMessage | null {
+function addToQueue(text: string, images?: ChatImage[]): QueuedMessage | null {
   if (messageQueue.length >= MAX_QUEUE_SIZE) return null;
+  const chatImages = normalizeChatImages(images);
   const item: QueuedMessage = {
     queueId: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     text,
+    ...(chatImages.length ? { images: chatImages } : {}),
     timestamp: Date.now(),
     status: 'queued',
   };
@@ -832,7 +836,7 @@ function processQueue(): void {
     } as any);
   }
 
-  handleUserMessage(item.text);
+  handleUserMessage(item.text, item.images);
 }
 
 function markQueueCompleted(queueId: string): void {
@@ -904,7 +908,7 @@ async function handleWebViewMessage(msg: WebViewToExtMessage & { sessionId?: str
     return;
   }
   if (msg.type === 'userMessage') {
-    await handleUserMessage(msg.text);
+    await handleUserMessage(msg.text, msg.images);
   } else if (msg.type === 'cancel') {
     cancelGeneration(currentStreamingId ?? undefined);
     finalizeCurrentMessage();
@@ -1515,7 +1519,7 @@ function handleRateLimited(retryAfter: number, error: string): void {
       // handleUserMessage would see it and *queue* instead of send.
       log.trace({ retryCount: rateLimitRetryCount, lastTextLen: lastUserMessageText.length, hasAgentContent: !!selectedAgentContent }, '[RATE-LIMIT] direct retry: resend lastUserMessageText');
       finalizeCurrentMessage();
-      handleUserMessage(lastUserMessageText);
+      handleUserMessage(lastUserMessageText, lastUserMessageImages);
     }
   };
 }
@@ -1525,6 +1529,8 @@ function resetRateLimitRetries(): void {
 }
 
 let lastUserMessageText: string = '';
+// Kept beside the text so a rate-limit retry re-sends the pasted images too.
+let lastUserMessageImages: ChatImage[] = [];
 
 function handleRateLimitedRetry(): void {
   log.trace({ hasCallback: !!rateLimitRetryCallback, retryCount: rateLimitRetryCount }, '[RATE-LIMIT] handleRateLimitedRetry called');
@@ -1801,6 +1807,7 @@ async function runSkillWrite(type: 'paper' | 'patent', cmd: { title: string; pha
     currentSession?.brainOsSession,
     undefined,
     selectedModelConfig,
+    undefined,
     workspaceRoot,
   );
 }
@@ -1921,12 +1928,15 @@ async function triggerAutoCompactOnThreshold(retryText: string): Promise<void> {
   });
 }
 
-async function handleUserMessage(text: string): Promise<void> {
-  log.trace({ textLength: text.length, text: text.slice(0, 300) }, '[TRACE] user→panel: user pressed enter');
+async function handleUserMessage(text: string, images?: ChatImage[]): Promise<void> {
+  // The webview already size-checked these; the queue and worker stdin are
+  // untyped, so re-validate here. Malformed entries are dropped, not thrown.
+  const chatImages = normalizeChatImages(images);
+  log.trace({ textLength: text.length, imageCount: chatImages.length, text: text.slice(0, 300) }, '[TRACE] user→panel: user pressed enter');
   if (!chatView || !currentSession) {
     return;
   }
-  if (!text.trim()) return;
+  if (!text.trim() && chatImages.length === 0) return;
 
   // 400 auto-compact: if retrying after compaction, reset the stream state
   if (_autoCompactInProgress) {
@@ -1937,6 +1947,7 @@ async function handleUserMessage(text: string): Promise<void> {
   }
 
   lastUserMessageText = text;
+  lastUserMessageImages = chatImages;
 
   // Slash-type commands used to jump the generation queue and then tag
   // currentStreamingId, clobbering the in-flight chat's stream (whose onDone
@@ -1944,7 +1955,7 @@ async function handleUserMessage(text: string): Promise<void> {
   const isSessionManagement = /^\/(session|new)\b/i.test(text.trim());
   if (isGenerating && !isSessionManagement) {
     log.debug('isGenerating=true, queuing');
-    const queued = addToQueue(text);
+    const queued = addToQueue(text, chatImages);
     if (!queued) {
       chatView?.webview.postMessage({
         type: 'user-message',
@@ -2649,6 +2660,7 @@ async function handleUserMessage(text: string): Promise<void> {
     currentSession?.brainOsSession,
     skillContentForLLM,
     selectedModelConfig,
+    chatImages.length ? chatImages : undefined,
     workspaceRoot,
   );
 }

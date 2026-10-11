@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+import type { ChatImage } from '../bos/chat_image.js';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -70,6 +72,8 @@ export type QueueItemStatus = 'queued' | 'in-flight' | 'completed' | 'error' | '
 export interface QueuedMessage {
   queueId: string;
   text: string;
+  /** Pasted images that must survive the queue. See bos/chat_image.ts. */
+  images?: ChatImage[];
   timestamp: number;
   status: QueueItemStatus;
   error?: string;
@@ -84,7 +88,7 @@ export interface SessionInfo {
 }
 
 export type WebViewToExtMessage =
-  | { type: 'userMessage'; text: string; attachments?: string[] }
+  | { type: 'userMessage'; text: string; attachments?: string[]; images?: ChatImage[] }
   | { type: 'cancel' }
   | { type: 'cancelTool'; toolName: string; toolId?: string }
   | { type: 'undoInsert' }
