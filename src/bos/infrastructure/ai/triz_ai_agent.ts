@@ -2,6 +2,7 @@ import { Agent, AgentBuilder, BrainOS } from '@open1s/ezbos';
 import { getAgentFactory, initAgentFactory } from '../agent-factory.js';
 import { getModelConfig } from '../config/model-config.js';
 import { streamAgent } from './streaming.js';
+import { buildInsightScaffold, sanitizeProse } from './insight.js';
 import { InventivePrinciple } from '../../domain/principle/entity.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
 import { TRIZ_SYSTEM_PROMPT } from '../../prompts/index.js';
@@ -59,6 +60,11 @@ export class AiTrizAgent {
       name: this.agentName,
       systemPrompt: `${langPrefix}${TRIZ_SYSTEM_PROMPT}`,
       temperature: 0.7,
+      // These calls are single-shot answers, not agentic runs: with the full
+      // tool belt attached the model can spend the whole deadline calling
+      // triz_search/websearch and come back with no prose at all.
+      skipDefaultTools: true,
+      maxTokens: 2048,
       ...(mc.model ? { model: mc.model } : {}),
       ...(mc.baseUrl ? { baseUrl: mc.baseUrl } : {}),
       ...(mc.apiKey ? { apiKey: mc.apiKey } : {}),
@@ -100,23 +106,38 @@ export class AiTrizAgent {
   ): Promise<string> {
     await this.ensureAgent();
 
-    const prompt = `Given this problem: "${problemDescription}"
-${context ? `Context: ${context}` : ''}
-
-Apply TRIZ Inventive Principle #${principle.index}: "${principle.name}"
-Description: ${principle.description}
+    const prompt = `Apply TRIZ Inventive Principle #${principle.index} "${principle.name}" to this problem.
+Problem: ${problemDescription}
+${context ? `Context: ${context}` : ''}Principle description: ${principle.description}
 Examples: ${principle.examples.join(', ')}
 
-Provide a specific, actionable insight on how to apply this principle to solve the problem.
-Include:
-1. How the principle applies to this specific problem
-2. Concrete implementation steps
-3. Potential challenges and how to overcome them
-4. Any related principles that could enhance this solution
+Answer in prose only - no tools, no JSON - in at most 180 words, as four short labelled lines:
+1. Fit: how the principle maps onto this problem
+2. Steps: 2-3 concrete implementation steps
+3. Risks: the main failure mode and how to avoid it
+4. Companions: one or two principles that strengthen it
 
 ${getLanguagePrompt(this.locale.language)}`;
 
-    return streamAgent(this.agent!, prompt);
+    const first = sanitizeProse(await streamAgent(this.agent!, prompt));
+    if (first) return first;
+
+    // One retry with the smallest prompt that can still answer: a reply of
+    // nothing (or of the two characters "") usually means the model over-planned
+    // the first request rather than that the model is unavailable.
+    const retry = `TRIZ principle #${principle.index} (${principle.name}): ${principle.description}
+Problem: ${problemDescription}
+Give one concrete application in at most 120 words. Plain prose, no tools.
+${getLanguagePrompt(this.locale.language)}`;
+    const second = sanitizeProse(await streamAgent(this.agent!, retry));
+    if (second) return second;
+
+    return buildInsightScaffold(
+      principle,
+      problemDescription,
+      context,
+      this.locale.language === 'zh' ? 'zh' : 'en',
+    );
   }
 
   async analyzeContradiction(

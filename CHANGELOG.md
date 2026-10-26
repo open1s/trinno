@@ -33,6 +33,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The tool is **cancellable** (the stop reaches the model stream) and its
   schema enforces `z.number().int().min(1).max(39)` for both parameters.
 
+- **`triz_insight` no longer times out, and no longer "succeeds" with an empty
+  answer.** The TRIZ expert agent behind it was built with the full tool belt
+  while its system prompt tells it to verify with `triz_search`/`websearch`, so
+  one insight could spend the whole deadline on tool calls (the 180 s timeout in
+  the log) and then answer with nothing (the two characters `""`). The agent is
+  now built for single-shot answers (no default tools, 2 048 output tokens), the
+  prompt asks for at most 180 words of plain prose, a blank answer gets one
+  shorter retry, and a still-blank answer returns a labelled deterministic
+  scaffold (principle, canonical examples, three questions) instead of
+  `insight: ""`. The tool also refuses an empty result and validates the
+  principle index as an integer in 1-40.
+
 ## [2.1.2] - 2026-10-26
 
 ### Fixed

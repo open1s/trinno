@@ -143,10 +143,10 @@ export function createTrizTools(
 
   const insight = defineTool({
     name: 'triz_insight',
-    description: 'AI insight on applying a specific TRIZ principle to a problem.',
+    description: 'AI insight on applying a specific TRIZ principle to a problem. Always returns prose: if the model answers with nothing, one shorter retry runs and then a labelled deterministic scaffold (principle, canonical examples, three questions) is returned instead of an empty result.',
     parameters: z.object({
       problemDescription: z.string().describe('Description of the problem'),
-      principleIndex: z.number().describe('TRIZ principle index (1-40)'),
+      principleIndex: z.number().int().min(1).max(40).describe('TRIZ principle index (1-40)'),
       context: z.string().optional().describe('Additional context'),
     }),
     execute: async ({ problemDescription, principleIndex, context }) => {
@@ -155,7 +155,11 @@ export function createTrizTools(
       if (!principle) return err(`Principle ${principleIndex} not found`);
       try {
         const result = await aiAgent.generateInsight(problemDescription, principle, context);
-        return ok({ insight: result });
+        const insight = typeof result === 'string' ? result.trim() : '';
+        if (!insight) {
+          return err('The model returned no insight; retry with a shorter problem description or a different principle.');
+        }
+        return ok({ insight });
       } catch (e: any) {
         return err(e.message);
       }
