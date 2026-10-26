@@ -16,6 +16,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and `triz_ariz` keeps its deterministic stages, adding an "AI narrative
   failed" note.
 
+### Improved
+- **`triz_ariz` no longer has dead ends, and its narrative is grounded.** The
+  deterministic engine now validates the parameter pair (integers 1-39; a
+  parameter outside the range or a repeated improving/worsening pair is
+  reported and the analysis continues), falls back to keyword principles when
+  the contradiction-matrix cell is empty (236 of the 1 482 pairs) instead of
+  returning none, and models a partial Su-Field (any of tool/product/field)
+  rather than skipping the stage. The physical-contradiction and plan stages
+  name the conflicting element and write a first experiment against the two
+  parameters; ideality states the 0-10 scoring rule and what makes a candidate
+  weak.
+- The AI narrative receives the engine's own findings (capped at 24 lines) and
+  is told to compress, never contradict them; its answer is de-fenced, capped
+  at 4 000 characters, and a blank answer is reported instead of stored.
+- The tool is **cancellable** (the stop reaches the model stream) and its
+  schema enforces `z.number().int().min(1).max(39)` for both parameters.
+
 ## [2.1.2] - 2026-10-26
 
 ### Fixed

@@ -377,10 +377,14 @@ export function createTrizTools(
     },
   });
 
+  // A look-up that can take a minute must be stoppable, and the cancel has to
+  // reach the model stream rather than abandon a promise nobody is watching.
+  const arizCalls = new Map<string, AbortController>();
+
   const ariz = defineTool({
     name: 'triz_ariz',
     description:
-      'Run the ARIZ-85C inventive problem-solving algorithm step by step. Returns the 8 ARIZ stages (mini-problem, technical contradiction, IFR, physical contradiction, separation principles, Su-Field + 76 standard solutions, ideality, plan) with deterministic findings. Supply improvingParameter/worseningParameter (1-39) for a real contradiction-matrix lookup; supply tool/product/field for a Su-Field model. The AI always drafts the narrative pass on top of these stages when a model is configured (aiNarrative), degrading gracefully to the deterministic stages if the model is unavailable.',
+      'Run the ARIZ-85C inventive problem-solving algorithm step by step. Returns the 8 ARIZ stages (mini-problem, technical contradiction, IFR, physical contradiction, separation principles, Su-Field + 76 standard solutions, ideality, plan) with deterministic findings, always - the AI narrative is an addition, never a requirement. Parameters are validated: an index outside 1-39 is ignored and reported, and an empty matrix cell falls back to keyword principles instead of returning nothing. Supply tool/product/field (all three for the full 76-solution class; any one still produces an incomplete-class model) for a Su-Field model. Cancellable.',
     parameters: z.object({
       problem: z.string().describe('Problem statement to solve, in the user\'s own words'),
       system: z.string().optional().describe('Technical system under analysis (optional)'),
@@ -388,10 +392,20 @@ export function createTrizTools(
       product: z.string().optional().describe('Su-Field S2: the object being acted on (optional)'),
       field: z.string().optional().describe('Su-Field field: mechanical, thermal, chemical, electrical, magnetic, optical, acoustic, biological (optional)'),
       suFieldType: z.enum(['complete', 'incomplete', 'harmful', 'insufficient', 'excessive']).optional().describe('Force the Su-Field class instead of auto-detecting it'),
-      improvingParameter: z.number().optional().describe('TRIZ parameter (1-39) that should improve'),
-      worseningParameter: z.number().optional().describe('TRIZ parameter (1-39) that worsens'),
-    }),
-    execute: async ({ problem, system, tool, product, field, suFieldType, improvingParameter, worseningParameter }) => {
+      improvingParameter: z.number().int().min(1).max(39).optional().describe('TRIZ parameter (1-39) that should improve'),
+      worseningParameter: z.number().int().min(1).max(39).optional().describe('TRIZ parameter (1-39) that worsens'),
+    }).loose(),
+    cancelable: true,
+    onCancel: (callId: string) => {
+      const controller = arizCalls.get(callId);
+      if (controller) controller.abort();
+      arizCalls.delete(callId);
+    },
+    execute: async (args) => {
+      const { problem, system, tool, product, field, suFieldType, improvingParameter, worseningParameter } = args;
+      const callId = (args as { __call_id__?: string }).__call_id__;
+      const controller = callId ? new AbortController() : undefined;
+      if (callId && controller) arizCalls.set(callId, controller);
       try {
         const engine = new ArizEngine(principleEngine, suFieldService);
         const result = engine.build({
@@ -410,18 +424,41 @@ export function createTrizTools(
         const notes = [...result.notes];
         let aiNarrative: string | null = null;
         if (aiAgent) {
-          const arizOptions: { system?: string; improvingName?: string; worseningName?: string; principleHints: string[] } = {
+          const arizOptions: {
+            system?: string;
+            improvingName?: string;
+            worseningName?: string;
+            principleHints: string[];
+            suFieldClass?: string;
+            stageFindings?: string[];
+            signal?: AbortSignal;
+          } = {
             principleHints: result.principles.map(p => `#${p.index} ${p.name}`),
+            // The narrative compresses what the engine found; without this it
+            // re-derives (and can contradict) stages the user can already see.
+            stageFindings: [
+              ...result.stages.flatMap(stage => stage.findings.map(finding => `${stage.title}: ${finding}`)),
+              ...result.notes.map(note => `Note: ${note}`),
+            ].slice(0, 24),
           };
           if (system) arizOptions.system = system;
+          if (result.suField) arizOptions.suFieldClass = result.suField.type;
           const improvingName = improvingParameter !== undefined ? getParameterByIndex(improvingParameter)?.name : undefined;
           const worseningName = worseningParameter !== undefined ? getParameterByIndex(worseningParameter)?.name : undefined;
           if (improvingName) arizOptions.improvingName = improvingName;
           if (worseningName) arizOptions.worseningName = worseningName;
+          if (controller) arizOptions.signal = controller.signal;
           try {
-            aiNarrative = await aiAgent.analyzeAriz(problem, arizOptions);
+            const narrative = await aiAgent.analyzeAriz(problem, arizOptions);
+            if (typeof narrative === 'string' && narrative.trim().length > 0) {
+              aiNarrative = narrative.trim();
+            } else {
+              notes.push('AI narrative returned no text (deterministic ARIZ stages kept).');
+            }
           } catch (e: unknown) {
-            notes.push(`AI narrative failed (deterministic ARIZ stages kept): ${e instanceof Error ? e.message : String(e)}`);
+            const message = e instanceof Error ? e.message : String(e);
+            const reason = controller?.signal.aborted ? 'cancelled' : message;
+            notes.push(`AI narrative failed (deterministic ARIZ stages kept): ${reason}`);
           }
         } else {
           notes.push('AI narrative skipped: no model configured (deterministic ARIZ stages only).');
@@ -438,6 +475,8 @@ export function createTrizTools(
         });
       } catch (e: unknown) {
         return err(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (callId) arizCalls.delete(callId);
       }
     },
   });

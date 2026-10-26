@@ -66,6 +66,46 @@ describe('ARIZ-85C engine', () => {
     assert.ok(ideality.findings.some(f => f.includes('Benefits / (Costs + Harms)')));
   });
 
+  it('ignores a parameter outside 1..39 and reports it', () => {
+    const r = engine.build({ problem: 'reduce weight of a drone frame', improvingParameter: 99, worseningParameter: 2 });
+    assert.ok(r.notes.some(n => n.includes('Improving parameter 99 is not an integer in 1..39')));
+    assert.ok(r.principles.length > 0, 'the analysis still produced principles');
+    assert.ok(r.principles.every(p => p.rationale.includes('Keyword match')));
+  });
+
+  it('falls back to keyword principles when the matrix cell is empty', () => {
+    const r = engine.build({ problem: 'reduce weight of a drone frame', improvingParameter: 1, worseningParameter: 2 });
+    assert.ok(r.notes.some(n => n.includes('returned no principles')));
+    assert.ok(r.principles.length > 0);
+    assert.ok(r.principles.every(p => p.rationale.includes('matrix cell empty')));
+  });
+
+  it('warns when the improving and worsening parameters are the same', () => {
+    const r = engine.build({ problem: 'improve the frame', improvingParameter: 27, worseningParameter: 27 });
+    assert.ok(r.notes.some(n => n.includes('are the same (#27)')));
+    assert.ok(r.principles.every(p => p.rationale.includes('Keyword match')));
+  });
+
+  it('models a partial Su-Field instead of skipping it', () => {
+    const r = engine.build({ problem: 'the arm vibrates', tool: 'carbon arm', product: 'frame' });
+    assert.equal(r.suField?.type, 'incomplete');
+    assert.ok(r.notes.some(n => n.includes('Su-Field model is incomplete')));
+    assert.ok(r.suField!.diagnosis.includes('field'));
+  });
+
+  it('names the conflicting element and a first experiment when a pair is given', () => {
+    const r = engine.build({
+      problem: 'light but stiff frame',
+      system: 'quadcopter frame',
+      product: 'frame',
+      improvingParameter: 1,
+      worseningParameter: 2,
+    });
+    const pc = r.stages.find(s => s.id === 'physical_contradiction')!;
+    assert.ok(pc.findings.some(f => f.includes('Element in conflict: frame')));
+    const plan = r.stages.find(s => s.id === 'plan')!;
+    assert.ok(plan.findings.some(f => f.includes('First experiment')), 'plan carries a first experiment');
+  });
   it('warns when the problem statement is empty', () => {
     const r = engine.build({ problem: '' });
     assert.ok(r.notes.some(n => n.includes('No problem statement supplied')));
@@ -105,6 +145,45 @@ describe('triz_ariz tool (always-on AI)', () => {
     assert.ok(out.data.notes.some((n: string) => n.includes('AI narrative failed') && n.includes('gateway 429')));
   });
 
+  it('hands the deterministic findings to the narrative', async () => {
+    let seen: any = null;
+    const fake = {
+      analyzeAriz: async (_problem: string, options: any) => {
+        seen = options;
+        return 'grounded narrative';
+      },
+    };
+    const ariz = loadTools(fake).find(t => t.name === 'triz_ariz')!;
+    await ariz.callback({
+      problem: 'vibration damages the arm',
+      tool: 'steel arm',
+      product: 'frame',
+      field: 'mechanical',
+      suFieldType: 'harmful',
+    });
+    assert.ok(Array.isArray(seen.stageFindings) && seen.stageFindings.length > 0, 'findings were passed');
+    assert.ok(seen.stageFindings.some((f: string) => f.includes('Su-Field')), 'the Su-Field stage is represented');
+    assert.equal(seen.suFieldClass, 'harmful');
+  });
+
+  it('treats a blank narrative as no narrative', async () => {
+    const blank = { analyzeAriz: async () => '   ' };
+    const ariz = loadTools(blank).find(t => t.name === 'triz_ariz')!;
+    const out = JSON.parse(await ariz.callback({ problem: 'some problem' }));
+    assert.equal(out.data.aiNarrative, null);
+    assert.ok(out.data.notes.some((n: string) => n.includes('returned no text')));
+  });
+
+  it('rejects an out-of-range parameter at the zod boundary', async () => {
+    const ariz = loadTools().find(t => t.name === 'triz_ariz')!;
+    const out = await ariz.callback({ problem: 'x', improvingParameter: 99 });
+    assert.ok(out.startsWith('Error: tool "triz_ariz" received invalid arguments'), out.slice(0, 120));
+  });
+
+  it('is cancellable', () => {
+    const ariz = loadTools().find(t => t.name === 'triz_ariz')! as any;
+    assert.equal(ariz.cancelable, true);
+  });
   it('rejects invalid arguments at the zod boundary', async () => {
     const ariz = loadTools().find(t => t.name === 'triz_ariz')!;
     const out = await ariz.callback({});

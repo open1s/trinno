@@ -6,6 +6,22 @@ import { InventivePrinciple } from '../../domain/principle/entity.js';
 import { LocaleConfig, DEFAULT_LOCALE, getLanguagePrompt } from '../../domain/shared/i18n.js';
 import { TRIZ_SYSTEM_PROMPT } from '../../prompts/index.js';
 
+const MAX_ARIZ_NARRATIVE_CHARS = 4000;
+
+/**
+ * Keep a model answer usable: drop a wrapping code fence and cap the length.
+ * An empty answer stays empty, so the caller can report "no narrative" rather
+ * than handing back a blank section as if it were an analysis.
+ */
+function sanitizeNarrative(text: string): string {
+  const unfenced = (text || '')
+    .trim()
+    .replace(/^```[a-zA-Z0-9]*\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim();
+  return unfenced.slice(0, MAX_ARIZ_NARRATIVE_CHARS);
+}
+
 export class AiTrizAgent {
   private agent: Agent | null = null;
   /** In-flight lazy start, so two callers cannot start two agents. */
@@ -133,7 +149,17 @@ ${getLanguagePrompt(this.locale.language)}`;
    */
   async analyzeAriz(
     problem: string,
-    options: { system?: string; improvingName?: string; worseningName?: string; principleHints?: string[] } = {},
+    options: {
+      system?: string;
+      improvingName?: string;
+      worseningName?: string;
+      principleHints?: string[];
+      /** Su-Field class the engine detected, so the narrative stays consistent. */
+      suFieldClass?: string;
+      /** Deterministic findings to compress; the model must not contradict them. */
+      stageFindings?: string[];
+      signal?: AbortSignal;
+    } = {},
   ): Promise<string> {
     await this.ensureAgent();
 
@@ -149,6 +175,16 @@ ${getLanguagePrompt(this.locale.language)}`;
     if (options.principleHints && options.principleHints.length > 0) {
       lines.push(`Candidate principles from the matrix: ${options.principleHints.join(', ')}`);
     }
+    if (options.suFieldClass) {
+      lines.push(`Su-Field class: ${options.suFieldClass}`);
+    }
+    if (options.stageFindings && options.stageFindings.length > 0) {
+      lines.push(
+        '',
+        'Deterministic findings you must keep consistent with (compress them, never contradict or invent beyond them):',
+        ...options.stageFindings.slice(0, 24).map(finding => `- ${finding}`),
+      );
+    }
 
     lines.push(
       '',
@@ -163,7 +199,9 @@ ${getLanguagePrompt(this.locale.language)}`;
       getLanguagePrompt(this.locale.language),
     );
 
-    return streamAgent(this.agent!, lines.join('\n'));
+    const streamOptions = options.signal ? { signal: options.signal } : {};
+    const raw = await streamAgent(this.agent!, lines.join('\n'), {}, streamOptions);
+    return sanitizeNarrative(raw);
   }
 
   async evaluateSolution(

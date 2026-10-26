@@ -9,6 +9,11 @@ import {
   type ArizStage,
 } from './stages.js';
 
+/** The classical Su-Field field names; anything else is modelled but flagged. */
+const SU_FIELD_FIELDS = [
+  'mechanical', 'thermal', 'chemical', 'electrical', 'magnetic', 'optical', 'acoustic', 'biological',
+];
+
 export interface ArizInput {
   problem: string;
   system?: string;
@@ -70,17 +75,41 @@ export class ArizEngine {
 
     if (!problem) notes.push('No problem statement supplied — every stage is seeded from default guidance only.');
 
+    // A parameter index outside 1..39 cannot name a TRIZ parameter. Ignoring it
+    // keeps the matrix lookup honest instead of printing "#99" as if it existed.
+    const validParam = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 39;
+
     // --- 2. Technical contradiction: matrix lookup or keyword fallback ---------
-    const iParam = input.improvingParameter;
-    const wParam = input.worseningParameter;
+    let iParam = validParam(input.improvingParameter) ? input.improvingParameter : undefined;
+    let wParam = validParam(input.worseningParameter) ? input.worseningParameter : undefined;
+    if (input.improvingParameter !== undefined && iParam === undefined) {
+      notes.push(`Improving parameter ${String(input.improvingParameter)} is not an integer in 1..39 — ignored.`);
+    }
+    if (input.worseningParameter !== undefined && wParam === undefined) {
+      notes.push(`Worsening parameter ${String(input.worseningParameter)} is not an integer in 1..39 — ignored.`);
+    }
+    if (iParam !== undefined && iParam === wParam) {
+      notes.push(`Improving and worsening parameters are the same (#${iParam}) — a technical contradiction needs two different parameters; falling back to keyword search.`);
+      iParam = undefined;
+      wParam = undefined;
+    }
+
     const iName = typeof iParam === 'number' ? (getParameterByIndex(iParam)?.name ?? `#${iParam}`) : '';
     const wName = typeof wParam === 'number' ? (getParameterByIndex(wParam)?.name ?? `#${wParam}`) : '';
     const principleRefs: ArizPrincipleRef[] = [];
 
+    const pushKeywordPrinciples = (rationale: string): void => {
+      for (const p of this.principles.searchPrinciples(problem, { limit: 6 })) {
+        if (principleRefs.some(ref => ref.index === p.index)) continue;
+        principleRefs.push({ index: p.index, name: p.name, description: p.description, rationale });
+      }
+    };
+
     if (typeof iParam === 'number' && typeof wParam === 'number') {
       for (const n of this.matrix.lookup(iParam, wParam)) {
         const p = this.principles.getPrinciple(n);
-        if (p) {
+        if (p && !principleRefs.some(ref => ref.index === p.index)) {
           principleRefs.push({
             index: p.index,
             name: p.name,
@@ -89,15 +118,12 @@ export class ArizEngine {
           });
         }
       }
-    } else {
-      for (const p of this.principles.searchPrinciples(problem, { limit: 5 })) {
-        principleRefs.push({
-          index: p.index,
-          name: p.name,
-          description: p.description,
-          rationale: 'Keyword match on the problem statement (no parameter pair supplied)',
-        });
+      if (principleRefs.length === 0) {
+        notes.push(`Contradiction matrix cell (${iParam} vs ${wParam}) returned no principles — falling back to keyword search on the problem statement.`);
+        pushKeywordPrinciples('Keyword match on the problem statement (matrix cell empty)');
       }
+    } else {
+      pushKeywordPrinciples('Keyword match on the problem statement (no parameter pair supplied)');
       notes.push('No improving/worsening parameter pair supplied — principles come from keyword search, not a matrix cell.');
     }
 
@@ -132,11 +158,14 @@ export class ArizEngine {
     );
 
     // --- 4. Physical contradiction -------------------------------------------
+    const pcElement = input.product || input.system || 'the element that carries the useful function';
     find('physical_contradiction',
+      `Element in conflict: ${pcElement}.`,
       hasPair
-        ? `The same element must maximise ${iName} while minimising ${wName} — it must carry the useful property and its opposite at once.`
+        ? `${pcElement} must deliver ${iName} and tolerate ${wName} at the same time — it needs the useful property and its opposite.`
         : 'Formulate the physical contradiction: name the single element that must be both A and not-A.',
       'Specify the zone, the time window and the condition under which each state is required.',
+      'If the two states can be separated, step 5 resolves the contradiction without a compromise.',
     );
 
     // --- 5. Separation principles --------------------------------------------
@@ -146,14 +175,21 @@ export class ArizEngine {
 
     // --- 6. Su-Field + 76 standard solutions ---------------------------------
     let suField: ArizSuFieldSummary | undefined;
-    if (input.tool && input.product && input.field) {
-      const t = input.tool;
-      const prod = input.product;
-      const fld = input.field;
+    const hasAnySuField = Boolean(input.tool || input.product || input.field);
+    if (hasAnySuField) {
+      // Partial inputs still produce a model: the service names the missing
+      // component and returns the incomplete class, which is a useful answer.
+      const t = input.tool ?? '';
+      const prod = input.product ?? '';
+      const fld = input.field ?? '';
+      const complete = Boolean(input.tool && input.product && input.field);
+      if (fld && !SU_FIELD_FIELDS.includes(fld.trim().toLowerCase())) {
+        notes.push(`Field "${fld}" is not one of the classical Su-Field fields (${SU_FIELD_FIELDS.join(', ')}) — modelled as supplied.`);
+      }
       const result =
-        input.suFieldType === 'harmful' ? this.suField.analyzeHarmful(t, prod, fld)
-        : input.suFieldType === 'insufficient' ? this.suField.analyzeInsufficient(t, prod, fld)
-        : input.suFieldType === 'excessive' ? this.suField.analyzeExcessive(t, prod, fld)
+        complete && input.suFieldType === 'harmful' ? this.suField.analyzeHarmful(t, prod, fld)
+        : complete && input.suFieldType === 'insufficient' ? this.suField.analyzeInsufficient(t, prod, fld)
+        : complete && input.suFieldType === 'excessive' ? this.suField.analyzeExcessive(t, prod, fld)
         : this.suField.analyze({ substance1: t, substance2: prod, field: fld });
       suField = {
         type: result.type,
@@ -165,7 +201,13 @@ export class ArizEngine {
         result.diagnosis,
         `Su-Field class: ${result.type}.`,
         `Recommended: ${result.recommendedAction}`,
+        result.standardSolutions.length > 0
+          ? `Standard solutions to try: ${result.standardSolutions.slice(0, 3).join('; ')}.`
+          : '',
       );
+      if (!complete) {
+        notes.push('Su-Field model is incomplete: supply tool (S1), product (S2) and field for the full 76 Standard Solutions class.');
+      }
     } else {
       notes.push('Su-Field model skipped: supply tool, product and field to model the interaction.');
       find('su_field', 'Su-Field model incomplete — supply tool (S1), product (S2) and the field.');
@@ -173,8 +215,9 @@ export class ArizEngine {
 
     // --- 7. Ideality ----------------------------------------------------------
     find('ideality',
-      'Score Ideality = Benefits / (Costs + Harms) for each candidate solution.',
-      'Prefer the candidate that removes a component over one that adds a component.',
+      'Score Ideality = Benefits / (Costs + Harms) for each candidate on a 0-10 scale; add 1 to the denominator so a zero-cost candidate cannot divide by zero.',
+      'Reject a candidate whose only gain comes from adding a component — the ideal system has no extra part.',
+      'Name the resource the candidate reuses (waste energy, empty space, idle time, information); a solution that reuses nothing is the weakest of the set.',
     );
 
     // --- 8. Plan --------------------------------------------------------------
@@ -185,6 +228,9 @@ export class ArizEngine {
         ? `Standard solutions to try: ${suField.standardSolutions.slice(0, 3).join('; ')}.`
         : 'Model the Su-Field to unlock the 76 Standard Solutions.',
       'Define one measurable acceptance test (metric, threshold, method) before implementing.',
+      hasPair
+        ? `First experiment: change the design so ${iName} improves; acceptance = ${iName} measurably better than its stated baseline while ${wName} stays no worse than now, measured the same way before and after.`
+        : 'First experiment: record the baseline measurement and the acceptance threshold before changing anything.',
       'If the contradiction persists after one iteration, return to step 4 and re-intensify the conflict.',
     );
 
