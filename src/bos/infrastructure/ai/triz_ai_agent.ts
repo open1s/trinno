@@ -8,6 +8,8 @@ import { TRIZ_SYSTEM_PROMPT } from '../../prompts/index.js';
 
 export class AiTrizAgent {
   private agent: Agent | null = null;
+  /** In-flight lazy start, so two callers cannot start two agents. */
+  private initializing: Promise<void> | null = null;
   private brain: BrainOS | null = null;
   private agentName: string;
   private locale: LocaleConfig;
@@ -23,6 +25,7 @@ export class AiTrizAgent {
   }
 
   async initialize(): Promise<void> {
+    if (this.agent) return;
     if (!this.brain) {
       this.brain = new BrainOS();
       await this.brain.start();
@@ -57,12 +60,29 @@ export class AiTrizAgent {
     }
   }
 
+  /**
+   * The started agent, starting it if needed - once.
+   * Two tool calls in one turn can ask at the same moment; without this the
+   * second start would replace the agent the first is already streaming on.
+   */
+  private async ensureAgent(): Promise<Agent> {
+    if (!this.agent) {
+      if (!this.initializing) {
+        this.initializing = this.initialize().finally(() => {
+          this.initializing = null;
+        });
+      }
+      await this.initializing;
+    }
+    return this.agent!;
+  }
+
   async generateInsight(
     problemDescription: string,
     principle: InventivePrinciple,
     context?: string,
   ): Promise<string> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const prompt = `Given this problem: "${problemDescription}"
 ${context ? `Context: ${context}` : ''}
@@ -88,7 +108,7 @@ ${getLanguagePrompt(this.locale.language)}`;
     worseningParam: string,
     description: string,
   ): Promise<string> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const prompt = `Analyze this technical contradiction:
 
@@ -115,7 +135,7 @@ ${getLanguagePrompt(this.locale.language)}`;
     problem: string,
     options: { system?: string; improvingName?: string; worseningName?: string; principleHints?: string[] } = {},
   ): Promise<string> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const lines: string[] = [
       'Apply the ARIZ-85C algorithm to this problem and compress it into a short, decisive narrative.',
@@ -150,7 +170,7 @@ ${getLanguagePrompt(this.locale.language)}`;
     solution: string,
     criteria: string[],
   ): Promise<string> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const prompt = `Evaluate this TRIZ-based solution:
 
@@ -176,7 +196,7 @@ ${getLanguagePrompt(this.locale.language)}`;
     field: string,
     problem: string,
   ): Promise<string> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const prompt = `Analyze this Su-Field model:
 

@@ -28,6 +28,8 @@ export interface AiSCurveDataResult {
 
 export class AiSCurveDataExtractor {
   private agent: Agent | null = null;
+  /** In-flight lazy start, so two callers cannot start two agents. */
+  private initializing: Promise<void> | null = null;
   private brain: BrainOS | null = null;
   private searchService: CachedSearchService;
   private locale: LocaleConfig;
@@ -39,6 +41,7 @@ export class AiSCurveDataExtractor {
   }
 
 async initialize(): Promise<void> {
+    if (this.agent) return;
     if (!this.brain) {
       this.brain = new BrainOS();
       await this.brain.start();
@@ -73,11 +76,28 @@ async initialize(): Promise<void> {
     }
   }
 
+  /**
+   * The started agent, starting it if needed - once.
+   * Two tool calls in one turn can ask at the same moment; without this the
+   * second start would replace the agent the first is already streaming on.
+   */
+  private async ensureAgent(): Promise<Agent> {
+    if (!this.agent) {
+      if (!this.initializing) {
+        this.initializing = this.initialize().finally(() => {
+          this.initializing = null;
+        });
+      }
+      await this.initializing;
+    }
+    return this.agent!;
+  }
+
   async extractData(
     technologyName: string,
     performanceMetric: string,
   ): Promise<AiSCurveDataResult> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const searchQuery = `${technologyName} ${performanceMetric} historical data performance evolution`;
 

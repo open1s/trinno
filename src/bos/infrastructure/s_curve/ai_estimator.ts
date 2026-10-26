@@ -18,6 +18,8 @@ export interface AiEstimateResult {
 
 export class AiSCurveEstimator {
   private agent: Agent | null = null;
+  /** In-flight lazy start, so two callers cannot start two agents. */
+  private initializing: Promise<void> | null = null;
   private brain: BrainOS | null = null;
   private locale: LocaleConfig;
 
@@ -27,6 +29,7 @@ export class AiSCurveEstimator {
   }
 
   async initialize(): Promise<void> {
+    if (this.agent) return;
     if (!this.brain) {
       this.brain = new BrainOS();
       await this.brain.start();
@@ -61,12 +64,29 @@ export class AiSCurveEstimator {
     }
   }
 
+  /**
+   * The started agent, starting it if needed - once.
+   * Two tool calls in one turn can ask at the same moment; without this the
+   * second start would replace the agent the first is already streaming on.
+   */
+  private async ensureAgent(): Promise<Agent> {
+    if (!this.agent) {
+      if (!this.initializing) {
+        this.initializing = this.initialize().finally(() => {
+          this.initializing = null;
+        });
+      }
+      await this.initializing;
+    }
+    return this.agent!;
+  }
+
   async estimate(
     technologyName: string,
     performanceMetric: string,
     dataPoints?: CurvePoint[],
   ): Promise<AiEstimateResult> {
-    if (!this.agent) await this.initialize();
+    await this.ensureAgent();
 
     const dataStr = dataPoints && dataPoints.length > 0
       ? `\nKnown data points: ${JSON.stringify(dataPoints)}`

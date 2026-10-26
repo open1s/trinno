@@ -3,6 +3,18 @@
 All notable changes to **Trinno Research Assist** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`triz_s_curve` no longer fails with "Agent is already running" when one
+  turn calls it twice.** A single assistant message can request two tool calls
+  at once, and both reached the same lazily-started helper agent; jsbos then
+  refused the second run. Runs are now queued per agent (`streamAgent` in
+  `src/bos/infrastructure/ai/streaming.ts`), so a submission waits for the one
+  ahead of it, and the helper agents start exactly once (`ensureAgent`) instead
+  of racing to start two. The same guard covers the TRL assessor, the S-curve
+  estimator/data extractor, the search summarizer and the TRIZ insight agent.
+
 ## [2.1.1] - 2026-10-11
 
 ### Added

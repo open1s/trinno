@@ -18,12 +18,44 @@ export interface StreamAgentOptions {
 }
 
 /**
+ * One in-flight chain per agent.
+ *
+ * A jsbos agent refuses a second run while it is streaming ("Agent is already
+ * running"), and one assistant turn can emit two tool calls at once - both
+ * reach the same lazily-started helper agent. A submission for a busy agent
+ * therefore waits for the one ahead of it instead of being refused.
+ */
+const agentChains = new WeakMap<Agent, Promise<unknown>>();
+
+function serializeOnAgent<T>(agent: Agent, run: () => Promise<T>): Promise<T> {
+  const previous = agentChains.get(agent) ?? Promise.resolve();
+  // Run whether the previous call resolved or rejected: one bad call must not
+  // wedge every later one behind it.
+  const next = previous.then(run, run);
+  agentChains.set(agent, next);
+  const settle = () => {
+    if (agentChains.get(agent) === next) agentChains.delete(agent);
+  };
+  next.then(settle, settle);
+  return next;
+}
+
+/**
  * Stream a prompt through `agent.streamEvents` (ezbos 2.x async-iterable
  * API) instead of the deprecated callback `agent.stream`. The iterator
  * guarantees exactly one terminal `done` or `error` event, so callbacks
  * fire deterministically and callers can cancel with an AbortSignal.
  */
-export async function streamAgent(
+export function streamAgent(
+  agent: Agent,
+  prompt: string,
+  callbacks: StreamingCallbacks = {},
+  options: StreamAgentOptions = {},
+): Promise<string> {
+  return serializeOnAgent(agent, () => runStreamAgent(agent, prompt, callbacks, options));
+}
+
+async function runStreamAgent(
   agent: Agent,
   prompt: string,
   callbacks: StreamingCallbacks = {},
@@ -98,13 +130,15 @@ export async function streamAgent(
   return textParts.join('');
 }
 
-export async function streamAgentCollect(
+export function streamAgentCollect(
   agent: Agent,
   prompt: string,
 ): Promise<string> {
-  const tokens = await agent.streamCollect(prompt);
-  return tokens
-    .filter((t: any) => t.type === 'Text')
-    .map((t: any) => t.text)
-    .join('');
+  return serializeOnAgent(agent, async () => {
+    const tokens = await agent.streamCollect(prompt);
+    return tokens
+      .filter((t: any) => t.type === 'Text')
+      .map((t: any) => t.text)
+      .join('');
+  });
 }
