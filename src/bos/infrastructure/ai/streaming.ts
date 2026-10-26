@@ -15,7 +15,20 @@ export interface StreamingCallbacks {
 export interface StreamAgentOptions {
   /** Abort mid-stream: forwarded to `streamEvents`, which stops the agent loop and ends iteration. */
   signal?: AbortSignal;
+  /** Wall-clock ceiling for this call; 0 disables it. Defaults to DEFAULT_STREAM_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+/**
+ * Ceiling for one model call made on a helper agent.
+ *
+ * jsbos waits on the HTTP response with no deadline of its own, so a relay that
+ * accepts the request and then drops the connection leaves the tool that asked
+ * "running..." forever. At this point the call fails like any other model error,
+ * which is what lets the ARIZ/TRL/S-curve tools fall back to their deterministic
+ * results instead of hanging the turn.
+ */
+export const DEFAULT_STREAM_TIMEOUT_MS = 180_000;
 
 /**
  * One in-flight chain per agent.
@@ -78,9 +91,24 @@ async function runStreamAgent(
     if (callbacks.onError) callbacks.onError(streamError);
   };
 
-  // exactOptionalPropertyTypes: only pass signal when present.
-  const streamOpts = options.signal ? { signal: options.signal } : {};
+  // One controller drives both the caller's abort and our own deadline; the
+  // signal reaching `streamEvents` is what asks jsbos to stop the run, so a
+  // timed-out call leaves its agent reusable.
+  const controller = new AbortController();
+  let timedOut = false;
+  let callerAborted = false;
+  const forwardAbort = () => {
+    callerAborted = true;
+    try { controller.abort(); } catch { /* already aborted */ }
+  };
+  if (options.signal) {
+    if (options.signal.aborted) forwardAbort();
+    else options.signal.addEventListener('abort', forwardAbort, { once: true });
+  }
 
+  const streamOpts = { signal: controller.signal };
+
+  const consume = async () => {
   try {
     for await (const ev of agent.streamEvents(prompt, streamOpts)) {
       if (ev.type === 'done') {
@@ -120,6 +148,39 @@ async function runStreamAgent(
     // Cancellation (AbortSignal) or a thrown transport error.
     fail(err instanceof Error ? err.message : String(err));
   }
+  };
+
+  const timeoutMs = options.timeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    if (timeoutMs > 0) {
+      // The deadline is enforced by racing, not by the iterator: a wedged
+      // HTTP call never resolves next(), so nothing downstream of it would run.
+      const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          try { controller.abort(); } catch { /* already aborted */ }
+          resolve();
+        }, timeoutMs);
+        if (timer && typeof (timer as any).unref === 'function') (timer as any).unref();
+      });
+      await Promise.race([consume(), deadline]);
+      if (timedOut) {
+        fail(`model call timed out after ${Math.round(timeoutMs / 1000)}s`);
+      }
+    } else {
+      await consume();
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (options.signal) options.signal.removeEventListener('abort', forwardAbort);
+  }
+
+  // A caller's own abort keeps its historical meaning: report it as a failure
+  // only when nothing was collected, so a cancelled stream is not a result.
+  if (callerAborted && textParts.length === 0) {
+    fail('stream aborted');
+  }
 
   // If we collected text before the error, return what we have.
   // If the stream errored with zero text, throw so callers can retry.
@@ -133,12 +194,33 @@ async function runStreamAgent(
 export function streamAgentCollect(
   agent: Agent,
   prompt: string,
+  timeoutMs: number = DEFAULT_STREAM_TIMEOUT_MS,
 ): Promise<string> {
   return serializeOnAgent(agent, async () => {
-    const tokens = await agent.streamCollect(prompt);
-    return tokens
-      .filter((t: any) => t.type === 'Text')
-      .map((t: any) => t.text)
-      .join('');
+    const collect = (async () => {
+      const tokens = await agent.streamCollect(prompt);
+      return tokens
+        .filter((t: any) => t.type === 'Text')
+        .map((t: any) => t.text)
+        .join('');
+    })();
+
+    if (timeoutMs <= 0) return collect;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        collect,
+        new Promise<string>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`model call timed out after ${Math.round(timeoutMs / 1000)}s`)),
+            timeoutMs,
+          );
+          if (timer && typeof (timer as any).unref === 'function') (timer as any).unref();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   });
 }

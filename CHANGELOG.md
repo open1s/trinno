@@ -3,6 +3,19 @@
 All notable changes to **Trinno Research Assist** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A model call inside a tool can no longer hang the turn.** helper-agent
+  streams (`streamAgent`) now carry a wall-clock ceiling (180 s by default,
+  `timeoutMs` to override). jsbos itself waits on the HTTP response with no
+  deadline, so a relay that accepted the request and then dropped the
+  connection left `triz_ariz` (and the TRL/S-curve tools) showing "running..."
+  forever. A timed-out call now fails like any other model error - the abort
+  also stops the run, so the agent stays usable and the queue behind it moves -
+  and `triz_ariz` keeps its deterministic stages, adding an "AI narrative
+  failed" note.
+
 ## [2.1.2] - 2026-10-26
 
 ### Fixed

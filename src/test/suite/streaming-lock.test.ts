@@ -92,6 +92,42 @@ describe('streamAgent scheduling', () => {
     assert.strictEqual(fake.state.calls, 2);
   });
 
+  it('fails a call that never settles instead of hanging the tool', async () => {
+    const agent = {
+      // eslint-disable-next-line require-yield
+      async *streamEvents(): AsyncGenerator<any> {
+        await new Promise(() => undefined);
+      },
+    };
+
+    let failure: unknown = null;
+    await streamAgent(agent as any, 'wedged', {}, { timeoutMs: 60 }).catch((error: unknown) => {
+      failure = error;
+    });
+
+    assert.ok(failure instanceof Error, 'the call reported a failure');
+    assert.match((failure as Error).message, /timed out after/);
+  });
+
+  it('lets the next call through after a timed-out one', async () => {
+    let calls = 0;
+    const agent = {
+      // eslint-disable-next-line require-yield
+      async *streamEvents(): AsyncGenerator<any> {
+        calls += 1;
+        if (calls === 1) await new Promise(() => undefined);
+        yield { type: 'token', token: { type: 'Text', text: 'ok' } };
+        yield { type: 'done' };
+      },
+    };
+
+    await streamAgent(agent as any, 'hangs', {}, { timeoutMs: 60 }).catch(() => undefined);
+    const second = await streamAgent(agent as any, 'works', {}, { timeoutMs: 1000 });
+
+    assert.strictEqual(second, 'ok', 'the queue kept moving past the dead call');
+    assert.strictEqual(calls, 2);
+  });
+
   it('does not serialize distinct agents against each other', async () => {
     let entered = 0;
     let openGate: () => void = () => undefined;
