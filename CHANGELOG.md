@@ -3,7 +3,7 @@
 All notable changes to **Trinno Research Assist** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.2] - 2026-10-26
 
 ### Fixed
 - **`triz_s_curve` no longer fails with "Agent is already running" when one
